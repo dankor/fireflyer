@@ -1,0 +1,147 @@
+<style>.fireflyer-chart {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  color: #20242b;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  margin: 0 0 16px 0;
+}
+.fireflyer-chart .fireflyer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #323232;
+  letter-spacing: -0.01em;
+  margin: 0 0 12px 0;
+}
+/* Flex column so the layout below the title can fill the card's height
+   and center its content (Superset-style) when the dashboard row is tall. */
+.fireflyer-pie {
+  display: flex;
+  flex-direction: column;
+}
+.fireflyer-pie-layout {
+  flex: 1 1 auto;
+  /* min-height: 0 lets the layout shrink below its content size, and overflow:
+     auto then scrolls when the donut + legend don't fit the dashboard cell. */
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  gap: 24px;
+  /* `safe center` keeps content centered when it fits, but falls back to
+     flex-start when it overflows so the top stays scrollable. */
+  align-items: safe center;
+  justify-content: safe center;
+  flex-wrap: wrap;
+}
+.fireflyer-pie-canvas {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  flex-shrink: 0;
+}
+.fireflyer-pie svg { display: block; }
+.fireflyer-pie svg path,
+.fireflyer-pie svg circle[data-i] { cursor: pointer; transition: filter 0.15s ease; }
+.fireflyer-pie svg path:hover,
+.fireflyer-pie svg circle[data-i]:hover { filter: brightness(1.1); }
+/* When the chart has at least one slice selected via crossfilter, fade the
+   unselected slices so the active selection reads at a glance. */
+.fireflyer-pie.has-selection [data-active="0"] { opacity: 0.35; }
+.fireflyer-pie.has-selection .fireflyer-legend li:not(.active) { opacity: 0.55; }
+.fireflyer-pie.has-selection .fireflyer-legend li.active .label { font-weight: 600; }
+.fireflyer-pie-tooltip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background: #20242b;
+  color: #ffffff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  padding: 6px 10px;
+  border-radius: 3px;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 2;
+}
+.fireflyer-pie-tooltip-label { font-weight: 600; margin-right: 6px; }
+.fireflyer-pie-tooltip-meta { opacity: 0.85; }
+.fireflyer-pie .fireflyer-legend {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+  color: #20242b;
+}
+.fireflyer-pie .fireflyer-legend li {
+  display: flex;
+  align-items: center;
+  padding: 3px 0;
+  white-space: nowrap;
+}
+.fireflyer-pie .fireflyer-legend .swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+.fireflyer-pie .fireflyer-legend .label { color: #20242b; }
+.fireflyer-pie .fireflyer-legend .meta {
+  color: #5e6975;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+</style>
+<style>
+.fireflyer-pie-canvas:has(svg [data-i="0"]:hover) .fireflyer-pie-tooltip[data-i="0"] { opacity: 1; }
+.fireflyer-pie-canvas:has(svg [data-i="1"]:hover) .fireflyer-pie-tooltip[data-i="1"] { opacity: 1; }
+.fireflyer-pie-canvas:has(svg [data-i="2"]:hover) .fireflyer-pie-tooltip[data-i="2"] { opacity: 1; }
+</style>
+<article class="fireflyer-chart fireflyer-pie has-selection">
+  <div class="fireflyer-title">Orders by Status</div>
+  <div class="fireflyer-pie-layout">
+    <div class="fireflyer-pie-canvas">
+      <svg viewBox="0 0 220 220" width="220" height="220" xmlns="http://www.w3.org/2000/svg">
+        <path d="M 110.00 20.00 A 90 90 0 1 1 70.95 191.09 L 86.57 158.65 A 54 54 0 1 0 110.00 56.00 Z" fill="#1FA8C9" stroke="#ffffff" stroke-width="1.5" data-i="0" data-active="1" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"toggle": "status_pie|status=paid"}' aria-label="paid: 4 (57.1%)" />
+        <path d="M 70.95 191.09 A 90 90 0 0 1 39.64 53.89 L 67.78 76.33 A 54 54 0 0 0 86.57 158.65 Z" fill="#454E7C" stroke="#ffffff" stroke-width="1.5" data-i="1" data-active="0" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"toggle": "status_pie|status=pending"}' aria-label="pending: 2 (28.6%)" />
+        <path d="M 39.64 53.89 A 90 90 0 0 1 110.00 20.00 L 110.00 56.00 A 54 54 0 0 0 67.78 76.33 Z" fill="#5AC189" stroke="#ffffff" stroke-width="1.5" data-i="2" data-active="0" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"toggle": "status_pie|status=cancelled"}' aria-label="cancelled: 1 (14.3%)" />
+      </svg>
+      <div class="fireflyer-pie-tooltip" data-i="0" role="tooltip">
+        <span class="fireflyer-pie-tooltip-label">paid</span>
+        <span class="fireflyer-pie-tooltip-meta">4 · 57.1%</span>
+      </div>
+      <div class="fireflyer-pie-tooltip" data-i="1" role="tooltip">
+        <span class="fireflyer-pie-tooltip-label">pending</span>
+        <span class="fireflyer-pie-tooltip-meta">2 · 28.6%</span>
+      </div>
+      <div class="fireflyer-pie-tooltip" data-i="2" role="tooltip">
+        <span class="fireflyer-pie-tooltip-label">cancelled</span>
+        <span class="fireflyer-pie-tooltip-meta">1 · 14.3%</span>
+      </div>
+    </div>
+    <ul class="fireflyer-legend">
+      <li class="active">
+        <span class="swatch" style="background:#1FA8C9;"></span>
+        <span class="label">paid</span>
+        <span class="meta">4 · 57.1%</span>
+      </li>
+      <li>
+        <span class="swatch" style="background:#454E7C;"></span>
+        <span class="label">pending</span>
+        <span class="meta">2 · 28.6%</span>
+      </li>
+      <li>
+        <span class="swatch" style="background:#5AC189;"></span>
+        <span class="label">cancelled</span>
+        <span class="meta">1 · 14.3%</span>
+      </li>
+    </ul>
+  </div>
+</article>

@@ -1,0 +1,38 @@
+<style>{{ css|safe }}</style>
+<style>
+{%- for i in range(segments|length) %}
+.fireflyer-pie-canvas:has(svg [data-i="{{ i }}"]:hover) .fireflyer-pie-tooltip[data-i="{{ i }}"] { opacity: 1; }
+{%- endfor %}
+</style>
+<article class="fireflyer-chart fireflyer-pie{% if has_selection %} has-selection{% endif %}">
+  <div class="fireflyer-title">{{ title }}</div>
+  <div class="fireflyer-pie-layout">
+    <div class="fireflyer-pie-canvas">
+      <svg viewBox="0 0 220 220" width="220" height="220" xmlns="http://www.w3.org/2000/svg">
+        {%- for s in segments %}
+        {%- if s.path %}
+        <path d="{{ s.path }}" fill="{{ s.color }}" stroke="#ffffff" stroke-width="1.5" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.count }} ({{ s.percent }}%)" />
+        {%- else %}
+        <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_out }}" fill="{{ s.color }}" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.count }} ({{ s.percent }}%)" />
+        <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_in }}" fill="#ffffff" />
+        {%- endif %}
+        {%- endfor %}
+      </svg>
+      {%- for s in segments %}
+      <div class="fireflyer-pie-tooltip" data-i="{{ loop.index0 }}" role="tooltip">
+        <span class="fireflyer-pie-tooltip-label">{{ s.label }}</span>
+        <span class="fireflyer-pie-tooltip-meta">{{ s.count }} · {{ s.percent }}%</span>
+      </div>
+      {%- endfor %}
+    </div>
+    <ul class="fireflyer-legend">
+      {%- for s in segments %}
+      <li{% if s.is_active %} class="active"{% endif %}>
+        <span class="swatch" style="background:{{ s.color }};"></span>
+        <span class="label">{{ s.label }}</span>
+        <span class="meta">{{ s.count }} · {{ s.percent }}%</span>
+      </li>
+      {%- endfor %}
+    </ul>
+  </div>
+</article>

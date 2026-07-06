@@ -1,0 +1,20 @@
+services:
+  fireflyer:
+    build: .
+    # Loads ANTHROPIC_API_KEY (and anything else) for the AI assistant.
+    # No-op if .env is absent — the assistant just stays disabled.
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source + data so edits hot-reload without a rebuild. tests/ is
+      # mounted too so `docker compose run --rm fireflyer pytest` works (it's
+      # excluded from the image itself via .dockerignore).
+      - ./fireflyer:/app/fireflyer
+      - ./files:/app/files
+      - ./tests:/app/tests
+    command: >
+      uvicorn fireflyer.web.app:app
+      --host 0.0.0.0 --port 8000 --reload

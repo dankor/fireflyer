@@ -1,0 +1,209 @@
+<style>.fireflyer-chart {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  color: #20242b;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  margin: 0 0 16px 0;
+}
+.fireflyer-chart .fireflyer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #323232;
+  letter-spacing: -0.01em;
+  margin: 0 0 12px 0;
+}
+.fireflyer-map {
+  display: flex;
+  flex-direction: column;
+}
+.fireflyer-map-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 0 0 8px 0;
+}
+.fireflyer-map-control-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fireflyer-map-control-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8a929c;
+}
+.fireflyer-map-zoom {
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+  line-height: 1;
+  font-weight: 600;
+  color: #20242b;
+  background: #ffffff;
+  border: 1px solid #d6d8dc;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  user-select: none;
+}
+.fireflyer-map-zoom:hover { background: #eef2f7; }
+.fireflyer-map-zoom:active { background: #dde4ed; }
+.fireflyer-map-grid {
+  font-size: 11px;
+  color: #5e6975;
+  font-variant-numeric: tabular-nums;
+  min-width: 28px;
+  text-align: center;
+}
+/* Responsive canvas — the SVG fills the cell width and height via its own
+   `width="100%" height="100%"` attributes and `preserveAspectRatio="meet"`.
+   No scroll: the map always fits the available space, and zooming in via
+   the controls fetches higher-detail tiles instead of growing the canvas. */
+.fireflyer-map-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #f5f7fa;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+}
+.fireflyer-map svg {
+  display: block;
+  /* The width/height attributes set responsive sizing; CSS just makes sure
+     the SVG can't push past its flex container. */
+  max-width: 100%;
+  max-height: 100%;
+}
+.fireflyer-map svg image {
+  /* Tiles are decorative; clicks/hover should hit the hex layer. */
+  pointer-events: none;
+}
+.fireflyer-map svg polygon {
+  cursor: default;
+  transition: filter 0.15s ease;
+}
+.fireflyer-map svg polygon:hover { filter: brightness(0.9); }
+/* Per-hex hover count — single CSS rule covers every hex regardless of how
+   many are rendered. The `<text>` is hidden by default and revealed when
+   the wrapping `<g>` is hovered. */
+.fireflyer-map-hex .fireflyer-map-hex-label {
+  opacity: 0;
+  pointer-events: none;
+  font-size: 11px;
+  font-weight: 600;
+  fill: #20242b;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 3;
+  font-variant-numeric: tabular-nums;
+}
+.fireflyer-map-hex:hover .fireflyer-map-hex-label { opacity: 1; }
+
+.fireflyer-map-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 8px 0 0 0;
+  font-size: 11px;
+  color: #5e6975;
+}
+.fireflyer-map-bounds {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.fireflyer-map-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fireflyer-map-legend-bar {
+  display: inline-block;
+  width: 80px;
+  height: 8px;
+  border-radius: 2px;
+  border: 1px solid #d6d8dc;
+}
+.fireflyer-map-legend-label { font-variant-numeric: tabular-nums; }
+.fireflyer-map-attribution {
+  font-size: 10px;
+  color: #8a929c;
+}
+.fireflyer-map-attribution a {
+  color: inherit;
+  text-decoration: underline;
+}
+.fireflyer-map-attribution a:hover { color: #20a7c9; }
+</style>
+<div id="fireflyer-map-86fd12f1b1" class="fireflyer-chart-root">
+  <article class="fireflyer-chart fireflyer-map">
+    <div class="fireflyer-title">Order density (Kyiv)</div>
+    <div class="fireflyer-map-controls">
+      <div class="fireflyer-map-control-group" aria-label="Tile zoom">
+        <span class="fireflyer-map-control-label">zoom</span>
+        <button type="button" class="fireflyer-map-zoom" aria-label="Zoom out"
+                hx-get="/chart/map?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=10&zoom=11"
+                hx-target="#fireflyer-map-86fd12f1b1" hx-swap="outerHTML">−</button>
+        <span class="fireflyer-map-grid" aria-label="tile zoom">z12</span>
+        <button type="button" class="fireflyer-map-zoom" aria-label="Zoom in"
+                hx-get="/chart/map?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=10&zoom=13"
+                hx-target="#fireflyer-map-86fd12f1b1" hx-swap="outerHTML">+</button>
+      </div>
+      <div class="fireflyer-map-control-group" aria-label="Hex grid size">
+        <span class="fireflyer-map-control-label">hex</span>
+        <button type="button" class="fireflyer-map-zoom" aria-label="Coarser hex grid"
+                hx-get="/chart/map?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=20&zoom=12"
+                hx-target="#fireflyer-map-86fd12f1b1" hx-swap="outerHTML">−</button>
+        <span class="fireflyer-map-grid" aria-label="hex size">10</span>
+        <button type="button" class="fireflyer-map-zoom" aria-label="Finer hex grid"
+                hx-get="/chart/map?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=5&zoom=12"
+                hx-target="#fireflyer-map-86fd12f1b1" hx-swap="outerHTML">+</button>
+      </div>
+    </div>
+    <div class="fireflyer-map-canvas">
+      <svg viewBox="0 0 339.3 505.4" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+        <image href="https://tile.openstreetmap.org/12/2394/1380.png" x="-237.7" y="-37.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <image href="https://tile.openstreetmap.org/12/2395/1380.png" x="18.3" y="-37.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <image href="https://tile.openstreetmap.org/12/2396/1380.png" x="274.3" y="-37.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <image href="https://tile.openstreetmap.org/12/2394/1381.png" x="-237.7" y="218.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <image href="https://tile.openstreetmap.org/12/2395/1381.png" x="18.3" y="218.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <image href="https://tile.openstreetmap.org/12/2396/1381.png" x="274.3" y="218.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <image href="https://tile.openstreetmap.org/12/2394/1382.png" x="-237.7" y="474.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <image href="https://tile.openstreetmap.org/12/2395/1382.png" x="18.3" y="474.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <image href="https://tile.openstreetmap.org/12/2396/1382.png" x="274.3" y="474.5" width="256" height="256" preserveAspectRatio="xMidYMid slice" />
+        <g class="fireflyer-map-hex">
+          <polygon points="77.9,245.0 86.6,250.0 86.6,260.0 77.9,265.0 69.3,260.0 69.3,250.0" fill="#1FA8C9" fill-opacity="1.000" stroke="#ffffff" stroke-width="0.5" data-count="3"><title>3 records</title></polygon>
+          <text x="77.9" y="255.0" text-anchor="middle" dominant-baseline="central" class="fireflyer-map-hex-label">3</text>
+        </g>
+        <g class="fireflyer-map-hex">
+          <polygon points="77.9,335.0 86.6,340.0 86.6,350.0 77.9,355.0 69.3,350.0 69.3,340.0" fill="#1FA8C9" fill-opacity="0.717" stroke="#ffffff" stroke-width="0.5" data-count="2"><title>2 records</title></polygon>
+          <text x="77.9" y="345.0" text-anchor="middle" dominant-baseline="central" class="fireflyer-map-hex-label">2</text>
+        </g>
+        <g class="fireflyer-map-hex">
+          <polygon points="311.8,20.0 320.4,25.0 320.4,35.0 311.8,40.0 303.1,35.0 303.1,25.0" fill="#1FA8C9" fill-opacity="0.433" stroke="#ffffff" stroke-width="0.5" data-count="1"><title>1 record</title></polygon>
+          <text x="311.8" y="30.0" text-anchor="middle" dominant-baseline="central" class="fireflyer-map-hex-label">1</text>
+        </g>
+        <g class="fireflyer-map-hex">
+          <polygon points="17.3,470.0 26.0,475.0 26.0,485.0 17.3,490.0 8.7,485.0 8.7,475.0" fill="#1FA8C9" fill-opacity="0.433" stroke="#ffffff" stroke-width="0.5" data-count="1"><title>1 record</title></polygon>
+          <text x="17.3" y="480.0" text-anchor="middle" dominant-baseline="central" class="fireflyer-map-hex-label">1</text>
+        </g>
+      </svg>
+    </div>
+    <div class="fireflyer-map-footer">
+      <span class="fireflyer-map-bounds">50.4000, 30.5000 → 50.5000, 30.6000 · z12</span>
+      <span class="fireflyer-map-legend" aria-label="record count scale">
+        <span class="fireflyer-map-legend-label">1</span>
+        <span class="fireflyer-map-legend-bar" style="background: linear-gradient(to right, #1FA8C925, #1FA8C9);"></span>
+        <span class="fireflyer-map-legend-label">3</span>
+      </span>
+      <span class="fireflyer-map-attribution">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer noopener">OpenStreetMap</a> contributors</span>
+    </div>
+  </article>
+</div>

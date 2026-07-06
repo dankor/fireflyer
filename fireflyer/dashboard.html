@@ -1,0 +1,43 @@
+<style>{{ css|safe }}</style>
+<div id="fireflyer-dashboard" class="fireflyer-dashboard">
+  <input type="hidden" name="yaml_text" value="{{ yaml_source }}">
+  {%- for tok in cf_tokens %}
+  <input type="hidden" name="cf" value="{{ tok }}">
+  {%- endfor %}
+  {%- for item in items %}
+  {%- if item.kind == 'header' %}
+  <h2 class="fireflyer-dashboard-header">{{ item.text }}</h2>
+  {%- elif item.kind == 'separator' %}
+  <hr class="fireflyer-dashboard-separator">
+  {%- elif item.kind == 'row' %}
+  <div class="fireflyer-dashboard-row" style="grid-template-columns: {{ item.columns_css }}; grid-template-rows: {{ item.rows_css }};">
+    {%- for cell in item.cells %}
+    {%- set state = 'is-emitter' if cell.emitted else ('has-filters' if cell.filters else '') %}
+    {%- set shown = cell.emitted if cell.emitted else cell.filters %}
+    <div class="fireflyer-dashboard-cell" style="grid-column: {{ cell.grid_column }}; grid-row: {{ cell.grid_row }};">
+      <div class="fireflyer-filter-indicator{% if state %} {{ state }}{% endif %}" tabindex="0" aria-label="{{ shown|length }} active filter{% if shown|length != 1 %}s{% endif %}{% if state == 'is-emitter' %} emitted by this chart{% endif %}">
+        <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M1 3h14l-5 6.5V14l-4-1.5V9.5L1 3z" fill="currentColor"/></svg>
+        <span class="count">{{ shown|length }}</span>
+        <div class="fireflyer-filter-tooltip" role="tooltip">
+          {%- if cell.emitted %}
+          <div class="fireflyer-filter-tooltip-title">Filtering others by</div>
+          {%- for f in cell.emitted %}
+          <div class="fireflyer-filter-row"><span class="col">{{ f.column }}</span> <span class="op">{{ 'in' if f.op == 'in' else 'not in' }}</span> <span class="vals">{{ f.values|join(', ') }}</span></div>
+          {%- endfor %}
+          {%- elif cell.filters %}
+          <div class="fireflyer-filter-tooltip-title">Active filters</div>
+          {%- for f in cell.filters %}
+          <div class="fireflyer-filter-row"><span class="col">{{ f.column }}</span> <span class="op">{{ 'in' if f.op == 'in' else 'not in' }}</span> <span class="vals">{{ f.values|join(', ') }}</span></div>
+          {%- endfor %}
+          {%- else %}
+          <div class="fireflyer-filter-tooltip-empty">No active filters</div>
+          {%- endif %}
+        </div>
+      </div>
+      {{ cell.html|safe }}
+    </div>
+    {%- endfor %}
+  </div>
+  {%- endif %}
+  {%- endfor %}
+</div>

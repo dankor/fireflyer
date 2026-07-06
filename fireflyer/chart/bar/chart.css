@@ -1,0 +1,109 @@
+.fireflyer-chart {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  color: #20242b;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  margin: 0 0 16px 0;
+}
+.fireflyer-chart .fireflyer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #323232;
+  letter-spacing: -0.01em;
+  margin: 0 0 12px 0;
+}
+.fireflyer-bar {
+  display: flex;
+  flex-direction: column;
+}
+.fireflyer-bar-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 24px;
+  align-items: safe center;
+  justify-content: safe center;
+  flex-wrap: wrap;
+  overflow: auto;
+}
+.fireflyer-bar-canvas {
+  position: relative;
+  flex: 1 1 280px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fireflyer-bar svg {
+  width: 100%;
+  height: auto;
+  max-width: 480px;
+  max-height: 320px;
+  display: block;
+}
+.fireflyer-bar svg rect {
+  cursor: pointer;
+  transition: filter 0.15s ease, opacity 0.15s ease;
+}
+.fireflyer-bar svg rect:hover { filter: brightness(1.08); }
+/* When the chart has any active selection, fade non-selected segments —
+   mirrors the pie chart's `has-selection` styling so multi-chart dashboards
+   read consistently. */
+.fireflyer-bar.has-selection [data-active="0"] { opacity: 0.35; }
+.fireflyer-bar.has-selection .fireflyer-legend li:not(.active) { opacity: 0.55; }
+.fireflyer-bar.has-selection .fireflyer-legend li.active .label { font-weight: 600; }
+
+/* Hover tooltip — one per segment, positioned over the canvas top. CSS-only
+   reveal via :has() on the canvas; inline rules in chart.html bind each
+   tooltip to its rect by `data-i`. */
+.fireflyer-bar-tooltip {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: #20242b;
+  color: #ffffff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 10px;
+  border-radius: 3px;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 2;
+}
+.fireflyer-bar-tooltip-label { font-weight: 600; margin-right: 6px; }
+.fireflyer-bar-tooltip-meta { opacity: 0.85; }
+
+.fireflyer-bar .fireflyer-legend {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+  color: #20242b;
+}
+.fireflyer-bar .fireflyer-legend li {
+  display: flex;
+  align-items: center;
+  padding: 3px 0;
+  white-space: nowrap;
+}
+.fireflyer-bar .fireflyer-legend .swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+.fireflyer-bar .fireflyer-legend .label { color: #20242b; }
+.fireflyer-bar .fireflyer-legend .meta {
+  color: #5e6975;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}

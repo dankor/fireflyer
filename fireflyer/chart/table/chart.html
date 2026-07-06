@@ -1,0 +1,61 @@
+<style>{{ css|safe }}</style>
+<div id="{{ chart_id }}" class="fireflyer-chart-root">
+  <article class="fireflyer-chart fireflyer-table">
+    <div class="fireflyer-title">{{ title }}</div>
+    {%- if search %}
+    <div class="fireflyer-table-search">
+      <input type="search" name="q" value="{{ query }}" placeholder="Search…"
+             autocomplete="off" spellcheck="false"
+             hx-get="{{ endpoint }}?{{ base_params|safe }}"
+             hx-target="#{{ chart_id }}"
+             hx-swap="outerHTML"
+             hx-trigger="keyup changed delay:300ms, search"
+             hx-include="this">
+    </div>
+    {%- endif %}
+    <div class="fireflyer-table-scroll">
+      <table>
+        <thead>
+          <tr>
+            {%- for name, is_num in columns %}
+            <th class="{{ 'num' if is_num else '' }}">{{ name }}</th>
+            {%- endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {%- for row in rows %}
+          <tr>
+            {%- for value, is_num in row %}
+            <td class="{{ 'num' if is_num else '' }}">{{ value }}</td>
+            {%- endfor %}
+          </tr>
+          {%- endfor %}
+          {%- if not rows %}
+          <tr><td class="fireflyer-table-empty" colspan="{{ columns|length or 1 }}">No matching rows.</td></tr>
+          {%- endif %}
+        </tbody>
+      </table>
+    </div>
+    {%- if pagination > 0 and total_pages > 1 %}
+    <nav class="fireflyer-table-pagination" aria-label="pagination">
+      {%- set prev = page - 1 if page > 1 else 1 %}
+      {%- set next = page + 1 if page < total_pages else total_pages %}
+      <a class="page-link {{ 'disabled' if page == 1 else '' }}"
+         hx-get="{{ endpoint }}?{{ base_params|safe }}&q={{ query }}&page={{ prev }}"
+         hx-target="#{{ chart_id }}" hx-swap="outerHTML">‹</a>
+      {%- for p in page_links %}
+      {%- if p is none %}
+      <span class="page-ellipsis">…</span>
+      {%- else %}
+      <a class="page-link {{ 'active' if p == page else '' }}"
+         hx-get="{{ endpoint }}?{{ base_params|safe }}&q={{ query }}&page={{ p }}"
+         hx-target="#{{ chart_id }}" hx-swap="outerHTML">{{ p }}</a>
+      {%- endif %}
+      {%- endfor %}
+      <a class="page-link {{ 'disabled' if page == total_pages else '' }}"
+         hx-get="{{ endpoint }}?{{ base_params|safe }}&q={{ query }}&page={{ next }}"
+         hx-target="#{{ chart_id }}" hx-swap="outerHTML">›</a>
+    </nav>
+    {%- endif %}
+  </article>
+</div>

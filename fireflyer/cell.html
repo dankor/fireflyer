@@ -1,0 +1,37 @@
+{%- set state = 'is-emitter' if emitted else ('has-filters' if applied else '') %}
+{%- set shown = emitted if emitted else applied %}
+<div class="fireflyer-dashboard-cell" style="grid-column: {{ col }}; grid-row: {{ row }};"{% if editing %} data-cid="{{ cid }}"{% endif %}>
+  {%- if editing %}
+  <div class="fireflyer-chart-tools">
+    <button type="button" class="fireflyer-move-btn" data-cid="{{ cid }}" title="Move chart" aria-label="Move {{ cid }}">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 1v14M1 8h14M8 1 5.7 3.3M8 1l2.3 2.3M8 15l-2.3-2.3M8 15l2.3-2.3M1 8l2.3-2.3M1 8l2.3 2.3M15 8l-2.3-2.3M15 8l-2.3 2.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button type="button" class="fireflyer-edit-btn" data-cid="{{ cid }}" title="Edit chart" aria-label="Edit {{ cid }}">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M11.1 1.9a1.5 1.5 0 0 1 2.1 0l.9.9a1.5 1.5 0 0 1 0 2.1l-8 8-3.4.9.9-3.4 7.5-8.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+    </button>
+    <button type="button" class="fireflyer-delete-btn" data-cid="{{ cid }}" title="Delete chart" aria-label="Delete {{ cid }}">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2.5 4h11M6 4V2.6h4V4M5 4l.6 9.4h4.8L11 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  {%- endif %}
+  <div class="fireflyer-filter-indicator{% if state %} {{ state }}{% endif %}" tabindex="0" aria-label="{{ shown|length }} active filter{% if shown|length != 1 %}s{% endif %}{% if state == 'is-emitter' %} emitted by this chart{% endif %}">
+    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M1 3h14l-5 6.5V14l-4-1.5V9.5L1 3z" fill="currentColor"/></svg>
+    <span class="count">{{ shown|length }}</span>
+    <div class="fireflyer-filter-tooltip" role="tooltip">
+      {%- if emitted %}
+      <div class="fireflyer-filter-tooltip-title">Filtering others by</div>
+      {%- for f in emitted %}
+      <div class="fireflyer-filter-row"><span class="col">{{ f.column }}</span> <span class="op">{{ 'in' if f.op == 'in' else 'not in' }}</span> <span class="vals">{{ f.values|join(', ') }}</span></div>
+      {%- endfor %}
+      {%- elif applied %}
+      <div class="fireflyer-filter-tooltip-title">Active filters</div>
+      {%- for f in applied %}
+      <div class="fireflyer-filter-row"><span class="col">{{ f.column }}</span> <span class="op">{{ 'in' if f.op == 'in' else 'not in' }}</span> <span class="vals">{{ f.values|join(', ') }}</span></div>
+      {%- endfor %}
+      {%- else %}
+      <div class="fireflyer-filter-tooltip-empty">No active filters</div>
+      {%- endif %}
+    </div>
+  </div>
+  {{ chart_html|safe }}
+</div>

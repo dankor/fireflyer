@@ -1,0 +1,59 @@
+<style>{{ css|safe }}</style>
+<div id="{{ chart_id }}" class="fireflyer-chart-root">
+  <article class="fireflyer-chart fireflyer-map">
+    <div class="fireflyer-title">{{ title }}</div>
+    <div class="fireflyer-map-controls">
+      <div class="fireflyer-map-control-group" aria-label="Tile zoom">
+        <span class="fireflyer-map-control-label">zoom</span>
+        <button type="button" class="fireflyer-map-zoom" aria-label="Zoom out"
+                hx-get="{{ endpoint }}?{{ base_params|safe }}&grid_size={{ grid_size }}&zoom={{ zoom_out }}"
+                hx-target="#{{ chart_id }}" hx-swap="outerHTML">−</button>
+        <span class="fireflyer-map-grid" aria-label="tile zoom">z{{ zoom }}</span>
+        <button type="button" class="fireflyer-map-zoom" aria-label="Zoom in"
+                hx-get="{{ endpoint }}?{{ base_params|safe }}&grid_size={{ grid_size }}&zoom={{ zoom_in }}"
+                hx-target="#{{ chart_id }}" hx-swap="outerHTML">+</button>
+      </div>
+      <div class="fireflyer-map-control-group" aria-label="Hex grid size">
+        <span class="fireflyer-map-control-label">hex</span>
+        <button type="button" class="fireflyer-map-zoom" aria-label="Coarser hex grid"
+                hx-get="{{ endpoint }}?{{ base_params|safe }}&grid_size={{ grid_coarser }}&zoom={{ zoom }}"
+                hx-target="#{{ chart_id }}" hx-swap="outerHTML">−</button>
+        <span class="fireflyer-map-grid" aria-label="hex size">{{ grid_size }}</span>
+        <button type="button" class="fireflyer-map-zoom" aria-label="Finer hex grid"
+                hx-get="{{ endpoint }}?{{ base_params|safe }}&grid_size={{ grid_finer }}&zoom={{ zoom }}"
+                hx-target="#{{ chart_id }}" hx-swap="outerHTML">+</button>
+      </div>
+    </div>
+    <div class="fireflyer-map-canvas">
+      <svg viewBox="0 0 {{ '%.1f'|format(vb_w) }} {{ '%.1f'|format(vb_h) }}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+        {%- if empty %}
+        <rect x="0" y="0" width="{{ vb_w }}" height="{{ vb_h }}" fill="#f5f7fa" />
+        <text x="{{ vb_w // 2 }}" y="{{ vb_h // 2 }}" text-anchor="middle" font-size="14" fill="#8a929c">No data</text>
+        {%- else %}
+        {%- for t in tiles %}
+        <image href="{{ t.url }}" x="{{ '%.1f'|format(t.x) }}" y="{{ '%.1f'|format(t.y) }}" width="{{ tile_size }}" height="{{ tile_size }}" preserveAspectRatio="xMidYMid slice" />
+        {%- endfor %}
+        {%- for h in hexes %}
+        <g class="fireflyer-map-hex">
+          <polygon points="{{ h.points }}" fill="{{ hex_color }}" fill-opacity="{{ h.opacity }}" stroke="#ffffff" stroke-width="0.5" data-count="{{ h.count }}"><title>{{ h.count }} record{{ 's' if h.count != 1 else '' }}</title></polygon>
+          <text x="{{ h.cx }}" y="{{ h.cy }}" text-anchor="middle" dominant-baseline="central" class="fireflyer-map-hex-label">{{ h.count }}</text>
+        </g>
+        {%- endfor %}
+        {%- endif %}
+      </svg>
+    </div>
+    {%- if bounds %}
+    <div class="fireflyer-map-footer">
+      <span class="fireflyer-map-bounds">{{ bounds.lat_lo }}, {{ bounds.lng_lo }} → {{ bounds.lat_hi }}, {{ bounds.lng_hi }} · z{{ bounds.z }}</span>
+      {%- if max_count %}
+      <span class="fireflyer-map-legend" aria-label="record count scale">
+        <span class="fireflyer-map-legend-label">1</span>
+        <span class="fireflyer-map-legend-bar" style="background: linear-gradient(to right, {{ hex_color }}25, {{ hex_color }});"></span>
+        <span class="fireflyer-map-legend-label">{{ max_count }}</span>
+      </span>
+      {%- endif %}
+      <span class="fireflyer-map-attribution">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer noopener">OpenStreetMap</a> contributors</span>
+    </div>
+    {%- endif %}
+  </article>
+</div>

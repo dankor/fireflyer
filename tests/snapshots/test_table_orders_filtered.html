@@ -1,0 +1,194 @@
+<style>.fireflyer-chart {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  color: #20242b;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  margin: 0 0 16px 0;
+}
+/* Flex column so the table body fills and pagination pins to the card's bottom
+   when the dashboard row stretches the card past its natural content height. */
+.fireflyer-table {
+  display: flex;
+  flex-direction: column;
+}
+/* Scroll the data area when there are more rows than fit; title, search, and
+   pagination stay fixed at the top/bottom of the card. min-height: 0 is required
+   for the flex item to shrink below its content size and trigger overflow. */
+.fireflyer-table .fireflyer-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+/* Sticky header keeps column names in view while body scrolls. */
+.fireflyer-table .fireflyer-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.fireflyer-chart .fireflyer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #323232;
+  letter-spacing: -0.01em;
+  margin: 0 0 12px 0;
+}
+.fireflyer-table .fireflyer-table-search {
+  margin: 0 0 10px 0;
+}
+.fireflyer-table .fireflyer-table-search input {
+  width: 100%;
+  max-width: 320px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: #20242b;
+  background: #fff;
+  border: 1px solid #d6d8dc;
+  border-radius: 4px;
+  outline: 0;
+}
+.fireflyer-table .fireflyer-table-search input:focus {
+  border-color: #20a7c9;
+  box-shadow: 0 0 0 2px rgba(32,167,201,0.15);
+}
+.fireflyer-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.fireflyer-table thead th {
+  background: #fafafa;
+  color: #5e6975;
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e0e0e0;
+  white-space: nowrap;
+}
+.fireflyer-table tbody td {
+  padding: 7px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  font-variant-numeric: tabular-nums;
+}
+.fireflyer-table tbody tr:nth-child(even) { background: #fafbfc; }
+.fireflyer-table tbody tr:hover { background: #eef2f7; }
+.fireflyer-table tbody tr:last-child td { border-bottom: none; }
+.fireflyer-table td.num, .fireflyer-table th.num { text-align: right; }
+.fireflyer-table td.fireflyer-table-empty {
+  text-align: center;
+  color: #8a929c;
+  padding: 18px 12px;
+  font-style: italic;
+}
+.fireflyer-table .fireflyer-table-pagination {
+  display: flex;
+  gap: 4px;
+  /* margin-top: auto pushes the pagination to the card's bottom in a flex
+     column; padding-top keeps the 12px gap above the controls. */
+  margin: auto 0 0 0;
+  padding-top: 12px;
+  justify-content: flex-end;
+  font-size: 12px;
+}
+.fireflyer-table .fireflyer-table-pagination .page-link {
+  min-width: 26px;
+  padding: 4px 8px;
+  text-align: center;
+  border: 1px solid #d6d8dc;
+  border-radius: 4px;
+  color: #20242b;
+  background: #fff;
+  cursor: pointer;
+  user-select: none;
+  text-decoration: none;
+}
+.fireflyer-table .fireflyer-table-pagination .page-link:hover {
+  background: #eef2f7;
+}
+.fireflyer-table .fireflyer-table-pagination .page-link.active {
+  background: #20a7c9;
+  border-color: #20a7c9;
+  color: #fff;
+  cursor: default;
+}
+.fireflyer-table .fireflyer-table-pagination .page-link.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.fireflyer-table .fireflyer-table-pagination .page-ellipsis {
+  min-width: 16px;
+  padding: 4px 2px;
+  text-align: center;
+  color: #8a929c;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+</style>
+<div id="fireflyer-table-3aa12fbb57" class="fireflyer-chart-root">
+  <article class="fireflyer-chart fireflyer-table">
+    <div class="fireflyer-title">Orders</div>
+    <div class="fireflyer-table-search">
+      <input type="search" name="q" value="paid" placeholder="Search…"
+             autocomplete="off" spellcheck="false"
+             hx-get="/chart/table?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Orders&search=1&pagination=5"
+             hx-target="#fireflyer-table-3aa12fbb57"
+             hx-swap="outerHTML"
+             hx-trigger="keyup changed delay:300ms, search"
+             hx-include="this">
+    </div>
+    <div class="fireflyer-table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th class="num">id</th>
+            <th class="">status</th>
+            <th class="num">amount</th>
+            <th class="">day</th>
+            <th class="num">lat</th>
+            <th class="num">lng</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="num">1</td>
+            <td class="">paid</td>
+            <td class="num">42</td>
+            <td class="">2026-06-01</td>
+            <td class="num">50.45</td>
+            <td class="num">30.52</td>
+          </tr>
+          <tr>
+            <td class="num">3</td>
+            <td class="">paid</td>
+            <td class="num">99</td>
+            <td class="">2026-06-01</td>
+            <td class="num">50.45</td>
+            <td class="num">30.52</td>
+          </tr>
+          <tr>
+            <td class="num">5</td>
+            <td class="">paid</td>
+            <td class="num">75</td>
+            <td class="">2026-06-02</td>
+            <td class="num">50.43</td>
+            <td class="num">30.52</td>
+          </tr>
+          <tr>
+            <td class="num">7</td>
+            <td class="">paid</td>
+            <td class="num">60</td>
+            <td class="">2026-06-01</td>
+            <td class="num">50.45</td>
+            <td class="num">30.52</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
+</div>

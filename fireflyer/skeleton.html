@@ -1,0 +1,71 @@
+{%- macro item_tools(item_index, kind, header_index) -%}
+<div class="fireflyer-chart-tools fireflyer-item-tools">
+  <button type="button" class="fireflyer-move-btn" data-item-index="{{ item_index }}" title="Move {{ kind }}" aria-label="Move {{ kind }}">
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 1v14M1 8h14M8 1 5.7 3.3M8 1l2.3 2.3M8 15l-2.3-2.3M8 15l2.3-2.3M1 8l2.3-2.3M1 8l2.3 2.3M15 8l-2.3-2.3M15 8l-2.3 2.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  {%- if kind == 'header' %}
+  <button type="button" class="fireflyer-edit-btn" data-header-index="{{ header_index }}" title="Edit header" aria-label="Edit header">
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M11.1 1.9a1.5 1.5 0 0 1 2.1 0l.9.9a1.5 1.5 0 0 1 0 2.1l-8 8-3.4.9.9-3.4 7.5-8.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+  </button>
+  {%- endif %}
+  <button type="button" class="fireflyer-delete-btn" data-item-index="{{ item_index }}" title="Delete {{ kind }}" aria-label="Delete {{ kind }}">
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2.5 4h11M6 4V2.6h4V4M5 4l.6 9.4h4.8L11 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/></svg>
+  </button>
+</div>
+{%- endmacro -%}
+<style>{{ css|safe }}</style>
+<div id="fireflyer-dashboard" class="fireflyer-dashboard">
+  <input type="hidden" name="yaml_text" value="{{ yaml_source }}">
+  {%- if editing %}
+  <input type="hidden" name="editing" value="1">
+  {%- endif %}
+  {%- for tok in cf_tokens %}
+  <input type="hidden" name="cf" value="{{ tok }}">
+  {%- endfor %}
+  {%- for item in items %}
+  {%- if editing %}
+  <div class="fireflyer-add-row" data-before="{{ item.before }}"><button type="button" class="fireflyer-add-row-btn" title="Insert a row here">+</button></div>
+  {%- endif %}
+  {%- if item.kind == 'header' %}
+  {%- if editing %}
+  <div class="fireflyer-dashboard-item" data-kind="header">
+    {{ item_tools(item.before, 'header', item.index) }}
+    <h2 class="fireflyer-dashboard-header fireflyer-editable" data-header-index="{{ item.index }}" title="Double-click to edit">{{ item.text }}</h2>
+  </div>
+  {%- else %}
+  <h2 class="fireflyer-dashboard-header">{{ item.text }}</h2>
+  {%- endif %}
+  {%- elif item.kind == 'separator' %}
+  {%- if editing %}
+  <div class="fireflyer-dashboard-item" data-kind="separator">
+    {{ item_tools(item.before, 'separator', 0) }}
+    <hr class="fireflyer-dashboard-separator">
+  </div>
+  {%- else %}
+  <hr class="fireflyer-dashboard-separator">
+  {%- endif %}
+  {%- elif item.kind == 'row' %}
+  <div class="fireflyer-dashboard-row" style="grid-template-columns: {{ item.columns_css }}; grid-template-rows: {{ item.rows_css }};"{% if editing %} data-ordinals="{{ item.ordinals }}"{% endif %}>
+    {%- if editing %}
+    <button type="button" class="fireflyer-add-cell" data-row="{{ item.tracks[0].ordinal }}" title="Add a chart to this row">+</button>
+    {%- endif %}
+    {%- for cell in item.cells %}
+    <div class="fireflyer-dashboard-cell fireflyer-cell-loading" style="grid-column: {{ cell.grid_column }}; grid-row: {{ cell.grid_row }};" hx-post="/dashboard/cell" hx-trigger="load" hx-target="this" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"cid": "{{ cell.cid }}", "col": "{{ cell.grid_column }}", "row": "{{ cell.grid_row }}"}'>
+      <div class="fireflyer-cell-spinner" aria-label="Loading {{ cell.cid }}"></div>
+    </div>
+    {%- endfor %}
+    {%- if editing %}
+    {%- for t in item.tracks %}
+    <div class="fireflyer-resize-handle" style="grid-column: 1 / -1; grid-row: {{ t.track }}; align-self: end;" data-row-ordinal="{{ t.ordinal }}" data-track="{{ t.track }}" aria-hidden="true"></div>
+    {%- endfor %}
+    {%- for i in range(1, item.col_count) %}
+    <div class="fireflyer-resize-col-handle" style="grid-column: {{ i }}; grid-row: 1 / -1; justify-self: end;" data-ordinals="{{ item.ordinals }}" data-left-col="{{ i - 1 }}" aria-hidden="true"></div>
+    {%- endfor %}
+    {%- endif %}
+  </div>
+  {%- endif %}
+  {%- endfor %}
+  {%- if editing %}
+  <div class="fireflyer-add-row" data-before="end"><button type="button" class="fireflyer-add-row-btn" title="Add a row at the end">+</button></div>
+  {%- endif %}
+</div>
