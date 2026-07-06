@@ -163,16 +163,3 @@ Tests are **snapshot-based**: each pairs an input CSV + chart/dashboard definiti
 Contributions welcome. Keep the code approachable: small functions, clear names, comments that explain *why*. See [`CLAUDE.md`](CLAUDE.md) for the conventions this repo follows (they apply to humans and agents alike).
 
 Release notes live in [`CHANGELOG.md`](CHANGELOG.md).
-
----
-
-## License
-
-**Apache License 2.0 with the [Commons Clause](https://commonsclause.com/)** — see [`LICENSE`](LICENSE).
-
-This is *source-available*, not OSI open source. In short:
-
-- ✅ **Free** to use, modify, self-host internally, study, and build on — for individuals and companies alike.
-- ❌ **Not** for **selling** the software, or offering it (or a derivative) as a **paid or hosted/cloud service (SaaS)**, or charging fees whose value derives substantially from it.
-
-Want to sell it or run it as a commercial/cloud service? Get a commercial license — contact **Danylo Korostil** (<ted.korostiled@gmail.com>).
