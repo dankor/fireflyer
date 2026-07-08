@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-08
+
+### Added
+
+- **Dashboard tabs.** A dashboard's `dashboard:` section can now be a mapping of
+  tab name → layout list, splitting the page into tabs; a flat list stays the
+  no-tabs form, unchanged. Only the active tab's charts load — switching is lazy
+  via htmx — the tab bar is sticky, and crossfilters stay global across tabs. In
+  the browser editor: add a tab from the row **"+"** menu (with a forced rename;
+  cancelling undoes the add), rename a tab inline, move a tab's boundary between
+  rows (switching tabs to reach a target row), and delete a tab — a non-first tab
+  merges into the previous, and the first dissolves all tabs back to a flat list.
+  Charts can be moved across tabs in move mode.
+
 ## [0.1.0] - 2026-07-07
 
 First public release — an early MVP. Under heavy development and not yet
@@ -37,5 +51,6 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dankor/fireflyer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dankor/fireflyer/releases/tag/v0.1.0

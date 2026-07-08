@@ -257,7 +257,8 @@ dashboard:
 
 * `datasets` — mapping of dataset id → dataset config.
 * `charts` — mapping of chart id → chart config.
-* `dashboard` — flat list describing the page layout (the layout DSL, below).
+* `dashboard` — the page layout (the layout DSL, below). Either a flat list of
+  layout items, or a mapping of tab name → layout list (see **Tabs**).
 
 All ids are local to the file. There is no cross-file inclusion in the MVP.
 
@@ -433,6 +434,62 @@ A chart spans multiple rows by being **sized in one row and repeated bare** (no 
 * A run of consecutive rows linked by a bare-inherit span renders as one CSS grid whose columns are the union of the rows' edges; unlinked rows render as independent grids.
 * Headers and separators sit between rows and do not participate in any grid, and they break a span.
 * Rendering is deterministic — the same YAML always produces the same HTML.
+
+### Tabs
+
+The `dashboard:` section may be either the **flat list** above or a **mapping of
+tab name → layout list**. The mapping form splits the page into tabs; each value
+is exactly the same layout-list DSL (rows, headers, separators, spans):
+
+```yaml
+dashboard:
+  Overview:
+    - ["@22", "total", "revenue"]
+    - ["@40", "orders:3", "status:2"]
+  All orders:
+    - ["@50", "orders_long"]
+```
+
+* A flat list is the no-tabs form and renders exactly as before — tabs are purely
+  additive and backward-compatible.
+* A tab is a **section delimiter**: it owns every row from its key down to the
+  next tab key. Row ordinals, header indices, and item indices are numbered
+  **globally in document order across tabs**, so the same layout rules and the
+  editor's line-addressing apply unchanged.
+* Each tab must contain at least one layout item (no empty tabs). A chart still
+  resolves to exactly **one** placement across the whole dashboard — a span may
+  not cross a tab boundary, and a chart id may not repeat in two tabs.
+* Only the **active tab** is rendered; switching re-fetches the dashboard so a
+  tab's charts load lazily (htmx). Crossfilters are **global** — a click filters
+  matching charts in every tab. The active tab rides in hidden state so a
+  crossfilter click or an edit keeps the current tab. The tab bar is sticky.
+
+Editor gestures (editor-only, gated by `editing`):
+
+* **Add** — the between-rows **"+"** menu always offers a **Tab** item. On a flat
+  dashboard the first pick enables tabs by wrapping the whole layout in one tab.
+  Once tabbed, a pick splits the current tab at that gap — rows below become the
+  new tab, rows above stay in the previous one. Either way the new tab opens a
+  **forced rename**: give it a real name, or cancel (Esc / ✕ / blur / keeping the
+  default) which **undoes the add**.
+* **Rename** — inline, exactly like a header (focus mode, Enter/Esc).
+* **Move** — drop the tab into any between-rows slot (reuses the between-row
+  strips, like a header/separator move); it repositions the tab's boundary,
+  reordering the tabs and reassigning the rows that fall under it. You can
+  **switch tabs during the move** (the move stays live, like a cross-tab chart
+  move) to reach a row in another tab. The **first tab has no move** — moving its
+  boundary would orphan the rows above it.
+* **Delete** — a non-first tab merges its rows into the previous tab; deleting the
+  **first** tab dissolves **all** tabs back to a flat list (the confirm lists the
+  tabs being removed). The first tab's delete button carries a distinct
+  "remove all tabs" icon to signal it flattens the whole dashboard.
+* **Move a chart across tabs** — enter move mode on a chart, switch tabs (the move
+  stays live), and drop it into the destination tab's zones. A move that empties a
+  tab dissolves that tab.
+
+Surgical support lives in `config_edit.py` (`add_first_tab`, `insert_tab`,
+`set_tab_text`, `move_tab`, `delete_tab`), each a line edit on the mapping
+re-validated through `Dashboard.from_yaml`.
 
 ## Complete example
 

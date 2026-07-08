@@ -13,6 +13,27 @@
   </button>
 </div>
 {%- endmacro -%}
+{%- macro tab_tools(tab_index, first) -%}
+<div class="fireflyer-chart-tools fireflyer-item-tools fireflyer-tab-tools{% if first %} fireflyer-tab-tools-first{% endif %}">
+  {%- if not first %}
+  <button type="button" class="fireflyer-move-btn" data-tab-index="{{ tab_index }}" title="Move tab" aria-label="Move tab">
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 1v14M1 8h14M8 1 5.7 3.3M8 1l2.3 2.3M8 15l-2.3-2.3M8 15l2.3-2.3M1 8l2.3-2.3M1 8l2.3 2.3M15 8l-2.3-2.3M15 8l-2.3 2.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  {%- endif %}
+  <button type="button" class="fireflyer-edit-btn" data-tab-index="{{ tab_index }}" title="Rename tab" aria-label="Rename tab">
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M11.1 1.9a1.5 1.5 0 0 1 2.1 0l.9.9a1.5 1.5 0 0 1 0 2.1l-8 8-3.4.9.9-3.4 7.5-8.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+  </button>
+  {%- if first %}
+  <button type="button" class="fireflyer-delete-btn" data-tab-index="{{ tab_index }}" title="Remove all tabs" aria-label="Remove all tabs">
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2.5" y="5.5" width="7" height="7" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 5.3V4.2A1.2 1.2 0 0 1 7.2 3h5.1A1.2 1.2 0 0 1 13.5 4.2v5.1a1.2 1.2 0 0 1-1.2 1.2h-1.1" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+  </button>
+  {%- else %}
+  <button type="button" class="fireflyer-delete-btn" data-tab-index="{{ tab_index }}" title="Delete tab" aria-label="Delete tab">
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2.5 4h11M6 4V2.6h4V4M5 4l.6 9.4h4.8L11 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/></svg>
+  </button>
+  {%- endif %}
+</div>
+{%- endmacro -%}
 <style>{{ css|safe }}</style>
 <div id="fireflyer-dashboard" class="fireflyer-dashboard">
   <input type="hidden" name="yaml_text" value="{{ yaml_source }}">
@@ -22,6 +43,21 @@
   {%- for tok in cf_tokens %}
   <input type="hidden" name="cf" value="{{ tok }}">
   {%- endfor %}
+  {%- if tabs %}
+  <input type="hidden" name="active_tab" value="{{ active_tab }}">
+  <div class="fireflyer-tabs" role="tablist">
+    {%- for t in tabs %}
+    {%- if editing %}
+    <div class="fireflyer-tab-wrap{% if t.index == active_tab %} is-active{% endif %}" data-tab-index="{{ t.index }}">
+      {{ tab_tools(t.index, t.index == 0) }}
+      <div class="fireflyer-tab fireflyer-tab-switch{% if t.index == active_tab %} is-active{% endif %}" role="tab" data-tab-index="{{ t.index }}" data-tab-name="{{ t.name }}">{{ t.name }}</div>
+    </div>
+    {%- else %}
+    <button type="button" role="tab" class="fireflyer-tab{% if t.index == active_tab %} is-active{% endif %}" hx-post="/dashboard" hx-vals='{"active_tab": {{ t.index }}}' hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]:not([name='active_tab'])">{{ t.name }}</button>
+    {%- endif %}
+    {%- endfor %}
+  </div>
+  {%- endif %}
   {%- for item in items %}
   {%- if editing %}
   <div class="fireflyer-add-row" data-before="{{ item.before }}"><button type="button" class="fireflyer-add-row-btn" title="Insert a row here">+</button></div>
@@ -66,6 +102,6 @@
   {%- endif %}
   {%- endfor %}
   {%- if editing %}
-  <div class="fireflyer-add-row" data-before="end"><button type="button" class="fireflyer-add-row-btn" title="Add a row at the end">+</button></div>
+  <div class="fireflyer-add-row" data-before="{{ end_before }}"><button type="button" class="fireflyer-add-row-btn" title="Add a row at the end">+</button></div>
   {%- endif %}
 </div>

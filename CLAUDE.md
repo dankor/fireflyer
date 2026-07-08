@@ -54,6 +54,10 @@ Docker: `Dockerfile` + `docker-compose.yml` run uvicorn bound to `0.0.0.0`; the 
 
 If the venv breaks after moving the repo (stale editable path), re-run `pip install -e ".[test]"`.
 
+## Versioning
+
+The version lives in `pyproject.toml` (`version = "X.Y.Z"`), mirrored by `CHANGELOG.md` and the `vX.Y.Z` git tag. **Every release commit must bump the version** — follow Semantic Versioning: patch for fixes, minor for new backward-compatible features, major for breaking changes (pre-1.0, a breaking change may still go in a minor). When bumping: update `pyproject.toml`, move the `[Unreleased]` notes under a new `## [X.Y.Z] - <date>` heading in `CHANGELOG.md`, and update the compare links at the bottom of the changelog.
+
 ## Testing approach
 
 Snapshot-based. Each test pairs an input CSV + chart/dashboard definition with expected HTML in `tests/snapshots/<test_name>.html` (see `tests/conftest.py` for the `snapshot` fixture). The goal is to verify the **exact** generated HTML.
