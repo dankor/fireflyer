@@ -48,8 +48,8 @@ def _search(df: pl.DataFrame, query: str) -> pl.DataFrame:
 
 
 # Compact paginator window — pages shown on either side of the current page.
-# Superset uses a similar shape: first/last always present, ± a small window
-# around the current, ellipses for the gaps.
+# The usual shape: first/last always present, ± a small window around the
+# current, ellipses for the gaps.
 _PAGER_WINDOW = 2
 
 
@@ -102,7 +102,9 @@ class Table:
     def __post_init__(self) -> None:
         self.filters = filters_mod.normalize(self.filters)
 
-    def to_html(self, page: int = 1, query: str = "") -> str:
+    def to_html(
+        self, page: int = 1, query: str = "", *, theme: str | None = None
+    ) -> str:
         df = pl.read_csv(self.dataset).head(MAX_ROWS)
         df = filters_mod.apply(df, self.filters)
         if query:
@@ -140,6 +142,7 @@ class Table:
             page_links=_page_links(page, total_pages),
             columns=columns,
             rows=rows,
+            ff_theme=theme if theme in ("dark", "light") else "",
         )
 
     def _repr_html_(self) -> str:

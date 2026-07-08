@@ -84,7 +84,7 @@ def apply(df: pl.DataFrame, filters: Iterable[Filter]) -> pl.DataFrame:
 # Crossfilters travel between client and server as a flat list of
 # `<emitter>|<column>=<value>` strings. The emitter is the dashboard id of the
 # chart that produced the click — needed so the source chart can be exempted
-# from its own crossfilter at render time (Superset-style). When decoding to
+# from its own crossfilter at render time. When decoding to
 # Filter objects, tokens emitted by the same chart that's about to render are
 # dropped; the rest group by column into single `in` filters with multiple
 # values. `|` separates emitter from rest; the first `=` after that separates

@@ -223,7 +223,7 @@ Rules:
 
 * Clicking a slice sets that chart's crossfilter on its column. Clicking the same slice again clears it.
 * Active crossfilters merge with each chart's declared `filters` by AND. A chart's declared filters are never removed by interaction.
-* The emitting chart is exempt from its own crossfilter. The chart that produced the click keeps showing every category with the clicked one visually selected; only other charts apply the filter to their data. (Superset behaves the same way — clicking a slice doesn't reduce the source chart to a single slice.)
+* The emitting chart is exempt from its own crossfilter. The chart that produced the click keeps showing every category with the clicked one visually selected; only other charts apply the filter to their data. (a common crossfilter convention — clicking a slice doesn't reduce the source chart to a single slice.)
 * A crossfilter applies to another chart only if that chart's dataset has a column with the same name. Charts without that column ignore it.
 * Crossfilter state lives in the dashboard URL as query params — shareable, htmx-friendly, no server-side session.
 
@@ -594,6 +594,17 @@ CSS is per-chart, not shared. Each chart owns a `chart.css` file alongside its `
 * No shared base stylesheet, no CSS `@import`, no build step, no preprocessor, no asset pipeline. Edit the `.css` file directly.
 
 The tradeoff is intentional: a small amount of duplicated CSS in exchange for each chart being self-contained and independently removable.
+
+### Theming
+
+Fireflyer ships a **light and a dark palette**. Colors are never hardcoded in rules — they resolve from `--ff-*` CSS custom properties (`--ff-ink`, `--ff-panel`, `--ff-border`, `--ff-accent`, `--ff-muted`, …).
+
+* **Selection is automatic.** With no override, output follows the viewer's OS via `@media (prefers-color-scheme: dark)`.
+* **Override with `data-ff-theme="light|dark"`.** The attribute may sit on the element itself or on any ancestor (the dashboard root, or `<html>` in the editor). The explicit-override selectors carry higher specificity than the media block, so a forced theme always beats the OS preference. `Dashboard.to_html(...)` and every chart's `to_html(...)` accept `theme="dark"|"light"`; omitted (or `"auto"`) emits no attribute.
+* **The token blocks live per file.** Each `chart.css` and `dashboard.css` carries its own copy of the four token blocks — base (light), `@media` (auto-dark), and two `[data-ff-theme]` overrides (self + ancestor) — scoped to its root class (`.fireflyer-chart` / `.fireflyer-dashboard`). This duplicates the palette values across files, the same deliberate cost as the no-shared-stylesheet rule above. The two palettes must be kept in sync when a token changes.
+* **Fixed (theme-independent) elements.** The categorical data palette (pie slices, bar segments, map hex fill) stays constant so a value keeps its color in either mode. The map's basemap is always a light OSM raster, so its hex overlay — accent fill, white separator strokes, dark count labels — is not themed.
+* **`color-scheme`** is set on the dark blocks (and the editor `<html>`) so native controls — `<select>` dropdowns, the table's scrollbar — render dark too. It inherits, so a themed dashboard covers its nested charts.
+* **Editor.** A topbar **Theme: Auto / Light / Dark** toggle sets `data-ff-theme` on `<html>` (persisted in `localStorage`), theming the editor chrome, the dashboard preview, and every chart at once.
 
 ---
 

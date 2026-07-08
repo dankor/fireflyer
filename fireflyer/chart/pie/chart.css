@@ -1,22 +1,90 @@
+/* ── Theme tokens ───────────────────────────────────────────────────────────
+   Light + dark palettes as CSS custom properties. Selection is automatic
+   (prefers-color-scheme) unless a `data-ff-theme="light|dark"` attribute on this
+   chart, its `.fireflyer-chart-root` wrapper, or any ancestor (e.g. the
+   dashboard, or <html> in the editor) overrides it. Mirrored across every
+   chart.css and dashboard.css — no shared stylesheet by design (architecture.md,
+   "Theming"). Keep the palettes in sync. */
+.fireflyer-chart {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-muted: #5e6975;
+  --ff-faint: #8a929c;
+  --ff-panel: #ffffff;
+  --ff-border: #e0e0e0;
+  --ff-border-strong: #d6d8dc;
+  --ff-accent: #20a7c9;
+  --ff-tooltip-bg: #20242b;
+  --ff-tooltip-ink: #ffffff;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+  --ff-shadow-strong: rgba(0, 0, 0, 0.18);
+}
+@media (prefers-color-scheme: dark) {
+  .fireflyer-chart {
+    --ff-ink: #e6e8ec;
+    --ff-title: #f2f4f7;
+    --ff-muted: #a3adbd;
+    --ff-faint: #7f8a99;
+    --ff-panel: #1b2635;
+    --ff-border: #2c384a;
+    --ff-border-strong: #3a475c;
+    --ff-accent: #20a7c9;
+    --ff-tooltip-bg: #0c1320;
+    --ff-tooltip-ink: #e6e8ec;
+    --ff-shadow: rgba(0, 0, 0, 0.4);
+    --ff-shadow-strong: rgba(0, 0, 0, 0.55);
+  }
+}
+[data-ff-theme="light"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="light"] {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-muted: #5e6975;
+  --ff-faint: #8a929c;
+  --ff-panel: #ffffff;
+  --ff-border: #e0e0e0;
+  --ff-border-strong: #d6d8dc;
+  --ff-accent: #20a7c9;
+  --ff-tooltip-bg: #20242b;
+  --ff-tooltip-ink: #ffffff;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+  --ff-shadow-strong: rgba(0, 0, 0, 0.18);
+}
+[data-ff-theme="dark"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="dark"] {
+  --ff-ink: #e6e8ec;
+  --ff-title: #f2f4f7;
+  --ff-muted: #a3adbd;
+  --ff-faint: #7f8a99;
+  --ff-panel: #1b2635;
+  --ff-border: #2c384a;
+  --ff-border-strong: #3a475c;
+  --ff-accent: #20a7c9;
+  --ff-tooltip-bg: #0c1320;
+  --ff-tooltip-ink: #e6e8ec;
+  --ff-shadow: rgba(0, 0, 0, 0.4);
+  --ff-shadow-strong: rgba(0, 0, 0, 0.55);
+}
+
 .fireflyer-chart {
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
-  color: #20242b;
-  background: #ffffff;
-  border: 1px solid #e0e0e0;
+  color: var(--ff-ink);
+  background: var(--ff-panel);
+  border: 1px solid var(--ff-border);
   border-radius: 4px;
   padding: 16px 20px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 2px var(--ff-shadow);
   margin: 0 0 16px 0;
 }
 .fireflyer-chart .fireflyer-title {
   font-size: 15px;
   font-weight: 600;
-  color: #323232;
+  color: var(--ff-title);
   letter-spacing: -0.01em;
   margin: 0 0 12px 0;
 }
 /* Flex column so the layout below the title can fill the card's height
-   and center its content (Superset-style) when the dashboard row is tall. */
+   and center its content when the dashboard row is tall. */
 .fireflyer-pie {
   display: flex;
   flex-direction: column;
@@ -42,6 +110,11 @@
   flex-shrink: 0;
 }
 .fireflyer-pie svg { display: block; }
+/* Slice separators and the donut hole take the card colour so slices read as
+   distinct on any theme (each slice's fill is data-driven, set inline). Only
+   multi-slice paths get a separator stroke; a lone full-circle slice has none. */
+.fireflyer-pie svg path { stroke: var(--ff-panel); }
+.fireflyer-pie-hole { fill: var(--ff-panel); }
 .fireflyer-pie svg path,
 .fireflyer-pie svg circle[data-i] { cursor: pointer; transition: filter 0.15s ease; }
 .fireflyer-pie svg path:hover,
@@ -57,14 +130,14 @@
   top: 50%;
   transform: translate(-50%, -50%);
   pointer-events: none;
-  background: #20242b;
-  color: #ffffff;
+  background: var(--ff-tooltip-bg);
+  color: var(--ff-tooltip-ink);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   padding: 6px 10px;
   border-radius: 3px;
   white-space: nowrap;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  box-shadow: 0 2px 6px var(--ff-shadow-strong);
   opacity: 0;
   transition: opacity 0.12s ease;
   z-index: 2;
@@ -76,7 +149,7 @@
   padding: 0;
   margin: 0;
   font-size: 13px;
-  color: #20242b;
+  color: var(--ff-ink);
 }
 .fireflyer-pie .fireflyer-legend li {
   display: flex;
@@ -92,9 +165,9 @@
   margin-right: 8px;
   flex-shrink: 0;
 }
-.fireflyer-pie .fireflyer-legend .label { color: #20242b; }
+.fireflyer-pie .fireflyer-legend .label { color: var(--ff-ink); }
 .fireflyer-pie .fireflyer-legend .meta {
-  color: #5e6975;
+  color: var(--ff-muted);
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
 }

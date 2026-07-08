@@ -123,8 +123,13 @@ class Bar:
     def __post_init__(self) -> None:
         self.filters = filters_mod.normalize(self.filters)
 
-    def to_html(self, *, crossfilter: dict | None = None) -> str:
+    def to_html(
+        self, *, crossfilter: dict | None = None, theme: str | None = None
+    ) -> str:
         """Render the chart.
+
+        `theme` forces a palette (`"dark"`/`"light"`); omitted, the chart follows
+        the viewer's OS preference (inherited from the dashboard root when nested).
 
         `crossfilter`, when provided, makes segments clickable. Same shape as
         the pie chart's: `endpoint`, `target`, `include`, `emitter`, `active`.
@@ -192,6 +197,7 @@ class Bar:
             plot_right=PLOT_X + PLOT_W,
             has_selection=bool(active),
             crossfilter=crossfilter,
+            ff_theme=theme if theme in ("dark", "light") else "",
         )
 
     def _repr_html_(self) -> str:

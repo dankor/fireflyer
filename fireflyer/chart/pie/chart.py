@@ -8,7 +8,8 @@ import polars as pl
 from fireflyer import filters as filters_mod
 from fireflyer.params import ColumnParam, DatasetParam, FilterListParam, TextParam
 
-# Categorical palette borrowed from Apache Superset's "Default" theme.
+# Fixed categorical palette for slices — theme-independent, so a value keeps
+# its color across light and dark.
 COLORS = [
     "#1FA8C9",
     "#454E7C",
@@ -111,8 +112,14 @@ class Pie:
     def __post_init__(self) -> None:
         self.filters = filters_mod.normalize(self.filters)
 
-    def to_html(self, *, crossfilter: dict | None = None) -> str:
+    def to_html(
+        self, *, crossfilter: dict | None = None, theme: str | None = None
+    ) -> str:
         """Render the chart.
+
+        `theme` forces a palette (`"dark"`/`"light"`); omitted, the chart follows
+        the viewer's OS preference. Inside a dashboard the theme is inherited from
+        the dashboard root, so this is only needed for standalone rendering.
 
         `crossfilter`, when provided, makes slices clickable. It is a small
         config dict supplied by the dashboard:
@@ -154,6 +161,7 @@ class Pie:
             r_in=R_IN,
             has_selection=bool(active),
             crossfilter=crossfilter,
+            ff_theme=theme if theme in ("dark", "light") else "",
         )
 
     def _repr_html_(self) -> str:

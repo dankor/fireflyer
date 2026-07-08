@@ -122,6 +122,7 @@ INDEX = f"""<!DOCTYPE html>
 <script src="{HTMX_SRC}"></script>
 <style>
   :root {{
+    color-scheme: light;
     --bg: #f5f6f8;
     --panel: #ffffff;
     --border: #e0e0e0;
@@ -129,6 +130,34 @@ INDEX = f"""<!DOCTYPE html>
     --muted: #5e6975;
     --accent: #20a7c9;
     --accent-hover: #1a8aa6;
+    --error: #e04355;
+  }}
+  /* Editor chrome dark palette. The topbar toggle sets `data-ff-theme` on
+     <html>; that same attribute also themes the dashboard preview and every
+     chart inside it (their CSS keys off any ancestor). "auto" (no attribute)
+     follows the OS, but an explicit "light" opts back out of a dark OS. */
+  @media (prefers-color-scheme: dark) {{
+    :root:not([data-ff-theme="light"]) {{
+      color-scheme: dark;
+      --bg: #0f1620;
+      --panel: #1b2635;
+      --border: #2c384a;
+      --text: #e6e8ec;
+      --muted: #a3adbd;
+      --accent: #20a7c9;
+      --accent-hover: #48c4e0;
+      --error: #e04355;
+    }}
+  }}
+  :root[data-ff-theme="dark"] {{
+    color-scheme: dark;
+    --bg: #0f1620;
+    --panel: #1b2635;
+    --border: #2c384a;
+    --text: #e6e8ec;
+    --muted: #a3adbd;
+    --accent: #20a7c9;
+    --accent-hover: #48c4e0;
     --error: #e04355;
   }}
   * {{ box-sizing: border-box; }}
@@ -217,8 +246,8 @@ INDEX = f"""<!DOCTYPE html>
     padding: 8px 10px; border-radius: 6px; max-width: 90%;
   }}
   .chat-msg.user {{ background: var(--bg); align-self: flex-end; }}
-  .chat-msg.assistant {{ background: #eef6f9; align-self: flex-start; }}
-  .chat-msg.error {{ background: #fdecee; color: var(--error); align-self: flex-start; }}
+  .chat-msg.assistant {{ background: rgba(32,167,201,0.12); align-self: flex-start; }}
+  .chat-msg.error {{ background: rgba(224,67,85,0.12); color: var(--error); align-self: flex-start; }}
   .chat-input {{
     flex: none; display: flex; gap: 8px; padding: 10px 14px;
     border-top: 1px solid var(--border);
@@ -226,7 +255,7 @@ INDEX = f"""<!DOCTYPE html>
   #chat-text {{
     flex: 1; resize: none; height: 46px; border: 1px solid var(--border);
     border-radius: 4px; padding: 8px; font-family: inherit; font-size: 13px;
-    outline: 0;
+    outline: 0; background: var(--bg); color: var(--text);
   }}
   #chat-text:focus {{ border-color: var(--accent); }}
   .chat-send {{
@@ -260,7 +289,8 @@ INDEX = f"""<!DOCTYPE html>
   .ff-field-label {{ font-size: 12px; font-weight: 600; color: var(--muted); }}
   .ff-input {{
     border: 1px solid var(--border); border-radius: 4px; padding: 7px 9px;
-    font-size: 13px; font-family: inherit; outline: 0; background: #fff;
+    font-size: 13px; font-family: inherit; outline: 0;
+    background: var(--bg); color: var(--text);
   }}
   .ff-input:focus {{ border-color: var(--accent); }}
   .ff-check {{ display: flex; align-items: center; gap: 8px; font-size: 13px; }}
@@ -280,7 +310,7 @@ INDEX = f"""<!DOCTYPE html>
     color: var(--text);
   }}
   .ff-modal-error {{
-    margin: 0 16px; padding: 8px 10px; background: #fdecee; color: var(--error);
+    margin: 0 16px; padding: 8px 10px; background: rgba(224,67,85,0.12); color: var(--error);
     border-radius: 4px; font-size: 12px;
   }}
   .ff-modal-foot {{
@@ -288,7 +318,7 @@ INDEX = f"""<!DOCTYPE html>
     padding: 12px 16px; border-top: 1px solid var(--border);
   }}
   .ff-btn {{
-    border: 1px solid var(--border); background: #fff; color: var(--text);
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
     border-radius: 4px; padding: 7px 14px; font-size: 13px; cursor: pointer;
   }}
   .ff-btn.ff-primary {{ background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }}
@@ -324,6 +354,7 @@ INDEX = f"""<!DOCTYPE html>
 <header class="topbar">
   <span class="brand">Fireflyer</span>
   <button class="run" id="run">Run</button>
+  <button class="toggle" id="theme-toggle" title="Cycle theme (Auto / Light / Dark)">Theme: Auto</button>
   <button class="toggle" id="toggle">Preview</button>
   <span id="status"></span>
   <button type="button" class="ff-move-discard" id="ff-move-cancel" hidden title="Cancel move (Esc)" aria-label="Cancel move (Esc)">✕ (Esc)</button>
@@ -358,6 +389,27 @@ const runBtn = document.getElementById('run');
 const codeEl = document.getElementById('code');
 const outEl = document.getElementById('output');
 const statusEl = document.getElementById('status');
+
+// Theme toggle — cycles Auto -> Light -> Dark. Sets `data-ff-theme` on <html>,
+// which themes the editor chrome, the dashboard preview, and every chart inside
+// it (their CSS keys off this attribute on any ancestor). "auto" leaves it off
+// so the OS preference wins. The choice persists across reloads.
+const themeBtn = document.getElementById('theme-toggle');
+const THEME_MODES = ['auto', 'light', 'dark'];
+const THEME_LABELS = {{auto: 'Theme: Auto', light: 'Theme: Light', dark: 'Theme: Dark'}};
+let themeMode = localStorage.getItem('ffTheme') || 'auto';
+if (THEME_MODES.indexOf(themeMode) < 0) themeMode = 'auto';
+function applyTheme() {{
+  if (themeMode === 'auto') delete document.documentElement.dataset.ffTheme;
+  else document.documentElement.dataset.ffTheme = themeMode;
+  themeBtn.textContent = THEME_LABELS[themeMode];
+  localStorage.setItem('ffTheme', themeMode);
+}}
+themeBtn.addEventListener('click', () => {{
+  themeMode = THEME_MODES[(THEME_MODES.indexOf(themeMode) + 1) % THEME_MODES.length];
+  applyTheme();
+}});
+applyTheme();
 
 // Which dashboard tab is showing. Threaded to /execute so an edit re-renders
 // the same tab, and re-synced from the rendered hidden input after every swap

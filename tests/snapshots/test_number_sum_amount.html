@@ -1,17 +1,56 @@
-<style>.fireflyer-chart {
+<style>/* ── Theme tokens ───────────────────────────────────────────────────────────
+   Light + dark palettes as CSS custom properties. Selection is automatic
+   (prefers-color-scheme) unless a `data-ff-theme="light|dark"` attribute on this
+   chart or any ancestor (e.g. the dashboard, or <html> in the editor) overrides
+   it. Mirrored across every chart.css and dashboard.css — no shared stylesheet
+   by design (architecture.md, "Theming"). Keep the palettes in sync. */
+.fireflyer-chart {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-panel: #ffffff;
+  --ff-border: #e0e0e0;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+}
+@media (prefers-color-scheme: dark) {
+  .fireflyer-chart {
+    --ff-ink: #e6e8ec;
+    --ff-title: #f2f4f7;
+    --ff-panel: #1b2635;
+    --ff-border: #2c384a;
+    --ff-shadow: rgba(0, 0, 0, 0.4);
+  }
+}
+[data-ff-theme="light"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="light"] {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-panel: #ffffff;
+  --ff-border: #e0e0e0;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+}
+[data-ff-theme="dark"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="dark"] {
+  --ff-ink: #e6e8ec;
+  --ff-title: #f2f4f7;
+  --ff-panel: #1b2635;
+  --ff-border: #2c384a;
+  --ff-shadow: rgba(0, 0, 0, 0.4);
+}
+
+.fireflyer-chart {
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
-  color: #20242b;
-  background: #ffffff;
-  border: 1px solid #e0e0e0;
+  color: var(--ff-ink);
+  background: var(--ff-panel);
+  border: 1px solid var(--ff-border);
   border-radius: 4px;
   padding: 16px 20px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 2px var(--ff-shadow);
   margin: 0 0 16px 0;
 }
 .fireflyer-chart .fireflyer-title {
   font-size: 15px;
   font-weight: 600;
-  color: #323232;
+  color: var(--ff-title);
   letter-spacing: -0.01em;
   margin: 0 0 12px 0;
 }
@@ -36,7 +75,7 @@
   font-weight: 400;
   line-height: 1.05;
   letter-spacing: -0.02em;
-  color: #20242b;
+  color: var(--ff-ink);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
   cursor: default;

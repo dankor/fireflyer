@@ -24,7 +24,7 @@ AGGREGATIONS = ("count", "sum", "dcount", "max", "min")
 
 # How the scalar is rendered.
 #   compact → BI-standard abbreviation: 1,420 → "1.42K", 3_000_000 → "3M".
-#             Mirrors Superset's SMART_NUMBER / d3 `~s`: ~3 significant figures,
+#             Mirrors d3's `~s` format: ~3 significant figures,
 #             K/M/B/T suffixes, trailing zeros dropped. The sensible default for
 #             a big-number KPI that must fit a small cell.
 #   full    → every digit, thousands-separated: "1,420". Also drops any ".00".
@@ -145,7 +145,10 @@ class Number:
                 f"(expected one of {list(FORMATS)})"
             )
 
-    def to_html(self) -> str:
+    def to_html(self, *, theme: str | None = None) -> str:
+        """`theme` forces a palette (`"dark"`/`"light"`); omitted, the chart
+        follows the viewer's OS preference (inherited from the dashboard root
+        when nested)."""
         df = pl.read_csv(self.dataset)
         df = filters_mod.apply(df, self.filters)
         value = _reduce(df, self.column, self.agg)
@@ -157,6 +160,7 @@ class Number:
             title=self.title,
             value=_format_value(value, self.format),
             exact=_format_value(value, "full"),
+            ff_theme=theme if theme in ("dark", "light") else "",
         )
 
     def _repr_html_(self) -> str:

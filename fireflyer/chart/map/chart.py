@@ -164,7 +164,12 @@ class Map:
         if self.zoom is not None:
             self.zoom = max(ZOOM_MIN, min(ZOOM_MAX, int(self.zoom)))
 
-    def to_html(self) -> str:
+    def to_html(self, *, theme: str | None = None) -> str:
+        """`theme` forces a palette (`"dark"`/`"light"`); omitted, the chart
+        follows the viewer's OS preference (inherited from the dashboard root
+        when nested). Only the card chrome is themed — the tile basemap and its
+        hex overlay stay fixed."""
+        ff_theme = theme if theme in ("dark", "light") else ""
         df = pl.read_csv(self.dataset)
         df = filters_mod.apply(df, self.filters)
         df = df.filter(
@@ -183,7 +188,7 @@ class Map:
                 zoom_in=ZOOM_MIN + 1, zoom_out=ZOOM_MIN,
                 grid_finer=max(GRID_MIN, self.grid_size // 2),
                 grid_coarser=min(GRID_MAX, self.grid_size * 2),
-                tile_size=TILE_SIZE, bounds=None, empty=True,
+                tile_size=TILE_SIZE, bounds=None, empty=True, ff_theme=ff_theme,
             )
 
         lng_min = float(df[self.lng].min())
@@ -299,6 +304,7 @@ class Map:
                 "z": z,
             },
             empty=False,
+            ff_theme=ff_theme,
         )
 
     def _repr_html_(self) -> str:
