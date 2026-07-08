@@ -25,6 +25,81 @@
   border-top: 1px solid #e0e0e0;
   margin: 18px 0;
 }
+/* Tab bar — shown only when `dashboard:` is a mapping of tabs. Sticky so it
+   stays visible while the panel scrolls. Only the active tab's charts render
+   (htmx lazy-loads the rest on switch), so switching re-fetches the dashboard. */
+.fireflyer-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  gap: 2px;
+  align-items: flex-end;
+  margin: 0 0 12px 0;
+  padding-top: 2px;
+  background: #ffffff;
+  border-bottom: 1px solid #e0e0e0;
+}
+.fireflyer-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  background: transparent;
+  color: #5e6975;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 14px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.fireflyer-tab:hover { color: #20242b; background: #f5f6f8; }
+.fireflyer-tab.is-active {
+  color: #20a7c9;
+  background: #ffffff;
+  border-color: #e0e0e0;
+  border-bottom-color: #ffffff;
+  margin-bottom: -1px;
+}
+/* Editor-only: inline rename reuses the header's edit outline. */
+.fireflyer-tab.editing {
+  outline: 2px solid #20a7c9;
+  outline-offset: 2px;
+  border-radius: 4px;
+  cursor: text;
+}
+.fireflyer-tab-wrap { position: relative; }
+.fireflyer-tab-wrap.ff-move-source .fireflyer-tab {
+  outline: 2px solid #20a7c9;
+  outline-offset: -2px;
+}
+/* Per-tab hover toolbar (move / rename / delete). Reuses the compact item badge
+   but drops it BELOW the tab so it neither clips at the sticky bar's top edge nor
+   covers the tab's own click target. The `.fireflyer-tab-wrap` prefix raises
+   specificity above `.fireflyer-item-tools` (which sets `top: 0`) — otherwise
+   source order would park the badge over the tab and swallow switch clicks. */
+.fireflyer-tab-wrap .fireflyer-tab-tools {
+  left: 50%;
+  right: auto;
+  top: 100%;
+  bottom: auto;
+  width: 90px;
+  height: 26px;
+  transform: translate(-50%, -2px);
+}
+.fireflyer-tab-wrap:hover .fireflyer-tab-tools,
+.fireflyer-tab-tools:focus-within {
+  opacity: 1;
+  transform: translate(-50%, 2px);
+  pointer-events: auto;
+}
+/* The first tab has no Move button (its boundary can't move up without emptying
+   it), so its badge holds only rename + "remove all" — 2 buttons, 60px. Matches
+   the specificity of the 90px rule above and wins on source order. */
+.fireflyer-tab-wrap .fireflyer-tab-tools-first { width: 60px; }
+
 .fireflyer-dashboard-row {
   display: grid;
   gap: 12px;
@@ -311,6 +386,9 @@ body.fireflyer-resizing-col * {
 .fireflyer-dashboard.ff-focus-mode .fireflyer-dashboard-cell,
 .fireflyer-dashboard.ff-focus-mode .fireflyer-dashboard-item { opacity: 0.4; transition: opacity 0.12s ease; }
 .fireflyer-dashboard.ff-focus-mode .fireflyer-dashboard-item.ff-edit-source { opacity: 1; }
+/* Renaming a tab dims the other tabs the same way. */
+.fireflyer-dashboard.ff-focus-mode .fireflyer-tab-wrap { opacity: 0.4; transition: opacity 0.12s ease; }
+.fireflyer-dashboard.ff-focus-mode .fireflyer-tab-wrap.ff-edit-source { opacity: 1; }
 .fireflyer-dashboard.ff-focus-mode .fireflyer-resize-handle,
 .fireflyer-dashboard.ff-focus-mode .fireflyer-resize-col-handle,
 .fireflyer-dashboard.ff-focus-mode .fireflyer-chart-tools,

@@ -80,6 +80,15 @@ class _Separator:
 
 
 @dataclass
+class _Tab:
+    """One named tab: a section of the layout. A dashboard is either a flat list
+    of items (`tabs is None`) or a list of these. A tab owns a run of layout
+    items; its `items` are already grouped `_RowGroup`/`_Header`/`_Separator`."""
+    name: str
+    items: list
+
+
+@dataclass
 class _ChartConfig:
     """Validated chart config; instantiated per render so crossfilters can merge in."""
     cls: type
@@ -111,6 +120,9 @@ class _RowGroup:
 class Dashboard:
     chart_configs: dict[str, _ChartConfig]
     items: list[Any] = field(default_factory=list)
+    # None for a flat (list-form) dashboard; a list of `_Tab` when the
+    # `dashboard:` section is a mapping of tab name -> layout list.
+    tabs: list[_Tab] | None = None
     yaml_source: str = ""
 
     @classmethod
@@ -130,22 +142,53 @@ class Dashboard:
 
         datasets = _parse_datasets(config["datasets"])
         chart_configs = _parse_charts(config["charts"], datasets)
-        items = _parse_layout(config["dashboard"], chart_configs)
+
+        raw_dashboard = config["dashboard"]
+        if isinstance(raw_dashboard, dict):
+            tabs = _parse_tabs(raw_dashboard, chart_configs)
+            # A chart resolves to exactly one placement across the whole
+            # dashboard (span-aware), so the move machinery — which pulls a
+            # chart from every row it's in — stays sound across tabs.
+            _validate_unique_placements([g for t in tabs for g in t.items])
+            return cls(chart_configs=chart_configs, tabs=tabs, yaml_source=text)
+
+        items = _parse_layout(raw_dashboard, chart_configs)
         items = _group_layout(items)
+        _validate_unique_placements(items)
         return cls(chart_configs=chart_configs, items=items, yaml_source=text)
 
-    def to_html(self, cf_tokens: list[str] | None = None) -> str:
+    def _tab_context(self, active_tab: int):
+        """(tabs_meta | None, clamped_active, active_items).
+
+        `tabs_meta` is a list of `{name, index}` for the tab bar, or None for a
+        flat dashboard. `active_items` are the grouped items to render — the
+        active tab's, or the whole flat list."""
+        if self.tabs is None:
+            return None, 0, self.items
+        active = active_tab if 0 <= active_tab < len(self.tabs) else 0
+        meta = [{"name": t.name, "index": i} for i, t in enumerate(self.tabs)]
+        return meta, active, self.tabs[active].items
+
+    def to_html(
+        self, cf_tokens: list[str] | None = None, active_tab: int = 0
+    ) -> str:
         cf_tokens = list(cf_tokens or [])
-        rendered = [self._render_item(item, cf_tokens) for item in self.items]
+        tabs_meta, active_tab, items = self._tab_context(active_tab)
+        rendered = [self._render_item(item, cf_tokens) for item in items]
         return _TEMPLATE.render(
             css=_CSS,
             items=rendered,
+            tabs=tabs_meta,
+            active_tab=active_tab,
             yaml_source=self.yaml_source,
             cf_tokens=cf_tokens,
         )
 
     def render_skeleton(
-        self, cf_tokens: list[str] | None = None, editing: bool = False
+        self,
+        cf_tokens: list[str] | None = None,
+        editing: bool = False,
+        active_tab: int = 0,
     ) -> str:
         """Layout-only render: cells are placeholders that hx-trigger on load.
 
@@ -157,8 +200,14 @@ class Dashboard:
         `editing=True` (set by the web editor) adds a drag handle at the bottom
         of every row track so the user can resize rows; the deployable render
         leaves it off, so handles never ship outside the editor.
+
+        When the dashboard is tabbed only the active tab's items are emitted
+        (htmx lazy-loads a tab's charts on switch), but the header/item counters
+        advance across **all** tabs so the emitted `before`/`index` values stay
+        document-global — matching how `config_edit` scans the YAML.
         """
         cf_tokens = list(cf_tokens or [])
+        tabs_meta, active_tab, _ = self._tab_context(active_tab)
         # Number headers in document order so the editor can double-click one to
         # rename it and the server can find the matching header line. `before` is
         # each item's index in the full layout-item list (rows + headers +
@@ -168,21 +217,36 @@ class Dashboard:
         items = []
         header_i = 0
         item_i = 0
-        for item in self.items:
-            rendered = self._render_skeleton_item(item)
-            rendered["before"] = item_i
-            if rendered["kind"] == "header":
-                rendered["index"] = header_i
-                header_i += 1
-                item_i += 1
-            elif rendered["kind"] == "separator":
-                item_i += 1
-            else:  # row group — one yaml item per track
-                item_i += len(item.tracks)
-            items.append(rendered)
+        end_before = "end"
+        tab_iter = (
+            [(0, self.items)] if self.tabs is None
+            else [(i, t.items) for i, t in enumerate(self.tabs)]
+        )
+        for ti, tab_items in tab_iter:
+            for item in tab_items:
+                rendered = self._render_skeleton_item(item)
+                rendered["before"] = item_i
+                if rendered["kind"] == "header":
+                    rendered["index"] = header_i
+                    header_i += 1
+                    item_i += 1
+                elif rendered["kind"] == "separator":
+                    item_i += 1
+                else:  # row group — one yaml item per track
+                    item_i += len(item.tracks)
+                if self.tabs is None or ti == active_tab:
+                    items.append(rendered)
+            if self.tabs is not None and ti == active_tab:
+                # The active tab's trailing "+" strip appends after its last
+                # item; that's the next tab's first item index (or "end" when
+                # this is the last tab) so the new row lands in the right tab.
+                end_before = item_i if ti < len(self.tabs) - 1 else "end"
         return _SKELETON_TEMPLATE.render(
             css=_CSS,
             items=items,
+            tabs=tabs_meta,
+            active_tab=active_tab,
+            end_before=end_before,
             yaml_source=self.yaml_source,
             cf_tokens=cf_tokens,
             editing=editing,
@@ -337,9 +401,8 @@ def _group_layout(items: list) -> list:
 
     A lower row joins the group above it when it repeats a chart from the row
     directly above as a **bare** cell (no width) — that chart spans down. Rows
-    with no such link render as independent single-row grids. Finally, a chart
-    may appear in more than one placement only as one contiguous span; any other
-    repeat errors.
+    with no such link render as independent single-row grids. Callers run
+    `_validate_unique_placements` afterwards (across all tabs when tabbed).
     """
     output: list = []
     i = 0
@@ -363,7 +426,6 @@ def _group_layout(items: list) -> list:
         output.append(_resolve_group(items[i:j]))
         i = j
 
-    _validate_unique_placements(output)
     return output
 
 
@@ -517,13 +579,37 @@ def _parse_charts(raw, datasets: dict[str, str]) -> dict[str, _ChartConfig]:
     return out
 
 
-def _parse_layout(raw, chart_configs: dict[str, _ChartConfig]) -> list:
+def _parse_tabs(raw: dict, chart_configs: dict[str, _ChartConfig]) -> list[_Tab]:
+    """Parse the mapping form of `dashboard:` (tab name -> layout list) into
+    `_Tab`s. Row ordinals and — via the render pass — header/item indices run
+    **globally** in document order across tabs, matching the way `config_edit`
+    scans the whole `dashboard:` section by text."""
+    if not raw:
+        raise DashboardError("`dashboard` mapping must have at least one tab")
+    tabs: list[_Tab] = []
+    ordinal = 0
+    for name, layout in raw.items():
+        if not isinstance(layout, list) or not layout:
+            raise DashboardError(
+                f"tab {str(name)!r}: must contain at least one layout item"
+            )
+        items = _parse_layout(layout, chart_configs, start_ordinal=ordinal)
+        ordinal += sum(1 for it in items if isinstance(it, _Row))
+        tabs.append(_Tab(name=str(name), items=_group_layout(items)))
+    return tabs
+
+
+def _parse_layout(
+    raw, chart_configs: dict[str, _ChartConfig], start_ordinal: int = 0
+) -> list:
     if not isinstance(raw, list):
         raise DashboardError("`dashboard` must be a list of layout items")
     items = [_parse_item(item, i, chart_configs) for i, item in enumerate(raw)]
     # Number rows by document order so the editor can map a resize handle back
     # to the matching `@<height>` token (the Nth height token in the YAML).
-    ordinal = 0
+    # `start_ordinal` continues the count across tabs so a lower tab's rows keep
+    # unique, document-order ordinals.
+    ordinal = start_ordinal
     for item in items:
         if isinstance(item, _Row):
             item.ordinal = ordinal

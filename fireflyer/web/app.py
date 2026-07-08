@@ -91,14 +91,14 @@ charts:
     pagination: 1000
 
 dashboard:
-  - Overview
-  - ["@22", "total_orders", "revenue", "biggest_order"]
-  - ["@40", "orders:3", "status:2"]
-  - ["@30", "by_day", "status"]
-  - "-"
-  - ["@100", "density"]
-  - All orders
-  - ["@50", "orders_long"]
+  Overview:
+    - ["@22", "total_orders", "revenue", "biggest_order"]
+    - ["@40", "orders:3", "status:2"]
+    - ["@30", "by_day", "status"]
+    - "-"
+    - ["@100", "density"]
+  All orders:
+    - ["@50", "orders_long"]
 """
 
 # Chat body differs by whether a key is configured: the live input, or a setup
@@ -351,6 +351,7 @@ INDEX = f"""<!DOCTYPE html>
   <button type="button" data-add-kind="chart">Chart…</button>
   <button type="button" data-add-kind="header">Header</button>
   <button type="button" data-add-kind="separator">Separator</button>
+  <button type="button" data-add-kind="tab">Tab</button>
 </div>
 <script>
 const runBtn = document.getElementById('run');
@@ -358,11 +359,20 @@ const codeEl = document.getElementById('code');
 const outEl = document.getElementById('output');
 const statusEl = document.getElementById('status');
 
+// Which dashboard tab is showing. Threaded to /execute so an edit re-renders
+// the same tab, and re-synced from the rendered hidden input after every swap
+// (the server clamps it, and a dissolve drops back to a flat, tab-less render).
+let activeTab = 0;
+function syncActiveTab() {{
+  const inp = outEl.querySelector('#fireflyer-dashboard input[name="active_tab"]');
+  activeTab = inp ? (parseInt(inp.value, 10) || 0) : 0;
+}}
+
 async function run() {{
   statusEl.textContent = 'running…';
   runBtn.disabled = true;
   try {{
-    const res = await fetch('/execute', {{
+    const res = await fetch('/execute?active_tab=' + activeTab, {{
       method: 'POST',
       headers: {{'Content-Type': 'application/yaml'}},
       body: codeEl.value,
@@ -371,6 +381,7 @@ async function run() {{
     outEl.innerHTML = data.html;
     // htmx doesn't auto-wire nodes inserted via innerHTML; wire them now.
     if (window.htmx) window.htmx.process(outEl);
+    syncActiveTab();
     statusEl.textContent = data.ok ? 'ok' : 'error';
   }} catch (e) {{
     outEl.innerHTML = '<pre class="error">' + e + '</pre>';
@@ -379,6 +390,21 @@ async function run() {{
     runBtn.disabled = false;
   }}
 }}
+
+// A crossfilter click or deployed tab button swaps #fireflyer-dashboard via
+// htmx (not through run()); keep the JS tab state in sync afterwards. During a
+// cross-tab chart move the destination tab's cells load one by one (each an
+// htmx swap) and only carry data-cid once loaded, so rebuild the drop zones as
+// they arrive.
+outEl.addEventListener('htmx:afterSwap', () => {{
+  syncActiveTab();
+  const dash = dashboardEl();
+  if (moveCid !== null && dash && dash.classList.contains('ff-move-mode')) {{
+    const overlay = dash.querySelector('.ff-move-overlay');
+    if (overlay) overlay.remove();
+    buildMoveZones();
+  }}
+}});
 
 // Render the default example immediately so the page isn't empty.
 window.addEventListener('DOMContentLoaded', run);
@@ -719,24 +745,33 @@ function openItemDeleteConfirm(index, kind) {{
 
 // Pencil edits, trash deletes, gutter "+" adds. All ignored while the pane is hidden.
 outEl.addEventListener('click', e => {{
+  // Switching tabs is a view action (not an edit), so allow it even in Preview
+  // where the editor pane is hidden. During a move the capture handler below
+  // gets the click first, so this only fires when not moving.
+  const tabSwitchNav = e.target.closest('.fireflyer-tab-switch');
+  if (tabSwitchNav) {{ switchTab(parseInt(tabSwitchNav.dataset.tabIndex, 10)); return; }}
   if (editingDisabled()) return;
-  // Charts carry data-cid; headers/separators carry data-item-index. The move,
-  // edit and delete buttons are shared markup, so branch on which one is present.
+  // Charts carry data-cid; headers/separators carry data-item-index; tabs carry
+  // data-tab-index. The move, edit and delete buttons are shared markup, so
+  // branch on which identifier is present.
   const move = e.target.closest('.fireflyer-move-btn');
   if (move) {{
     if (move.dataset.cid) enterMove(move.dataset.cid);
+    else if (move.dataset.tabIndex !== undefined) enterTabMove(move.dataset.tabIndex, move.closest('.fireflyer-tab-wrap'));
     else enterItemMove(move.dataset.itemIndex, move.closest('.fireflyer-dashboard-item'));
     return;
   }}
   const edit = e.target.closest('.fireflyer-edit-btn');
   if (edit) {{
     if (edit.dataset.cid) openChartEditor(edit.dataset.cid);
+    else if (edit.dataset.tabIndex !== undefined) startTabEdit(edit.closest('.fireflyer-tab-wrap').querySelector('.fireflyer-tab-switch'));
     else startHeaderEdit(edit.closest('.fireflyer-dashboard-item').querySelector('.fireflyer-dashboard-header'));
     return;
   }}
   const del = e.target.closest('.fireflyer-delete-btn');
   if (del) {{
     if (del.dataset.cid) openDeleteConfirm(del.dataset.cid);
+    else if (del.dataset.tabIndex !== undefined) openTabDeleteConfirm(del.dataset.tabIndex);
     else openItemDeleteConfirm(del.dataset.itemIndex, del.closest('.fireflyer-dashboard-item').dataset.kind);
     return;
   }}
@@ -778,6 +813,7 @@ addMenu.addEventListener('click', e => {{
   const before = addMenuBefore;
   hideAddMenu();
   if (kind === 'chart') openAddChart('row', before);
+  else if (kind === 'tab') insertTab(before);
   else insertLayoutItem(kind, before);
 }});
 
@@ -799,20 +835,24 @@ outEl.addEventListener('dblclick', e => {{
 // and its hover affordances are suppressed (.ff-focus-mode), and the same topbar
 // cancel button appears. `currentHeaderFinish` lets that button / Esc cancel the
 // active edit. Enter (or blur) saves; Esc / cancel button restores the original.
+// Inline rename shared by headers and tabs: `el` becomes contentEditable, the
+// dashboard enters focus mode (dims the rest, shows the topbar cancel), and
+// `saveFn(text)` runs on Enter/blur. `sourceEl` stays lit while editing.
+// `onCancel` (optional) runs instead of restoring the text when the edit is
+// cancelled — used to undo a just-added tab.
 let currentHeaderFinish = null;
-function startHeaderEdit(h) {{
-  const original = h.textContent;
-  const item = h.closest('.fireflyer-dashboard-item');
+function beginInlineEdit(el, sourceEl, saveFn, onCancel) {{
+  const original = el.textContent;
   const dash = dashboardEl();
-  h.contentEditable = 'true';
-  h.classList.add('editing');
+  el.contentEditable = 'true';
+  el.classList.add('editing');
   if (dash) dash.classList.add('ff-focus-mode');
-  if (item) item.classList.add('ff-edit-source');
+  if (sourceEl) sourceEl.classList.add('ff-edit-source');
   positionMoveDiscard();
   moveDiscard.hidden = false;
-  h.focus();
+  el.focus();
   const range = document.createRange();
-  range.selectNodeContents(h);
+  range.selectNodeContents(el);
   const sel = window.getSelection();
   sel.removeAllRanges();
   sel.addRange(range);
@@ -822,16 +862,19 @@ function startHeaderEdit(h) {{
     if (done) return;
     done = true;
     currentHeaderFinish = null;
-    h.contentEditable = 'false';
-    h.classList.remove('editing');
+    el.contentEditable = 'false';
+    el.classList.remove('editing');
     if (dash) dash.classList.remove('ff-focus-mode');
-    if (item) item.classList.remove('ff-edit-source');
+    if (sourceEl) sourceEl.classList.remove('ff-edit-source');
     moveDiscard.hidden = true;
-    h.removeEventListener('keydown', onKey);
-    h.removeEventListener('blur', onBlur);
-    const text = h.textContent.trim();
-    if (save && text && text !== original) saveHeader(h.dataset.headerIndex, text);
-    else h.textContent = original;   // cancelled or empty -> restore
+    el.removeEventListener('keydown', onKey);
+    el.removeEventListener('blur', onBlur);
+    const text = el.textContent.trim();
+    if (save && text && text !== original) saveFn(text);
+    // With onCancel set (a just-added tab), anything short of a real new name —
+    // Esc, blur, or keeping the default — undoes the add: name it or cancel.
+    else if (onCancel) onCancel();
+    else el.textContent = original;           // plain rename -> restore the text
   }}
   currentHeaderFinish = finish;
   function onKey(ev) {{
@@ -839,8 +882,26 @@ function startHeaderEdit(h) {{
     else if (ev.key === 'Escape') {{ ev.preventDefault(); finish(false); }}
   }}
   function onBlur() {{ finish(true); }}
-  h.addEventListener('keydown', onKey);
-  h.addEventListener('blur', onBlur);
+  el.addEventListener('keydown', onKey);
+  el.addEventListener('blur', onBlur);
+}}
+
+function startHeaderEdit(h) {{
+  beginInlineEdit(h, h.closest('.fireflyer-dashboard-item'), text => saveHeader(h.dataset.headerIndex, text));
+}}
+function startTabEdit(el) {{
+  if (!el) return;
+  beginInlineEdit(el, el.closest('.fireflyer-tab-wrap'), text => saveTab(el.dataset.tabIndex, text));
+}}
+// A freshly added tab: force a name. `revertYaml` is the pre-add document, so
+// cancelling (Esc/✕/blur/keeping the default) removes the just-added tab.
+function startTabEditForNew(el, revertYaml) {{
+  if (!el) {{ return; }}
+  beginInlineEdit(
+    el, el.closest('.fireflyer-tab-wrap'),
+    text => saveTab(el.dataset.tabIndex, text),
+    () => {{ codeEl.value = revertYaml; run(); }},
+  );
 }}
 
 async function saveHeader(index, text) {{
@@ -855,6 +916,82 @@ async function saveHeader(index, text) {{
   run();
 }}
 
+// --- Tabs -------------------------------------------------------------------
+// The tab bar's editor gestures. Switching re-runs on the chosen tab (only its
+// charts load). Add/rename/move/delete post to the tab config routes, swap the
+// returned YAML in, and re-run — same pattern as the header/chart gestures.
+async function postTab(url, params) {{
+  const fd = new FormData();
+  fd.append('yaml_text', codeEl.value);
+  for (const [k, v] of Object.entries(params)) fd.append(k, v);
+  const res = await fetch(url, {{ method: 'POST', body: fd }});
+  const data = await res.json();
+  if (!data.ok) {{ statusEl.textContent = data.error || 'Tab action failed.'; return null; }}
+  codeEl.value = data.yaml;
+  return data;
+}}
+
+async function switchTab(index) {{
+  // A chart move OR a tab move can span tabs — keep whichever is active alive so
+  // the target row can be found in another tab.
+  const chartMove = moveCid;
+  const tabMove = moveTabIndex;
+  activeTab = index;
+  await run();
+  if (chartMove !== null) enterMove(chartMove);
+  else if (tabMove !== null) enterTabMove(tabMove, outEl.querySelector('.fireflyer-tab-wrap[data-tab-index="' + tabMove + '"]'));
+}}
+
+// "Tab" in the between-rows "+" menu. On a flat dashboard the first pick enables
+// tabs by wrapping the whole layout in one tab; once tabbed, a pick splits the
+// current tab at that gap. Either way the new tab opens for a forced rename —
+// cancelling undoes the add (reverting to `prevYaml`).
+async function insertTab(before) {{
+  const prevYaml = codeEl.value;
+  if (!outEl.querySelector('.fireflyer-tabs')) {{
+    if (await postTab('/chart/config/tab-add-first', {{}})) {{
+      activeTab = 0;
+      await run();
+      startTabEditForNew(outEl.querySelector('.fireflyer-tab-switch[data-tab-index="0"]'), prevYaml);
+    }}
+    return;
+  }}
+  if (await postTab('/chart/config/tab-insert', {{ before }})) {{
+    await run();
+    // insert_tab names the new tab "New tab"; the forced rename keeps at most one
+    // such tab around, so this reliably finds the one just added.
+    startTabEditForNew(outEl.querySelector('.fireflyer-tab-switch[data-tab-name="New tab"]'), prevYaml);
+  }}
+}}
+
+function saveTab(index, name) {{
+  postTab('/chart/config/tab-rename', {{ index, name }}).then(d => {{ if (d) run(); }});
+}}
+
+// First tab dissolves every tab back to a flat list; any other merges into the
+// previous. Read the tab names from the bar so the first-tab confirm can list
+// what will be removed.
+function openTabDeleteConfirm(index) {{
+  editingCid = null;
+  addTarget = null;
+  const names = [...outEl.querySelectorAll('.fireflyer-tab-switch')].map(t => t.textContent);
+  const first = String(index) === '0';
+  const msg = first
+    ? 'Deleting the first tab removes all tabs and flattens the dashboard. Tabs removed: ' + names.join(', ') + '.'
+    : 'Delete tab "' + (names[index] || '') + '"? Its charts merge into the previous tab.';
+  modalBox.innerHTML =
+    '<div class="ff-modal-head"><span class="ff-modal-title">Delete tab</span></div>' +
+    '<div class="ff-modal-body"><p class="ff-confirm-text"></p></div>' +
+    '<div class="ff-modal-error" hidden></div>' +
+    '<div class="ff-modal-foot">' +
+    '<button type="button" class="ff-btn ff-cancel">Cancel</button>' +
+    '<button type="button" class="ff-btn ff-danger" data-delete-tab>Delete</button>' +
+    '</div>';
+  modalBox.querySelector('.ff-confirm-text').textContent = msg;
+  modalBox.querySelector('[data-delete-tab]').dataset.deleteTab = index;
+  modalOverlay.classList.add('open');
+}}
+
 // --- Move mode --------------------------------------------------------------
 // Click a chart's "move" button to enter move mode: the picked chart stays lit,
 // every other interaction (resize, edit, add, crossfilter) is turned off, and
@@ -867,7 +1004,8 @@ async function saveHeader(index, text) {{
 // between-row strips — no side/merge zones.
 let moveCid = null;
 let moveItemIndex = null;
-const inMove = () => moveCid !== null || moveItemIndex !== null;
+let moveTabIndex = null;
+const inMove = () => moveCid !== null || moveItemIndex !== null || moveTabIndex !== null;
 const dashboardEl = () => outEl.querySelector('.fireflyer-dashboard');
 const moveDiscard = document.getElementById('ff-move-cancel');
 const outputPane = outEl.closest('.pane');
@@ -1050,6 +1188,19 @@ function enterItemMove(index, itemEl) {{
   positionMoveDiscard();
   moveDiscard.hidden = false;
 }}
+// Tab move: like a header/separator move, its only drop targets are the
+// between-row strips (already lit by ff-move-mode). Dropping moves the tab's
+// key line — reordering it and reassigning the rows that fall under it.
+function enterTabMove(index, wrapEl) {{
+  moveTabIndex = index;
+  const dash = dashboardEl();
+  if (dash) {{
+    dash.classList.add('ff-move-mode');
+    if (wrapEl) wrapEl.classList.add('ff-move-source');
+  }}
+  positionMoveDiscard();
+  moveDiscard.hidden = false;
+}}
 function exitMove() {{
   const dash = dashboardEl();
   if (dash) {{
@@ -1062,6 +1213,7 @@ function exitMove() {{
   moveDiscard.hidden = true;
   moveCid = null;
   moveItemIndex = null;
+  moveTabIndex = null;
 }}
 
 // While moving, capture clicks: a blue box commits, anything else cancels — and
@@ -1070,7 +1222,26 @@ outEl.addEventListener('click', e => {{
   if (!inMove()) return;
   e.preventDefault();
   e.stopPropagation();
+  // Switching tabs mid-move lets a chart or a tab boundary be dropped into
+  // another tab: the move stays alive across the re-render (switchTab re-enters
+  // it), so the target row can be found there. (A header/separator move stays in
+  // the current view.)
+  const tabSwitch = e.target.closest('.fireflyer-tab-switch');
+  if (tabSwitch) {{
+    if (moveCid !== null || moveTabIndex !== null) switchTab(parseInt(tabSwitch.dataset.tabIndex, 10));
+    return;
+  }}
   const strip = e.target.closest('.fireflyer-add-row');
+  // Tab move: only a between-row strip is valid — it repositions the tab's
+  // boundary there (reordering the tab and reassigning the rows below it).
+  if (moveTabIndex !== null) {{
+    if (strip) {{
+      const index = moveTabIndex;
+      exitMove();
+      postMove('/chart/config/tab-move', {{ index, before: strip.dataset.before }});
+    }}
+    return;
+  }}
   // Header/separator: only a between-row strip is a valid drop; anything else
   // is a miss (move mode stays active until Esc/Cancel or an outside click).
   if (moveItemIndex !== null) {{
@@ -1122,12 +1293,14 @@ document.addEventListener('click', e => {{
 modalBox.addEventListener('click', async e => {{
   const chartBtn = e.target.closest('[data-delete-cid]');
   const itemBtn = e.target.closest('[data-delete-item]');
-  if (!chartBtn && !itemBtn) return;
+  const tabBtn = e.target.closest('[data-delete-tab]');
+  if (!chartBtn && !itemBtn && !tabBtn) return;
   const fd = new FormData();
   fd.append('yaml_text', codeEl.value);
   let url;
   if (chartBtn) {{ fd.append('cid', chartBtn.dataset.deleteCid); url = '/chart/config/delete'; }}
-  else {{ fd.append('index', itemBtn.dataset.deleteItem); url = '/chart/config/delete-item'; }}
+  else if (itemBtn) {{ fd.append('index', itemBtn.dataset.deleteItem); url = '/chart/config/delete-item'; }}
+  else {{ fd.append('index', tabBtn.dataset.deleteTab); url = '/chart/config/tab-delete'; }}
   const res = await fetch(url, {{ method: 'POST', body: fd }});
   const data = await res.json();
   if (!data.ok) {{
@@ -1223,14 +1396,18 @@ def index() -> str:
 
 
 @app.post("/execute")
-async def execute(request: Request) -> dict:
+async def execute(request: Request, active_tab: int = 0) -> dict:
     body = (await request.body()).decode("utf-8")
     try:
         dashboard = Dashboard.from_yaml(body)
         # The response is a skeleton — each cell fetches itself via htmx so
         # charts render in parallel and slow charts don't block fast ones.
-        # editing=True adds the editor-only row resize handles.
-        return {"ok": True, "html": dashboard.render_skeleton(editing=True)}
+        # editing=True adds the editor-only row resize handles. `active_tab`
+        # (a query param) keeps the editor on the current tab after an edit.
+        return {
+            "ok": True,
+            "html": dashboard.render_skeleton(editing=True, active_tab=active_tab),
+        }
     except DashboardError as exc:
         return {"ok": False, "html": f'<pre class="error">{escape(str(exc))}</pre>'}
     except Exception:
@@ -1315,6 +1492,7 @@ async def dashboard_render(
     cf: list[str] = Form(default=[]),
     toggle: str = Form(""),
     editing: str = Form(""),
+    active_tab: int = Form(0),
 ) -> str:
     """Re-render the dashboard with an updated crossfilter set.
 
@@ -1334,7 +1512,11 @@ async def dashboard_render(
     # Returning a skeleton means every cell re-fetches with the new cf state.
     # The dashboard div is swapped (outerHTML) and the fresh placeholders fire
     # hx-trigger="load" — same async path as the initial /execute response.
-    return dashboard.render_skeleton(cf_tokens=new_tokens, editing=bool(editing))
+    # `active_tab` rides along (hidden input) so a crossfilter click or a tab
+    # switch keeps the right tab showing.
+    return dashboard.render_skeleton(
+        cf_tokens=new_tokens, editing=bool(editing), active_tab=active_tab
+    )
 
 
 @app.post("/dashboard/cell", response_class=HTMLResponse)
@@ -1504,6 +1686,64 @@ async def chart_config_delete(yaml_text: str = Form(""), cid: str = Form("")) ->
     """Delete a chart (block + layout placements). Returns {ok, yaml} or error."""
     try:
         return {"ok": True, "yaml": config_edit.delete_chart(yaml_text, cid)}
+    except (config_edit.ConfigEditError, DashboardError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+# --- tabs --------------------------------------------------------------------
+# The tab bar's editor gestures. Each is a thin wrapper over a config_edit tab
+# function returning {ok, yaml}; the browser swaps the YAML in and re-runs.
+
+
+@app.post("/chart/config/tab-add-first")
+async def chart_config_tab_add_first(yaml_text: str = Form("")) -> dict:
+    """Wrap a flat dashboard in its first tab. Returns {ok, yaml}."""
+    try:
+        return {"ok": True, "yaml": config_edit.add_first_tab(yaml_text)}
+    except (config_edit.ConfigEditError, DashboardError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/chart/config/tab-insert")
+async def chart_config_tab_insert(
+    yaml_text: str = Form(""), before: str = Form("end")
+) -> dict:
+    """Add a tab that splits the current one at layout-item `before`."""
+    try:
+        return {"ok": True, "yaml": config_edit.insert_tab(yaml_text, before)}
+    except (config_edit.ConfigEditError, DashboardError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/chart/config/tab-rename")
+async def chart_config_tab_rename(
+    yaml_text: str = Form(""), index: int = Form(0), name: str = Form("")
+) -> dict:
+    """Rename the `index`-th tab. Returns {ok, yaml} or error."""
+    try:
+        return {"ok": True, "yaml": config_edit.set_tab_text(yaml_text, index, name)}
+    except (config_edit.ConfigEditError, DashboardError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/chart/config/tab-move")
+async def chart_config_tab_move(
+    yaml_text: str = Form(""), index: int = Form(0), before: str = Form("end")
+) -> dict:
+    """Move the `index`-th tab to layout-item gap `before`. Returns {ok, yaml}."""
+    try:
+        return {"ok": True, "yaml": config_edit.move_tab(yaml_text, index, before)}
+    except (config_edit.ConfigEditError, DashboardError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/chart/config/tab-delete")
+async def chart_config_tab_delete(
+    yaml_text: str = Form(""), index: int = Form(0)
+) -> dict:
+    """Delete the `index`-th tab (first tab dissolves all). Returns {ok, yaml}."""
+    try:
+        return {"ok": True, "yaml": config_edit.delete_tab(yaml_text, index)}
     except (config_edit.ConfigEditError, DashboardError) as exc:
         return {"ok": False, "error": str(exc)}
 

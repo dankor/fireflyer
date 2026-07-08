@@ -4,6 +4,14 @@
   {%- for tok in cf_tokens %}
   <input type="hidden" name="cf" value="{{ tok }}">
   {%- endfor %}
+  {%- if tabs %}
+  <input type="hidden" name="active_tab" value="{{ active_tab }}">
+  <div class="fireflyer-tabs" role="tablist">
+    {%- for t in tabs %}
+    <button type="button" role="tab" class="fireflyer-tab{% if t.index == active_tab %} is-active{% endif %}" hx-post="/dashboard" hx-vals='{"active_tab": {{ t.index }}}' hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]:not([name='active_tab'])">{{ t.name }}</button>
+    {%- endfor %}
+  </div>
+  {%- endif %}
   {%- for item in items %}
   {%- if item.kind == 'header' %}
   <h2 class="fireflyer-dashboard-header">{{ item.text }}</h2>

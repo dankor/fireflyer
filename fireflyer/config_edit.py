@@ -523,6 +523,194 @@ def delete_layout_item(text: str, index: int) -> str:
     return result
 
 
+# --- tabs ---------------------------------------------------------------------
+#
+# `dashboard:` is either a flat list of layout items or a **mapping** of tab
+# name -> layout list. A tab acts as a section delimiter: it owns every row from
+# its key line down to the next tab key. All the ops below are line-surgery on
+# that structure, re-validated through `Dashboard.from_yaml`. Because tab keys
+# sit one indent level *above* their rows, the flat row/item scanners
+# (`_row_line_indices`, `_item_line_indices`) still collect everything across
+# tabs in document order — so the existing chart/row gestures keep working.
+
+
+def _section_end(lines: list[str], dash_i: int) -> int:
+    """Index one past the last line of the `dashboard:` section (the next
+    top-level key, or EOF)."""
+    for i in range(dash_i + 1, len(lines)):
+        ln = lines[i]
+        if ln.strip() == "" or ln.lstrip().startswith("#"):
+            continue
+        if len(ln) - len(ln.lstrip()) == 0:
+            return i
+    return len(lines)
+
+
+def _dashboard_indent(lines: list[str], dash_i: int) -> int:
+    """Indent of the shallowest content under `dashboard:` — the tab-key indent
+    when tabbed, or the item indent when flat. Defaults to 2."""
+    for i in range(dash_i + 1, _section_end(lines, dash_i)):
+        ln = lines[i]
+        if ln.strip() == "" or ln.lstrip().startswith("#"):
+            continue
+        return len(ln) - len(ln.lstrip())
+    return 2
+
+
+def _tab_key_line_indices(lines: list[str], dash_i: int) -> list[int]:
+    """Line indices of tab keys (mapping keys at the base indent that aren't
+    list items) under `dashboard:`, in document order. Empty when the dashboard
+    is flat — so it doubles as the tabbed/flat test."""
+    base = _dashboard_indent(lines, dash_i)
+    out = []
+    for i in range(dash_i + 1, _section_end(lines, dash_i)):
+        ln = lines[i]
+        if ln.strip() == "" or ln.lstrip().startswith("#"):
+            continue
+        indent = len(ln) - len(ln.lstrip())
+        if indent == base and not ln.lstrip().startswith("- "):
+            out.append(i)
+    return out
+
+
+def tab_names(text: str) -> list[str]:
+    """Tab names in order (for the delete-first confirm listing). [] when flat."""
+    from fireflyer.dashboard import Dashboard
+
+    return [t.name for t in (Dashboard.from_yaml(text).tabs or [])]
+
+
+def add_first_tab(text: str, name: str = "New tab") -> str:
+    """Convert a flat dashboard into a single-tab one: wrap the whole layout in a
+    `<name>:` key (rows indent one level deeper). The editor renames it in place
+    afterwards."""
+    lines = text.split("\n")
+    di = _section_i(lines, "dashboard")
+    if _tab_key_line_indices(lines, di):
+        raise ConfigEditError("dashboard already has tabs")
+    end = _section_end(lines, di)
+    body = lines[di + 1:end]
+    if not any(ln.strip() for ln in body):
+        raise ConfigEditError("dashboard is empty — nothing to put in a tab")
+    indented = ["  " + ln if ln.strip() else ln for ln in body]
+    key_line = f"  {_yaml_inline_str(name)}:"
+    result = "\n".join(lines[:di + 1] + [key_line] + indented + lines[end:])
+
+    from fireflyer.dashboard import Dashboard
+
+    Dashboard.from_yaml(result)
+    return result
+
+
+def insert_tab(text: str, before, name: str = "New tab") -> str:
+    """Add a tab by inserting a `<name>:` key at the `before` gap (a layout-item
+    index). Splits the current tab there: rows below become the new tab, rows
+    above stay in the previous one (indentation already nests them)."""
+    lines = text.split("\n")
+    di = _section_i(lines, "dashboard")
+    if not _tab_key_line_indices(lines, di):
+        raise ConfigEditError("dashboard is not tabbed yet; add the first tab first")
+    base = _dashboard_indent(lines, di)
+    key_line = f"{' ' * base}{_yaml_inline_str(name)}:"
+    insert_at = _insert_at(lines, di, before)
+    result = "\n".join(lines[:insert_at] + [key_line] + lines[insert_at:])
+
+    from fireflyer.dashboard import Dashboard
+
+    Dashboard.from_yaml(result)
+    return result
+
+
+def set_tab_text(text: str, index: int, new_name: str) -> str:
+    """Rename the `index`-th tab."""
+    new_name = new_name.strip()
+    if not new_name:
+        raise ConfigEditError("tab name cannot be empty")
+    lines = text.split("\n")
+    di = _section_i(lines, "dashboard")
+    keys = _tab_key_line_indices(lines, di)
+    if not (0 <= index < len(keys)):
+        raise ConfigEditError(f"tab {index} not found")
+    ln = lines[keys[index]]
+    indent = ln[:len(ln) - len(ln.lstrip())]
+    lines[keys[index]] = f"{indent}{_yaml_inline_str(new_name)}:"
+    result = "\n".join(lines)
+
+    from fireflyer.dashboard import Dashboard
+
+    Dashboard.from_yaml(result)
+    return result
+
+
+def move_tab(text: str, index: int, before) -> str:
+    """Move the `index`-th tab's key line to the `before` gap (a layout-item
+    index). Delimiter-style: the rows that then fall under it become its content,
+    so the move both reorders and repositions the tab boundary. An invalid result
+    (orphaned rows, an emptied tab) is rejected by re-validation."""
+    lines = text.split("\n")
+    di = _section_i(lines, "dashboard")
+    keys = _tab_key_line_indices(lines, di)
+    if not (0 <= index < len(keys)):
+        raise ConfigEditError(f"tab {index} not found")
+    if index == 0:
+        # Moving the first tab's key down orphans the rows above it — there'd be
+        # no tab owning them. The editor hides its move button; guard anyway.
+        raise ConfigEditError("the first tab can't be moved")
+    src = keys[index]
+    insert_at = _insert_at(lines, di, before)
+    line = lines.pop(src)
+    if insert_at > src:            # removing the source shifted everything below up
+        insert_at -= 1
+    lines.insert(insert_at, line)
+    result = "\n".join(lines)
+
+    from fireflyer.dashboard import Dashboard
+
+    Dashboard.from_yaml(result)
+    return result
+
+
+def delete_tab(text: str, index: int) -> str:
+    """Remove a tab. The **first** tab dissolves *all* tabs back to a flat list
+    (rows dedent one level); any other tab merges its rows into the previous tab
+    (just drop its key line)."""
+    lines = text.split("\n")
+    di = _section_i(lines, "dashboard")
+    keys = _tab_key_line_indices(lines, di)
+    if not (0 <= index < len(keys)):
+        raise ConfigEditError(f"tab {index} not found")
+
+    if index == 0:
+        base = _dashboard_indent(lines, di)
+        end = _section_end(lines, di)
+        key_set = set(keys)
+        # Nesting step = how much deeper rows sit than the tab key.
+        step = 2
+        for i in range(di + 1, end):
+            if lines[i].lstrip().startswith("- "):
+                step = (len(lines[i]) - len(lines[i].lstrip())) - base
+                break
+        body = []
+        for i in range(di + 1, end):
+            ln = lines[i]
+            if i in key_set:
+                continue                       # drop every tab key
+            if ln.strip() == "":
+                body.append(ln)
+                continue
+            indent = len(ln) - len(ln.lstrip())
+            body.append(" " * max(base, indent - step) + ln.lstrip())
+        result = "\n".join(lines[:di + 1] + body + lines[end:])
+    else:
+        del lines[keys[index]]
+        result = "\n".join(lines)
+
+    from fireflyer.dashboard import Dashboard
+
+    Dashboard.from_yaml(result)
+    return result
+
+
 def _add_to_layout_row(text: str, cid: str, ordinal: int) -> str:
     """Append a cell to an existing row (weight 1, since widths are proportions)."""
     lines = text.split("\n")
@@ -575,6 +763,7 @@ def delete_chart(text: str, cid: str) -> str:
     if cid not in (config.get("charts") or {}):
         raise ConfigEditError(f"unknown chart {cid!r}")
     text = _remove_from_layout(text, cid)
+    text = _drop_empty_tabs(text)   # a tab emptied by the delete dissolves
     text = _remove_chart_block(text, cid)
 
     from fireflyer.dashboard import Dashboard
@@ -656,17 +845,45 @@ def _repair(metas: list[dict]) -> None:
                 metas[mi]["tokens"] = [t for t in metas[mi]["tokens"] if _tid(t) != cid]
 
 
+def _drop_empty_tabs(text: str) -> str:
+    """Remove any tab whose rows were all moved away — a move that empties a tab
+    dissolves it (its key line goes). No-op on a flat dashboard."""
+    lines = text.split("\n")
+    try:
+        di = _section_i(lines, "dashboard")
+    except ConfigEditError:
+        return text
+    keys = _tab_key_line_indices(lines, di)
+    if not keys:
+        return text
+    end = _section_end(lines, di)
+    bounds = keys + [end]
+    drop = {
+        keys[n]
+        for n in range(len(keys))
+        if not any(
+            lines[j].lstrip().startswith("- ")
+            for j in range(keys[n] + 1, bounds[n + 1])
+        )
+    }
+    if not drop:
+        return text
+    return "\n".join(ln for i, ln in enumerate(lines) if i not in drop)
+
+
 def _finalize(text: str) -> str:
-    """Validate the moved layout; if a span was broken, dissolve it and re-check."""
+    """Validate the moved layout; drop tabs a move emptied, and if a span was
+    broken, dissolve it and re-check."""
     from fireflyer.dashboard import Dashboard
 
+    text = _drop_empty_tabs(text)
     try:
         Dashboard.from_yaml(text)
         return text
     except DashboardError:
         lines, metas = _dashboard_rows(text)
         _repair(metas)
-        repaired = _emit(lines, metas)
+        repaired = _drop_empty_tabs(_emit(lines, metas))
         Dashboard.from_yaml(repaired)   # re-raise if still invalid
         return repaired
 
