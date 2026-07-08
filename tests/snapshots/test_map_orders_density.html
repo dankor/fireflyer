@@ -217,29 +217,29 @@
 }
 .fireflyer-map-attribution a:hover { color: var(--ff-accent); }
 </style>
-<div id="fireflyer-map-86fd12f1b1" class="fireflyer-chart-root">
+<div id="fireflyer-map-<ID>" class="fireflyer-chart-root">
   <article class="fireflyer-chart fireflyer-map">
     <div class="fireflyer-title">Order density (Kyiv)</div>
     <div class="fireflyer-map-controls">
       <div class="fireflyer-map-control-group" aria-label="Tile zoom">
         <span class="fireflyer-map-control-label">zoom</span>
         <button type="button" class="fireflyer-map-zoom" aria-label="Zoom out"
-                hx-get="/chart/map?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=10&zoom=11"
-                hx-target="#fireflyer-map-86fd12f1b1" hx-swap="outerHTML">−</button>
+                hx-get="/chart/map?dataset=<TEST_DATA>%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=10&zoom=11"
+                hx-target="#fireflyer-map-<ID>" hx-swap="outerHTML">−</button>
         <span class="fireflyer-map-grid" aria-label="tile zoom">z12</span>
         <button type="button" class="fireflyer-map-zoom" aria-label="Zoom in"
-                hx-get="/chart/map?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=10&zoom=13"
-                hx-target="#fireflyer-map-86fd12f1b1" hx-swap="outerHTML">+</button>
+                hx-get="/chart/map?dataset=<TEST_DATA>%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=10&zoom=13"
+                hx-target="#fireflyer-map-<ID>" hx-swap="outerHTML">+</button>
       </div>
       <div class="fireflyer-map-control-group" aria-label="Hex grid size">
         <span class="fireflyer-map-control-label">hex</span>
         <button type="button" class="fireflyer-map-zoom" aria-label="Coarser hex grid"
-                hx-get="/chart/map?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=20&zoom=12"
-                hx-target="#fireflyer-map-86fd12f1b1" hx-swap="outerHTML">−</button>
+                hx-get="/chart/map?dataset=<TEST_DATA>%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=20&zoom=12"
+                hx-target="#fireflyer-map-<ID>" hx-swap="outerHTML">−</button>
         <span class="fireflyer-map-grid" aria-label="hex size">10</span>
         <button type="button" class="fireflyer-map-zoom" aria-label="Finer hex grid"
-                hx-get="/chart/map?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=5&zoom=12"
-                hx-target="#fireflyer-map-86fd12f1b1" hx-swap="outerHTML">+</button>
+                hx-get="/chart/map?dataset=<TEST_DATA>%2Forders.csv&title=Order+density+%28Kyiv%29&lat=lat&lng=lng&grid_size=5&zoom=12"
+                hx-target="#fireflyer-map-<ID>" hx-swap="outerHTML">+</button>
       </div>
     </div>
     <div class="fireflyer-map-canvas">

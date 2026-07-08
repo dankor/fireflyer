@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bumped versus `main`; both are intended to be required status checks so a PR
   can't merge until tests pass and the version is updated. On merge to `main`,
   `tag-on-merge.yml` reads the version and pushes the matching `vX.Y.Z` tag.
+  Snapshot tests were made checkout-path independent (the absolute dataset path
+  and the SHA-1 chart ids derived from it are normalized in the `snapshot`
+  fixture) so the suite passes on CI, not just the author's machine.
 
 ## [0.3.0] - 2026-07-08
 
