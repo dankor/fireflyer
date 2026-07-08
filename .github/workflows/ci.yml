@@ -1,0 +1,56 @@
+name: CI
+
+# Runs on every PR into main. Both jobs are meant to be marked as *required*
+# status checks in the branch protection rule for `main`, so a PR can't merge
+# until the suite is green AND the version has been bumped.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: pip install -e ".[test]"
+      - name: Pytest (snapshot suite)
+        run: python -m pytest -q
+
+  version-bump:
+    name: version-bump
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require pyproject version to increase vs base
+        run: |
+          git fetch --quiet origin "${{ github.base_ref }}"
+          python - <<'PY'
+          import subprocess, sys, tomllib
+
+          def version(source: bytes) -> tuple[int, ...]:
+              data = tomllib.loads(source.decode())
+              return tuple(int(p) for p in data["project"]["version"].split("."))
+
+          base_raw = subprocess.check_output(
+              ["git", "show", "origin/${{ github.base_ref }}:pyproject.toml"]
+          )
+          with open("pyproject.toml", "rb") as fh:
+              head_raw = fh.read()
+
+          base, head = version(base_raw), version(head_raw)
+          fmt = lambda v: ".".join(map(str, v))
+          if head <= base:
+              print(
+                  f"::error::version not bumped: base is {fmt(base)}, PR is {fmt(head)}. "
+                  "Bump `version` in pyproject.toml (and update CHANGELOG.md)."
+              )
+              sys.exit(1)
+          print(f"version bump OK: {fmt(base)} -> {fmt(head)}")
+          PY
