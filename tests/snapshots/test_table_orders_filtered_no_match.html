@@ -204,14 +204,14 @@
   font-variant-numeric: tabular-nums;
 }
 </style>
-<div id="fireflyer-table-3aa12fbb57" class="fireflyer-chart-root">
+<div id="fireflyer-table-<ID>" class="fireflyer-chart-root">
   <article class="fireflyer-chart fireflyer-table">
     <div class="fireflyer-title">Orders</div>
     <div class="fireflyer-table-search">
       <input type="search" name="q" value="zzzzz" placeholder="Search…"
              autocomplete="off" spellcheck="false"
-             hx-get="/chart/table?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Orders&search=1&pagination=5"
-             hx-target="#fireflyer-table-3aa12fbb57"
+             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5"
+             hx-target="#fireflyer-table-<ID>"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"
              hx-include="this">

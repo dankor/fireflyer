@@ -1,0 +1,34 @@
+name: Tag release
+
+# After anything lands on main (i.e. a PR merge), read the version from
+# pyproject.toml and push a matching vX.Y.Z tag if it doesn't already exist.
+# The CI version-bump check guarantees every merge carries a fresh version, so
+# each merge produces exactly one new tag.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # needed to push the tag back with the default GITHUB_TOKEN
+
+jobs:
+  tag:
+    name: tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create and push tag for the current version
+        run: |
+          version=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists — nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Fireflyer ${version}"
+          git push origin "${tag}"
+          echo "Pushed ${tag}."

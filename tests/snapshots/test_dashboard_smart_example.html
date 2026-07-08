@@ -695,7 +695,7 @@ body.fireflyer-resizing-col * {
   <input type="hidden" name="yaml_text" value="
 datasets:
   orders:
-    path: /Users/dankor/Documents/github/fireflyer/tests/data/orders.csv
+    path: <TEST_DATA>/orders.csv
 
 charts:
   orders_table:
@@ -939,14 +939,14 @@ dashboard:
   font-variant-numeric: tabular-nums;
 }
 </style>
-<div id="fireflyer-table-3aa12fbb57" class="fireflyer-chart-root">
+<div id="fireflyer-table-<ID>" class="fireflyer-chart-root">
   <article class="fireflyer-chart fireflyer-table">
     <div class="fireflyer-title">Orders</div>
     <div class="fireflyer-table-search">
       <input type="search" name="q" value="" placeholder="Search…"
              autocomplete="off" spellcheck="false"
-             hx-get="/chart/table?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Orders&search=1&pagination=5"
-             hx-target="#fireflyer-table-3aa12fbb57"
+             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5"
+             hx-target="#fireflyer-table-<ID>"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"
              hx-include="this">
@@ -1009,17 +1009,17 @@ dashboard:
     </div>
     <nav class="fireflyer-table-pagination" aria-label="pagination">
       <a class="page-link disabled"
-         hx-get="/chart/table?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=1"
-         hx-target="#fireflyer-table-3aa12fbb57" hx-swap="outerHTML">‹</a>
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=1"
+         hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">‹</a>
       <a class="page-link active"
-         hx-get="/chart/table?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=1"
-         hx-target="#fireflyer-table-3aa12fbb57" hx-swap="outerHTML">1</a>
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=1"
+         hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">1</a>
       <a class="page-link "
-         hx-get="/chart/table?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=2"
-         hx-target="#fireflyer-table-3aa12fbb57" hx-swap="outerHTML">2</a>
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=2"
+         hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">2</a>
       <a class="page-link "
-         hx-get="/chart/table?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=2"
-         hx-target="#fireflyer-table-3aa12fbb57" hx-swap="outerHTML">›</a>
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=2"
+         hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">›</a>
     </nav>
   </article>
 </div>
@@ -1471,14 +1471,14 @@ dashboard:
   font-variant-numeric: tabular-nums;
 }
 </style>
-<div id="fireflyer-table-0aa6d465bc" class="fireflyer-chart-root">
+<div id="fireflyer-table-<ID>" class="fireflyer-chart-root">
   <article class="fireflyer-chart fireflyer-table">
     <div class="fireflyer-title">All Orders</div>
     <div class="fireflyer-table-search">
       <input type="search" name="q" value="" placeholder="Search…"
              autocomplete="off" spellcheck="false"
-             hx-get="/chart/table?dataset=%2FUsers%2Fdankor%2FDocuments%2Fgithub%2Ffireflyer%2Ftests%2Fdata%2Forders.csv&title=All+Orders&search=1&pagination=10"
-             hx-target="#fireflyer-table-0aa6d465bc"
+             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=All+Orders&search=1&pagination=10"
+             hx-target="#fireflyer-table-<ID>"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"
              hx-include="this">

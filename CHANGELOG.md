@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-09
+
+### Added
+
+- **CI + release automation** (`.github/workflows/`). On every PR into `main`,
+  `ci.yml` runs the pytest suite and checks that `pyproject.toml`'s version was
+  bumped versus `main`; both are intended to be required status checks so a PR
+  can't merge until tests pass and the version is updated. On merge to `main`,
+  `tag-on-merge.yml` reads the version and pushes the matching `vX.Y.Z` tag.
+  Snapshot tests were made checkout-path independent (the absolute dataset path
+  and the SHA-1 chart ids derived from it are normalized in the `snapshot`
+  fixture) so the suite passes on CI, not just the author's machine.
+
 ## [0.3.0] - 2026-07-08
 
 ### Added
@@ -72,7 +85,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/dankor/fireflyer/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/dankor/fireflyer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dankor/fireflyer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dankor/fireflyer/releases/tag/v0.1.0
