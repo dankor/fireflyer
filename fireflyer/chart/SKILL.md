@@ -128,8 +128,8 @@ chart — don't invent colors:
 5. Declare **`PARAMS`** on the chart class — a `list[Param]`, one per constructor field
    in display order — so the editor's edit modal can build a form for it. Reuse the
    widgets in `fireflyer/params.py`; a sync test asserts `PARAMS` names == constructor
-   fields. See the **`param` skill** for the widget contract. Also add an "Editor params"
-   line to the chart's `spec.md`.
+   fields. See **`fireflyer/PARAM_SKILL.md`** for the widget contract. Also add an
+   "Editor params" line to the chart's `spec.md`.
 
 If the chart is a **crossfilter source** (clickable, like pie/bar), it also needs a
 branch in `dashboard.py`'s `_render_chart` that passes a `crossfilter=` dict and
