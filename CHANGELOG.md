@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mirrored across `dashboard.css` and each chart's `chart.css` (no shared
   stylesheet, by design); the map's basemap tiles and hex overlay stay fixed
   since the tiles are always a light raster.
+- **Contributor guides tracked in-repo.** The chart- and param-authoring guides
+  now live in the repository as `fireflyer/chart/SKILL.md` and
+  `fireflyer/PARAM_SKILL.md` (previously only local, gitignored Claude Code
+  skills). `CLAUDE.md` links both, and the skills point at these files as the
+  single source of truth.
 
 ## [0.2.0] - 2026-07-08
 
