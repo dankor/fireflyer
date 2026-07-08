@@ -39,6 +39,8 @@ architecture.md                         # authoritative spec
 
 Each chart folder is the modularity boundary: `chart.py` computes data, `chart.html` (Jinja2, autoescaped) renders it, `chart.css` is injected once per chart, `spec.md` is the source of truth for that chart's behavior. **When changing a chart, update its `spec.md` in the same change.**
 
+**Adding or changing a chart type?** Follow [`fireflyer/chart/SKILL.md`](fireflyer/chart/SKILL.md) — the step-by-step guide to the folder layout, `type:` wiring, the light/dark theming pattern, tests, and definition of done. (The `chart` Claude Code skill points at this same file.)
+
 ## Running things
 
 ```bash
