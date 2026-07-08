@@ -1,17 +1,81 @@
-<style>.fireflyer-chart {
+<style>/* ── Theme tokens ───────────────────────────────────────────────────────────
+   Light + dark palettes as CSS custom properties. Selection is automatic
+   (prefers-color-scheme) unless a `data-ff-theme="light|dark"` attribute on this
+   chart, its `.fireflyer-chart-root` wrapper, or any ancestor (e.g. the
+   dashboard, or <html> in the editor) overrides it. Mirrored across every
+   chart.css and dashboard.css — no shared stylesheet by design (architecture.md,
+   "Theming"). Keep the palettes in sync. */
+.fireflyer-chart {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-muted: #5e6975;
+  --ff-panel: #ffffff;
+  --ff-border: #e0e0e0;
+  --ff-border-strong: #d6d8dc;
+  --ff-accent: #20a7c9;
+  --ff-tooltip-bg: #20242b;
+  --ff-tooltip-ink: #ffffff;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+  --ff-shadow-strong: rgba(0, 0, 0, 0.18);
+}
+@media (prefers-color-scheme: dark) {
+  .fireflyer-chart {
+    --ff-ink: #e6e8ec;
+    --ff-title: #f2f4f7;
+    --ff-muted: #a3adbd;
+    --ff-panel: #1b2635;
+    --ff-border: #2c384a;
+    --ff-border-strong: #3a475c;
+    --ff-accent: #20a7c9;
+    --ff-tooltip-bg: #0c1320;
+    --ff-tooltip-ink: #e6e8ec;
+    --ff-shadow: rgba(0, 0, 0, 0.4);
+    --ff-shadow-strong: rgba(0, 0, 0, 0.55);
+  }
+}
+[data-ff-theme="light"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="light"] {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-muted: #5e6975;
+  --ff-panel: #ffffff;
+  --ff-border: #e0e0e0;
+  --ff-border-strong: #d6d8dc;
+  --ff-accent: #20a7c9;
+  --ff-tooltip-bg: #20242b;
+  --ff-tooltip-ink: #ffffff;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+  --ff-shadow-strong: rgba(0, 0, 0, 0.18);
+}
+[data-ff-theme="dark"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="dark"] {
+  --ff-ink: #e6e8ec;
+  --ff-title: #f2f4f7;
+  --ff-muted: #a3adbd;
+  --ff-panel: #1b2635;
+  --ff-border: #2c384a;
+  --ff-border-strong: #3a475c;
+  --ff-accent: #20a7c9;
+  --ff-tooltip-bg: #0c1320;
+  --ff-tooltip-ink: #e6e8ec;
+  --ff-shadow: rgba(0, 0, 0, 0.4);
+  --ff-shadow-strong: rgba(0, 0, 0, 0.55);
+}
+
+.fireflyer-chart {
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
-  color: #20242b;
-  background: #ffffff;
-  border: 1px solid #e0e0e0;
+  color: var(--ff-ink);
+  background: var(--ff-panel);
+  border: 1px solid var(--ff-border);
   border-radius: 4px;
   padding: 16px 20px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 2px var(--ff-shadow);
   margin: 0 0 16px 0;
 }
 .fireflyer-chart .fireflyer-title {
   font-size: 15px;
   font-weight: 600;
-  color: #323232;
+  color: var(--ff-title);
   letter-spacing: -0.01em;
   margin: 0 0 12px 0;
 }
@@ -44,6 +108,11 @@
   max-height: 320px;
   display: block;
 }
+/* The baseline axis and the value/label text are theme-driven; the bar fills
+   themselves are data-coloured (set inline per segment). */
+.fireflyer-bar-axis { stroke: var(--ff-border-strong); }
+.fireflyer-bar-value { fill: var(--ff-ink); }
+.fireflyer-bar-label { fill: var(--ff-muted); }
 .fireflyer-bar svg rect {
   cursor: pointer;
   transition: filter 0.15s ease, opacity 0.15s ease;
@@ -65,14 +134,14 @@
   left: 50%;
   transform: translateX(-50%);
   pointer-events: none;
-  background: #20242b;
-  color: #ffffff;
+  background: var(--ff-tooltip-bg);
+  color: var(--ff-tooltip-ink);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   padding: 5px 10px;
   border-radius: 3px;
   white-space: nowrap;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  box-shadow: 0 2px 6px var(--ff-shadow-strong);
   opacity: 0;
   transition: opacity 0.12s ease;
   z-index: 2;
@@ -85,7 +154,7 @@
   padding: 0;
   margin: 0;
   font-size: 13px;
-  color: #20242b;
+  color: var(--ff-ink);
 }
 .fireflyer-bar .fireflyer-legend li {
   display: flex;
@@ -101,9 +170,9 @@
   margin-right: 8px;
   flex-shrink: 0;
 }
-.fireflyer-bar .fireflyer-legend .label { color: #20242b; }
+.fireflyer-bar .fireflyer-legend .label { color: var(--ff-ink); }
 .fireflyer-bar .fireflyer-legend .meta {
-  color: #5e6975;
+  color: var(--ff-muted);
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
 }
@@ -120,20 +189,20 @@
   <div class="fireflyer-bar-layout">
     <div class="fireflyer-bar-canvas">
       <svg viewBox="0 0 380 260" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
-        <line x1="32" y1="206" x2="364" y2="206" stroke="#d6d8dc" stroke-width="1" />
+        <line x1="32" y1="206" x2="364" y2="206" class="fireflyer-bar-axis" stroke-width="1" />
         <rect x="32.00" y="16.00" width="75.50" height="190.00" fill="#1FA8C9" data-i="0" aria-label="2026-06-01 · paid: 3" />
-        <text x="69.75" y="12.00" text-anchor="middle" font-size="11" fill="#20242b" class="fireflyer-bar-value">3</text>
-        <text x="69.75" y="220.00" text-anchor="end" font-size="10" fill="#5e6975" transform="rotate(-30 69.75 220.00)" class="fireflyer-bar-label">2026-06-01</text>
+        <text x="69.75" y="12.00" text-anchor="middle" font-size="11" class="fireflyer-bar-value">3</text>
+        <text x="69.75" y="220.00" text-anchor="end" font-size="10" transform="rotate(-30 69.75 220.00)" class="fireflyer-bar-label">2026-06-01</text>
         <rect x="117.50" y="142.67" width="75.50" height="63.33" fill="#1FA8C9" data-i="1" aria-label="2026-06-02 · paid: 1" />
         <rect x="117.50" y="79.33" width="75.50" height="63.33" fill="#454E7C" data-i="2" aria-label="2026-06-02 · pending: 1" />
-        <text x="155.25" y="75.33" text-anchor="middle" font-size="11" fill="#20242b" class="fireflyer-bar-value">2</text>
-        <text x="155.25" y="220.00" text-anchor="end" font-size="10" fill="#5e6975" transform="rotate(-30 155.25 220.00)" class="fireflyer-bar-label">2026-06-02</text>
+        <text x="155.25" y="75.33" text-anchor="middle" font-size="11" class="fireflyer-bar-value">2</text>
+        <text x="155.25" y="220.00" text-anchor="end" font-size="10" transform="rotate(-30 155.25 220.00)" class="fireflyer-bar-label">2026-06-02</text>
         <rect x="203.00" y="142.67" width="75.50" height="63.33" fill="#5AC189" data-i="3" aria-label="2026-06-03 · cancelled: 1" />
-        <text x="240.75" y="138.67" text-anchor="middle" font-size="11" fill="#20242b" class="fireflyer-bar-value">1</text>
-        <text x="240.75" y="220.00" text-anchor="end" font-size="10" fill="#5e6975" transform="rotate(-30 240.75 220.00)" class="fireflyer-bar-label">2026-06-03</text>
+        <text x="240.75" y="138.67" text-anchor="middle" font-size="11" class="fireflyer-bar-value">1</text>
+        <text x="240.75" y="220.00" text-anchor="end" font-size="10" transform="rotate(-30 240.75 220.00)" class="fireflyer-bar-label">2026-06-03</text>
         <rect x="288.50" y="142.67" width="75.50" height="63.33" fill="#454E7C" data-i="4" aria-label="2026-06-04 · pending: 1" />
-        <text x="326.25" y="138.67" text-anchor="middle" font-size="11" fill="#20242b" class="fireflyer-bar-value">1</text>
-        <text x="326.25" y="220.00" text-anchor="end" font-size="10" fill="#5e6975" transform="rotate(-30 326.25 220.00)" class="fireflyer-bar-label">2026-06-04</text>
+        <text x="326.25" y="138.67" text-anchor="middle" font-size="11" class="fireflyer-bar-value">1</text>
+        <text x="326.25" y="220.00" text-anchor="end" font-size="10" transform="rotate(-30 326.25 220.00)" class="fireflyer-bar-label">2026-06-04</text>
       </svg>
       <div class="fireflyer-bar-tooltip" data-i="0" role="tooltip">
         <span class="fireflyer-bar-tooltip-label">2026-06-01 · paid</span>

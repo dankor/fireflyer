@@ -1,11 +1,85 @@
-<style>.fireflyer-chart {
+<style>/* ── Theme tokens ───────────────────────────────────────────────────────────
+   Light + dark palettes as CSS custom properties. Selection is automatic
+   (prefers-color-scheme) unless a `data-ff-theme="light|dark"` attribute on this
+   chart, its `.fireflyer-chart-root` wrapper, or any ancestor (e.g. the
+   dashboard, or <html> in the editor) overrides it. Mirrored across every
+   chart.css and dashboard.css — no shared stylesheet by design (architecture.md,
+   "Theming"). Keep the palettes in sync. */
+.fireflyer-chart {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-muted: #5e6975;
+  --ff-faint: #8a929c;
+  --ff-panel: #ffffff;
+  --ff-stripe: #fafbfc;
+  --ff-hover: #eef2f7;
+  --ff-border: #e0e0e0;
+  --ff-border-strong: #d6d8dc;
+  --ff-row-border: #f0f0f0;
+  --ff-accent: #20a7c9;
+  --ff-on-accent: #ffffff;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+}
+@media (prefers-color-scheme: dark) {
+  .fireflyer-chart {
+    color-scheme: dark;   /* dark native scrollbar on the table body */
+    --ff-ink: #e6e8ec;
+    --ff-title: #f2f4f7;
+    --ff-muted: #a3adbd;
+    --ff-faint: #7f8a99;
+    --ff-panel: #1b2635;
+    --ff-stripe: #1f2a3a;
+    --ff-hover: #26344a;
+    --ff-border: #2c384a;
+    --ff-border-strong: #3a475c;
+    --ff-row-border: #232f42;
+    --ff-accent: #20a7c9;
+    --ff-on-accent: #ffffff;
+    --ff-shadow: rgba(0, 0, 0, 0.4);
+  }
+}
+[data-ff-theme="light"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="light"] {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-muted: #5e6975;
+  --ff-faint: #8a929c;
+  --ff-panel: #ffffff;
+  --ff-stripe: #fafbfc;
+  --ff-hover: #eef2f7;
+  --ff-border: #e0e0e0;
+  --ff-border-strong: #d6d8dc;
+  --ff-row-border: #f0f0f0;
+  --ff-accent: #20a7c9;
+  --ff-on-accent: #ffffff;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+}
+[data-ff-theme="dark"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="dark"] {
+  color-scheme: dark;
+  --ff-ink: #e6e8ec;
+  --ff-title: #f2f4f7;
+  --ff-muted: #a3adbd;
+  --ff-faint: #7f8a99;
+  --ff-panel: #1b2635;
+  --ff-stripe: #1f2a3a;
+  --ff-hover: #26344a;
+  --ff-border: #2c384a;
+  --ff-border-strong: #3a475c;
+  --ff-row-border: #232f42;
+  --ff-accent: #20a7c9;
+  --ff-on-accent: #ffffff;
+  --ff-shadow: rgba(0, 0, 0, 0.4);
+}
+
+.fireflyer-chart {
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
-  color: #20242b;
-  background: #ffffff;
-  border: 1px solid #e0e0e0;
+  color: var(--ff-ink);
+  background: var(--ff-panel);
+  border: 1px solid var(--ff-border);
   border-radius: 4px;
   padding: 16px 20px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 2px var(--ff-shadow);
   margin: 0 0 16px 0;
 }
 /* Flex column so the table body fills and pagination pins to the card's bottom
@@ -31,7 +105,7 @@
 .fireflyer-chart .fireflyer-title {
   font-size: 15px;
   font-weight: 600;
-  color: #323232;
+  color: var(--ff-title);
   letter-spacing: -0.01em;
   margin: 0 0 12px 0;
 }
@@ -43,14 +117,14 @@
   max-width: 320px;
   padding: 6px 10px;
   font-size: 13px;
-  color: #20242b;
-  background: #fff;
-  border: 1px solid #d6d8dc;
+  color: var(--ff-ink);
+  background: var(--ff-panel);
+  border: 1px solid var(--ff-border-strong);
   border-radius: 4px;
   outline: 0;
 }
 .fireflyer-table .fireflyer-table-search input:focus {
-  border-color: #20a7c9;
+  border-color: var(--ff-accent);
   box-shadow: 0 0 0 2px rgba(32,167,201,0.15);
 }
 .fireflyer-table table {
@@ -60,29 +134,29 @@
   line-height: 1.4;
 }
 .fireflyer-table thead th {
-  background: #fafafa;
-  color: #5e6975;
+  background: var(--ff-stripe);
+  color: var(--ff-muted);
   text-transform: uppercase;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   padding: 8px 12px;
   text-align: left;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--ff-border);
   white-space: nowrap;
 }
 .fireflyer-table tbody td {
   padding: 7px 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--ff-row-border);
   font-variant-numeric: tabular-nums;
 }
-.fireflyer-table tbody tr:nth-child(even) { background: #fafbfc; }
-.fireflyer-table tbody tr:hover { background: #eef2f7; }
+.fireflyer-table tbody tr:nth-child(even) { background: var(--ff-stripe); }
+.fireflyer-table tbody tr:hover { background: var(--ff-hover); }
 .fireflyer-table tbody tr:last-child td { border-bottom: none; }
 .fireflyer-table td.num, .fireflyer-table th.num { text-align: right; }
 .fireflyer-table td.fireflyer-table-empty {
   text-align: center;
-  color: #8a929c;
+  color: var(--ff-faint);
   padding: 18px 12px;
   font-style: italic;
 }
@@ -100,21 +174,21 @@
   min-width: 26px;
   padding: 4px 8px;
   text-align: center;
-  border: 1px solid #d6d8dc;
+  border: 1px solid var(--ff-border-strong);
   border-radius: 4px;
-  color: #20242b;
-  background: #fff;
+  color: var(--ff-ink);
+  background: var(--ff-panel);
   cursor: pointer;
   user-select: none;
   text-decoration: none;
 }
 .fireflyer-table .fireflyer-table-pagination .page-link:hover {
-  background: #eef2f7;
+  background: var(--ff-hover);
 }
 .fireflyer-table .fireflyer-table-pagination .page-link.active {
-  background: #20a7c9;
-  border-color: #20a7c9;
-  color: #fff;
+  background: var(--ff-accent);
+  border-color: var(--ff-accent);
+  color: var(--ff-on-accent);
   cursor: default;
 }
 .fireflyer-table .fireflyer-table-pagination .page-link.disabled {
@@ -125,7 +199,7 @@
   min-width: 16px;
   padding: 4px 2px;
   text-align: center;
-  color: #8a929c;
+  color: var(--ff-faint);
   user-select: none;
   font-variant-numeric: tabular-nums;
 }

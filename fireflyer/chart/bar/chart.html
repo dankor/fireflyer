@@ -4,18 +4,18 @@
 .fireflyer-bar-canvas:has(svg rect[data-i="{{ s.i }}"]:hover) .fireflyer-bar-tooltip[data-i="{{ s.i }}"] { opacity: 1; }
 {%- endfor %}
 </style>
-<article class="fireflyer-chart fireflyer-bar{% if has_selection %} has-selection{% endif %}">
+<article class="fireflyer-chart fireflyer-bar{% if has_selection %} has-selection{% endif %}"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <div class="fireflyer-title">{{ title }}</div>
   <div class="fireflyer-bar-layout">
     <div class="fireflyer-bar-canvas">
       <svg viewBox="0 0 {{ chart_w }} {{ chart_h }}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
-        <line x1="{{ plot_x }}" y1="{{ baseline_y }}" x2="{{ plot_right }}" y2="{{ baseline_y }}" stroke="#d6d8dc" stroke-width="1" />
+        <line x1="{{ plot_x }}" y1="{{ baseline_y }}" x2="{{ plot_right }}" y2="{{ baseline_y }}" class="fireflyer-bar-axis" stroke-width="1" />
         {%- for b in bars %}
         {%- for s in b.segments %}
         <rect x="{{ '%.2f'|format(s.x) }}" y="{{ '%.2f'|format(s.y) }}" width="{{ '%.2f'|format(s.width) }}" height="{{ '%.2f'|format(s.height) }}" fill="{{ s.color }}" data-i="{{ s.i }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ b.label }} · {{ s.label }}: {{ s.count }}" />
         {%- endfor %}
-        <text x="{{ '%.2f'|format(b.center_x) }}" y="{{ '%.2f'|format(b.value_y) }}" text-anchor="middle" font-size="11" fill="#20242b" class="fireflyer-bar-value">{{ b.total }}</text>
-        <text x="{{ '%.2f'|format(b.center_x) }}" y="{{ '%.2f'|format(b.label_y) }}" text-anchor="end" font-size="10" fill="#5e6975" transform="rotate(-30 {{ '%.2f'|format(b.center_x) }} {{ '%.2f'|format(b.label_y) }})" class="fireflyer-bar-label">{{ b.label }}</text>
+        <text x="{{ '%.2f'|format(b.center_x) }}" y="{{ '%.2f'|format(b.value_y) }}" text-anchor="middle" font-size="11" class="fireflyer-bar-value">{{ b.total }}</text>
+        <text x="{{ '%.2f'|format(b.center_x) }}" y="{{ '%.2f'|format(b.label_y) }}" text-anchor="end" font-size="10" transform="rotate(-30 {{ '%.2f'|format(b.center_x) }} {{ '%.2f'|format(b.label_y) }})" class="fireflyer-bar-label">{{ b.label }}</text>
         {%- endfor %}
       </svg>
       {%- for s in all_segments %}

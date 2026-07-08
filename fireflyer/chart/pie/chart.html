@@ -4,17 +4,17 @@
 .fireflyer-pie-canvas:has(svg [data-i="{{ i }}"]:hover) .fireflyer-pie-tooltip[data-i="{{ i }}"] { opacity: 1; }
 {%- endfor %}
 </style>
-<article class="fireflyer-chart fireflyer-pie{% if has_selection %} has-selection{% endif %}">
+<article class="fireflyer-chart fireflyer-pie{% if has_selection %} has-selection{% endif %}"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <div class="fireflyer-title">{{ title }}</div>
   <div class="fireflyer-pie-layout">
     <div class="fireflyer-pie-canvas">
       <svg viewBox="0 0 220 220" width="220" height="220" xmlns="http://www.w3.org/2000/svg">
         {%- for s in segments %}
         {%- if s.path %}
-        <path d="{{ s.path }}" fill="{{ s.color }}" stroke="#ffffff" stroke-width="1.5" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.count }} ({{ s.percent }}%)" />
+        <path d="{{ s.path }}" fill="{{ s.color }}" stroke-width="1.5" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.count }} ({{ s.percent }}%)" />
         {%- else %}
         <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_out }}" fill="{{ s.color }}" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.count }} ({{ s.percent }}%)" />
-        <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_in }}" fill="#ffffff" />
+        <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_in }}" class="fireflyer-pie-hole" />
         {%- endif %}
         {%- endfor %}
       </svg>

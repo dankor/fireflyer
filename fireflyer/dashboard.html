@@ -1,5 +1,5 @@
 <style>{{ css|safe }}</style>
-<div id="fireflyer-dashboard" class="fireflyer-dashboard">
+<div id="fireflyer-dashboard" class="fireflyer-dashboard"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <input type="hidden" name="yaml_text" value="{{ yaml_source }}">
   {%- for tok in cf_tokens %}
   <input type="hidden" name="cf" value="{{ tok }}">

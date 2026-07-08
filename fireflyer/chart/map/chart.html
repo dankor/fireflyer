@@ -1,5 +1,5 @@
 <style>{{ css|safe }}</style>
-<div id="{{ chart_id }}" class="fireflyer-chart-root">
+<div id="{{ chart_id }}" class="fireflyer-chart-root"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <article class="fireflyer-chart fireflyer-map">
     <div class="fireflyer-title">{{ title }}</div>
     <div class="fireflyer-map-controls">
@@ -27,8 +27,8 @@
     <div class="fireflyer-map-canvas">
       <svg viewBox="0 0 {{ '%.1f'|format(vb_w) }} {{ '%.1f'|format(vb_h) }}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
         {%- if empty %}
-        <rect x="0" y="0" width="{{ vb_w }}" height="{{ vb_h }}" fill="#f5f7fa" />
-        <text x="{{ vb_w // 2 }}" y="{{ vb_h // 2 }}" text-anchor="middle" font-size="14" fill="#8a929c">No data</text>
+        <rect x="0" y="0" width="{{ vb_w }}" height="{{ vb_h }}" class="fireflyer-map-empty-bg" />
+        <text x="{{ vb_w // 2 }}" y="{{ vb_h // 2 }}" text-anchor="middle" font-size="14" class="fireflyer-map-empty-text">No data</text>
         {%- else %}
         {%- for t in tiles %}
         <image href="{{ t.url }}" x="{{ '%.1f'|format(t.x) }}" y="{{ '%.1f'|format(t.y) }}" width="{{ tile_size }}" height="{{ tile_size }}" preserveAspectRatio="xMidYMid slice" />

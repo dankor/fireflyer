@@ -14,6 +14,10 @@ Display category distribution as a donut.
 - Categories beyond the palette length recycle colors.
 - Only count aggregation is supported.
 
+## Theming
+- Card, text, legend, and tooltip colors come from the shared light/dark token set (see architecture.md "Theming"). The chart follows the viewer's OS preference unless a `data-ff-theme="light|dark"` override sits on the chart, the dashboard, or `<html>`; `to_html(theme=...)` forces one palette for standalone rendering.
+- Slice **fills** are the fixed categorical palette — theme-independent, so a value keeps its color in either mode. Slice separators and the donut hole take the card color (`--ff-panel`) so slices stay distinct on any background.
+
 ## Parameters
 - `dataset: str` — path to the CSV.
 - `title: str` — chart title.

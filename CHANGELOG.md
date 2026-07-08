@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-08
+
+### Added
+
+- **Dark theme.** Dashboards and every chart now ship a light *and* a dark
+  palette as CSS custom properties. Selection is automatic —
+  it follows the viewer's OS preference (`prefers-color-scheme`) — and can be
+  forced with a `data-ff-theme="light|dark"` attribute: `Dashboard.to_html(...)`
+  and each chart's `to_html(...)` take a `theme="dark"|"light"` argument, and an
+  explicit choice overrides the OS preference. The browser editor gains a topbar
+  **Theme: Auto / Light / Dark** toggle (persisted in `localStorage`) that themes
+  the editor chrome, the dashboard preview, and all charts at once. Tokens are
+  mirrored across `dashboard.css` and each chart's `chart.css` (no shared
+  stylesheet, by design); the map's basemap tiles and hex overlay stay fixed
+  since the tiles are always a light raster.
+
 ## [0.2.0] - 2026-07-08
 
 ### Added
@@ -51,6 +67,7 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dankor/fireflyer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dankor/fireflyer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dankor/fireflyer/releases/tag/v0.1.0

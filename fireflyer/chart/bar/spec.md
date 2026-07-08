@@ -14,6 +14,10 @@ Display a count distribution as **stacked** vertical bars, broken down by a seco
 - Categories beyond the palette length recycle colors.
 - Only count aggregation is supported.
 
+## Theming
+- Card, text, legend, and tooltip colors come from the shared light/dark token set (see architecture.md "Theming"). The chart follows the viewer's OS preference unless a `data-ff-theme="light|dark"` override sits on the chart, the dashboard, or `<html>`; `to_html(theme=...)` forces one palette for standalone rendering.
+- Segment **fills** are the fixed categorical palette (theme-independent). The baseline axis and the value/label text are themed (`.fireflyer-bar-axis`/`-value`/`-label` read tokens via CSS rather than inline attributes).
+
 ## Parameters
 - `dataset: str` — path to the CSV.
 - `title: str` — chart title.

@@ -1,5 +1,5 @@
 <style>{{ css|safe }}</style>
-<div id="{{ chart_id }}" class="fireflyer-chart-root">
+<div id="{{ chart_id }}" class="fireflyer-chart-root"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <article class="fireflyer-chart fireflyer-table">
     <div class="fireflyer-title">{{ title }}</div>
     {%- if search %}

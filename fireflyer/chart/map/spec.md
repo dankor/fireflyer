@@ -19,6 +19,10 @@ Plot a point dataset (lat/lng) as a pointy-top hex grid heatmap over an OpenStre
   - **Hex (`N` label)** halves or doubles `grid_size` (clamped to `[4, 200]`). `+` makes hexes smaller (more, finer bins); `−` makes them larger (fewer, coarser).
 - Carries the required `© OpenStreetMap contributors` attribution in the chart footer, alongside the chosen tile zoom (`z<N>`) and lat/lng bounds.
 
+## Theming
+- Only the **card chrome** — card, title, zoom controls, footer, legend, and the no-data placeholder — is themed from the shared light/dark token set (see architecture.md "Theming"). The chart follows the viewer's OS preference unless a `data-ff-theme="light|dark"` override sits on the chart, the dashboard, or `<html>`; `to_html(theme=...)` forces one palette.
+- The basemap tiles are always a light OSM raster, so the hex overlay stays **fixed** across themes: the accent hex fill, its white separator strokes, and the dark count labels (with a white halo) read correctly over light tiles in either mode.
+
 ## Parameters
 - `dataset: str` — path to the CSV.
 - `title: str` — chart title.

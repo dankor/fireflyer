@@ -1,17 +1,89 @@
+/* ── Theme tokens ───────────────────────────────────────────────────────────
+   Light + dark palettes as CSS custom properties. Selection is automatic
+   (prefers-color-scheme) unless a `data-ff-theme="light|dark"` attribute on this
+   chart, its `.fireflyer-chart-root` wrapper, or any ancestor (e.g. the
+   dashboard, or <html> in the editor) overrides it. Mirrored across every
+   chart.css and dashboard.css — no shared stylesheet by design (architecture.md,
+   "Theming"). Keep the palettes in sync.
+
+   Note: the map tiles are always a light basemap, so the hex overlay's white
+   strokes and dark count labels (set inline in chart.html) stay fixed across
+   themes — only the card chrome around the canvas is themed. */
+.fireflyer-chart {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-muted: #5e6975;
+  --ff-faint: #8a929c;
+  --ff-panel: #ffffff;
+  --ff-inset: #f5f7fa;
+  --ff-hover: #eef2f7;
+  --ff-active: #dde4ed;
+  --ff-border: #e0e0e0;
+  --ff-border-strong: #d6d8dc;
+  --ff-accent: #20a7c9;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+}
+@media (prefers-color-scheme: dark) {
+  .fireflyer-chart {
+    --ff-ink: #e6e8ec;
+    --ff-title: #f2f4f7;
+    --ff-muted: #a3adbd;
+    --ff-faint: #7f8a99;
+    --ff-panel: #1b2635;
+    --ff-inset: #141c29;
+    --ff-hover: #26344a;
+    --ff-active: #2e3e56;
+    --ff-border: #2c384a;
+    --ff-border-strong: #3a475c;
+    --ff-accent: #20a7c9;
+    --ff-shadow: rgba(0, 0, 0, 0.4);
+  }
+}
+[data-ff-theme="light"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="light"] {
+  --ff-ink: #20242b;
+  --ff-title: #323232;
+  --ff-muted: #5e6975;
+  --ff-faint: #8a929c;
+  --ff-panel: #ffffff;
+  --ff-inset: #f5f7fa;
+  --ff-hover: #eef2f7;
+  --ff-active: #dde4ed;
+  --ff-border: #e0e0e0;
+  --ff-border-strong: #d6d8dc;
+  --ff-accent: #20a7c9;
+  --ff-shadow: rgba(0, 0, 0, 0.04);
+}
+[data-ff-theme="dark"] .fireflyer-chart,
+.fireflyer-chart[data-ff-theme="dark"] {
+  --ff-ink: #e6e8ec;
+  --ff-title: #f2f4f7;
+  --ff-muted: #a3adbd;
+  --ff-faint: #7f8a99;
+  --ff-panel: #1b2635;
+  --ff-inset: #141c29;
+  --ff-hover: #26344a;
+  --ff-active: #2e3e56;
+  --ff-border: #2c384a;
+  --ff-border-strong: #3a475c;
+  --ff-accent: #20a7c9;
+  --ff-shadow: rgba(0, 0, 0, 0.4);
+}
+
 .fireflyer-chart {
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
-  color: #20242b;
-  background: #ffffff;
-  border: 1px solid #e0e0e0;
+  color: var(--ff-ink);
+  background: var(--ff-panel);
+  border: 1px solid var(--ff-border);
   border-radius: 4px;
   padding: 16px 20px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 2px var(--ff-shadow);
   margin: 0 0 16px 0;
 }
 .fireflyer-chart .fireflyer-title {
   font-size: 15px;
   font-weight: 600;
-  color: #323232;
+  color: var(--ff-title);
   letter-spacing: -0.01em;
   margin: 0 0 12px 0;
 }
@@ -35,7 +107,7 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #8a929c;
+  color: var(--ff-faint);
 }
 .fireflyer-map-zoom {
   width: 24px;
@@ -43,19 +115,19 @@
   font-size: 16px;
   line-height: 1;
   font-weight: 600;
-  color: #20242b;
-  background: #ffffff;
-  border: 1px solid #d6d8dc;
+  color: var(--ff-ink);
+  background: var(--ff-panel);
+  border: 1px solid var(--ff-border-strong);
   border-radius: 4px;
   cursor: pointer;
   padding: 0;
   user-select: none;
 }
-.fireflyer-map-zoom:hover { background: #eef2f7; }
-.fireflyer-map-zoom:active { background: #dde4ed; }
+.fireflyer-map-zoom:hover { background: var(--ff-hover); }
+.fireflyer-map-zoom:active { background: var(--ff-active); }
 .fireflyer-map-grid {
   font-size: 11px;
-  color: #5e6975;
+  color: var(--ff-muted);
   font-variant-numeric: tabular-nums;
   min-width: 28px;
   text-align: center;
@@ -67,7 +139,7 @@
 .fireflyer-map-canvas {
   flex: 1 1 auto;
   min-height: 0;
-  background: #f5f7fa;
+  background: var(--ff-inset);
   border-radius: 4px;
   overflow: hidden;
   display: flex;
@@ -79,6 +151,9 @@
   max-width: 100%;
   max-height: 100%;
 }
+/* No-data placeholder fills the canvas when there are no coordinates. */
+.fireflyer-map-empty-bg { fill: var(--ff-inset); }
+.fireflyer-map-empty-text { fill: var(--ff-faint); }
 .fireflyer-map svg image {
   /* Tiles are decorative; clicks/hover should hit the hex layer. */
   pointer-events: none;
@@ -90,7 +165,7 @@
 .fireflyer-map svg polygon:hover { filter: brightness(0.9); }
 /* Per-hex hover count — single CSS rule covers every hex regardless of how
    many are rendered. The `<text>` is hidden by default and revealed when
-   the wrapping `<g>` is hovered. */
+   the wrapping `<g>` is hovered. Colours are fixed (light basemap), not themed. */
 .fireflyer-map-hex .fireflyer-map-hex-label {
   opacity: 0;
   pointer-events: none;
@@ -112,7 +187,7 @@
   flex-wrap: wrap;
   margin: 8px 0 0 0;
   font-size: 11px;
-  color: #5e6975;
+  color: var(--ff-muted);
 }
 .fireflyer-map-bounds {
   font-variant-numeric: tabular-nums;
@@ -129,15 +204,15 @@
   width: 80px;
   height: 8px;
   border-radius: 2px;
-  border: 1px solid #d6d8dc;
+  border: 1px solid var(--ff-border-strong);
 }
 .fireflyer-map-legend-label { font-variant-numeric: tabular-nums; }
 .fireflyer-map-attribution {
   font-size: 10px;
-  color: #8a929c;
+  color: var(--ff-faint);
 }
 .fireflyer-map-attribution a {
   color: inherit;
   text-decoration: underline;
 }
-.fireflyer-map-attribution a:hover { color: #20a7c9; }
+.fireflyer-map-attribution a:hover { color: var(--ff-accent); }

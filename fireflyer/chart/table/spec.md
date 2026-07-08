@@ -11,6 +11,9 @@ Display the contents of a CSV as a tabular HTML view.
 - Alternating row backgrounds; hover highlights the row under the cursor.
 - Empty cells render blank, not as the string `None`.
 
+## Theming
+Card, header, row stripes, hover highlight, borders, search input, and pagination colors come from the shared light/dark token set (see architecture.md "Theming"). The chart follows the viewer's OS preference unless a `data-ff-theme="light|dark"` override sits on the chart's `.fireflyer-chart-root`, the dashboard, or `<html>`; `to_html(theme=...)` forces one palette for standalone rendering.
+
 ## Parameters
 - `dataset: str` — path to the CSV.
 - `title: str` — chart title.

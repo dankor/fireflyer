@@ -55,6 +55,16 @@ _ROW_HEIGHT_RE = re.compile(r"^@(\d+(?:\.\d+)?)$")
 _WIDGET_RE = re.compile(r"^([A-Za-z_][\w-]*)(?::(\d+(?:\.\d+)?))?$")
 
 
+# Explicit theme override for a render. `None`/`"auto"` emit no attribute, so the
+# output follows the viewer's OS preference (prefers-color-scheme); `"dark"` or
+# `"light"` stamp `data-ff-theme` on the dashboard root to force one palette.
+_THEMES = ("dark", "light")
+
+
+def _normalize_theme(theme: str | None) -> str:
+    return theme if theme in _THEMES else ""
+
+
 class DashboardError(ValueError):
     """Raised for any invalid dashboard YAML — message is shown to the user."""
 
@@ -170,7 +180,10 @@ class Dashboard:
         return meta, active, self.tabs[active].items
 
     def to_html(
-        self, cf_tokens: list[str] | None = None, active_tab: int = 0
+        self,
+        cf_tokens: list[str] | None = None,
+        active_tab: int = 0,
+        theme: str | None = None,
     ) -> str:
         cf_tokens = list(cf_tokens or [])
         tabs_meta, active_tab, items = self._tab_context(active_tab)
@@ -182,6 +195,7 @@ class Dashboard:
             active_tab=active_tab,
             yaml_source=self.yaml_source,
             cf_tokens=cf_tokens,
+            ff_theme=_normalize_theme(theme),
         )
 
     def render_skeleton(
@@ -189,6 +203,7 @@ class Dashboard:
         cf_tokens: list[str] | None = None,
         editing: bool = False,
         active_tab: int = 0,
+        theme: str | None = None,
     ) -> str:
         """Layout-only render: cells are placeholders that hx-trigger on load.
 
@@ -250,6 +265,7 @@ class Dashboard:
             yaml_source=self.yaml_source,
             cf_tokens=cf_tokens,
             editing=editing,
+            ff_theme=_normalize_theme(theme),
         )
 
     def render_cell(
