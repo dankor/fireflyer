@@ -28,9 +28,13 @@ When the user asks for a change to the datasets, charts, or layout, call the `up
 
 # Dashboard YAML format
 
-A dashboard has exactly three top-level keys: `datasets`, `charts`, `dashboard`.
+A dashboard has four top-level keys: `name`, `datasets`, `charts`, `dashboard`.
+`name` is required — a short human-readable title for the whole dashboard.
+Always include it and preserve the existing one unless asked to rename.
 
 ```
+name: <string>                    # required: the dashboard's display name
+
 datasets:
   <id>:
     path: files/orders.csv      # path to a CSV; `path` is the only key

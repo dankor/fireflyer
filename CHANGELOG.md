@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-10
+
+### Added
+
+- **Portal mode** — an opt-in, DB-backed way to store and browse many
+  dashboards, reusing the existing editor unchanged. Enabled with
+  `python -m fireflyer.portal` (reads `portal.yaml`) or the compose `portal`
+  profile. `/` becomes a gallery of stored dashboards — a table of name,
+  author, and last-updated with per-row **Edit / Clone / Remove** actions and a
+  **+ New dashboard** button; New and Clone each prompt for a name in a modal.
+  New dashboards start **blank**; each opens in the normal editor with a
+  **Save** button. Dashboards are stored as an opaque YAML text blob (validated
+  by `Dashboard.from_yaml` on save, never decomposed into tables), so every
+  stateless editor route keeps working byte-for-byte. Rows also carry an
+  **author** (the logged-in user, recorded at create/clone).
+- **Portal login** — portal mode is gated behind a simple auth (`web/auth.py`),
+  default **admin/admin** (`FIREFLYER_USER`/`FIREFLYER_PASSWORD`); a topbar
+  **profile** dropdown shows the username with a **Log out** action. It's a deliberately small,
+  swappable backbone: an `Authenticator` protocol (the credential check) and an
+  HMAC-signed session cookie (how the identity is remembered) are independent,
+  so an SSO/OAuth callback just reuses `set_session` — no route changes. No
+  advanced provider is implemented; the extension recipe is documented in
+  `architecture.md`. Local single-dashboard mode has no login.
+- **Editor topbar** reorganized — left: a **☰ Dashboards** link and the
+  Fireflyer **logo** (both link to the gallery in portal), then an **editable
+  dashboard title** after a dot separator (click to rename → rewrites the YAML
+  `name:` key, and editing `name:` in the YAML updates the title); right:
+  **Save**, Preview,
+  a **3-segment Auto / Light / Dark theme switch**, and the profile button.
+  **Save only appears when there are unsaved changes**, saves on click or
+  ⌘/Ctrl+S, and warns before you navigate away with unsaved edits. The theme
+  control is a **3-segment icon switch** (A / sun / moon for Auto / Light /
+  Dark, inline SVG, no text) — in the profile
+  dropdown in portal mode, standalone in the topbar in local mode.
+- **Refresh-on-edit preview.** The topbar **Run** button and status text are
+  gone. Editing the YAML now greys out the (stale) preview and reveals a **↻
+  Refresh** button over the output pane; clicking it re-renders. The greyed
+  preview stays **interactive** (row/column resize keeps working). Two resize
+  snap-back bugs were fixed: row-height drags now persist for **block-style**
+  dashboard rows (the height rewrite was flow-style only), and **column** drags
+  now persist on **tabbed** dashboards (`resize_columns` searched flat `.items`
+  only, which are empty when the layout is tabbed, so it silently no-op'd). Save
+  feedback shows on the Save button itself, and rare edit errors use a toast.
+- **Required top-level `name:` key** in the dashboard YAML — the dashboard's
+  display name, part of the definition (not portal metadata), so it works the
+  same in local and portal mode. `Dashboard.from_yaml` now rejects a dashboard
+  with no (or empty) `name`. Portal lists dashboards by it and re-derives the
+  listing name from the YAML on every save (no separate name field); the
+  gallery's "new" form seeds the typed name into the YAML's `name:` key. The store lives in `fireflyer/web/portal.py` behind two
+  backends: stdlib **sqlite** (local/dev + tests) and **Postgres**
+  (`python -m fireflyer.portal`); the Postgres driver is an optional `.[portal]`
+  extra so the core install and test suite never require a database. Portal is
+  an owner-approved exception to the "no persistence/multi-user" anti-goal,
+  scoped to `web/`. Auth and per-dataset storage are intentionally out of scope
+  for this first cut.
+
 ## [0.3.1] - 2026-07-09
 
 ### Added
@@ -85,7 +141,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/dankor/fireflyer/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/dankor/fireflyer/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/dankor/fireflyer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dankor/fireflyer/compare/v0.1.0...v0.2.0

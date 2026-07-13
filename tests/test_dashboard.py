@@ -5,6 +5,7 @@ import fireflyer as ff
 
 def _smart_yaml(csv_path: str) -> str:
     return f"""
+name: Test dashboard
 datasets:
   orders:
     path: {csv_path}
@@ -173,6 +174,7 @@ def test_render_cell_unknown_id_errors(orders_csv):
 
 def _merge_yaml(csv_path: str, dashboard_block: str) -> str:
     return f"""
+name: Test dashboard
 datasets:
   o: {{path: {csv_path}}}
 charts:
@@ -272,6 +274,7 @@ def test_dashboard_single_row_unchanged_placement(orders_csv):
 def test_dashboard_indicator_skips_missing_columns(orders_csv):
     """A declared filter on a column the dataset lacks doesn't count."""
     yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:
@@ -298,6 +301,7 @@ def test_dashboard_widths_are_proportions(orders_csv):
     """Widths are proportions (fr tracks), so any positive values are valid and
     equal integers split the row evenly — no sum-to-100 requirement."""
     yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:
@@ -316,6 +320,7 @@ def test_dashboard_proportional_widths_equivalent(orders_csv):
     as their literal fr weights."""
     def cols(a, b):
         yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:
@@ -335,6 +340,7 @@ dashboard:
 def test_dashboard_single_cell_fills_row(orders_csv):
     """A lone cell fills the row regardless of its number — proportions, not %."""
     yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:
@@ -370,6 +376,7 @@ def test_dashboard_bare_inherit_spans(orders_csv):
 
 def test_dashboard_rejects_unknown_chart(orders_csv):
     yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:
@@ -398,6 +405,7 @@ def test_dashboard_single_row_insert_keeps_span(orders_csv):
 
 def test_dashboard_rejects_unknown_dataset():
     yaml = """
+name: Test dashboard
 datasets: {}
 charts:
   t: {type: table, dataset: missing, title: T}
@@ -409,6 +417,7 @@ dashboard: []
 
 def test_dashboard_rejects_unknown_chart_type(orders_csv):
     yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:
@@ -421,6 +430,7 @@ dashboard: []
 
 def test_dashboard_rejects_missing_top_level(orders_csv):
     yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:

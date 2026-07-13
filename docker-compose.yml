@@ -18,3 +18,41 @@ services:
     command: >
       uvicorn fireflyer.web.app:app
       --host 0.0.0.0 --port 8000 --reload
+
+  # Portal mode: `docker compose --profile portal up --build`. Brings up Postgres
+  # and serves the dashboard gallery on http://127.0.0.1:8001 (8001 so it can run
+  # alongside the default single-dashboard editor on 8000).
+  postgres:
+    image: postgres:16
+    profiles: ["portal"]
+    environment:
+      POSTGRES_USER: fireflyer
+      POSTGRES_PASSWORD: fireflyer
+      POSTGRES_DB: fireflyer
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  portal:
+    build: .
+    profiles: ["portal"]
+    depends_on:
+      - postgres
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FIREFLYER_PORTAL: "1"
+      DATABASE_URL: postgresql://fireflyer:fireflyer@postgres:5432/fireflyer
+      # Login defaults to admin/admin. Override user/pass and set a real session
+      # secret for anything beyond local use (FIREFLYER_USER/PASSWORD/SECRET).
+      FIREFLYER_SECRET: dev-portal-secret-change-me
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./fireflyer:/app/fireflyer
+      - ./files:/app/files
+      - ./tests:/app/tests
+    command: python -m fireflyer.portal
+
+volumes:
+  pgdata:

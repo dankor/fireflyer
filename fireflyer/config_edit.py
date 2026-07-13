@@ -1074,8 +1074,15 @@ def resize_columns(text: str, ordinals: list[int], widths: list[float]) -> str:
     widths = [float(w) for w in widths]
     if not ordinals or not widths:
         return text
+    # Row ordinals are global across tabs, so search flat items *and* every tab's
+    # items — otherwise a column drag on a tabbed dashboard finds no group and
+    # silently no-ops (the widths snap back).
+    dash = Dashboard.from_yaml(text)
+    layout_items = (
+        dash.items if dash.tabs is None else [it for t in dash.tabs for it in t.items]
+    )
     group = next(
-        (it for it in Dashboard.from_yaml(text).items
+        (it for it in layout_items
          if hasattr(it, "placements") and [o for o, _ in it.tracks] == ordinals),
         None,
     )

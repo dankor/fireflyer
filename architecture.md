@@ -1,8 +1,8 @@
-# Firefly MVP Architecture
+# Fireflyer MVP Architecture
 
 ## Primary Goal
 
-Firefly is a Python library for rapidly transforming CSV files into HTML visualizations.
+Fireflyer is a Python library for rapidly transforming CSV files into HTML visualizations.
 
 The primary goal is developer experience.
 
@@ -31,7 +31,7 @@ The MVP is expected to be rewritten.
 
 # Vision
 
-Firefly provides a simple way to visualize CSV files using Python.
+Fireflyer provides a simple way to visualize CSV files using Python.
 
 Example:
 
@@ -48,7 +48,7 @@ chart
 
 The user writes Python code.
 
-Firefly reads the CSV file, generates HTML, and displays the result.
+Fireflyer reads the CSV file, generates HTML, and displays the result.
 
 The user does not interact with Polars directly.
 
@@ -84,6 +84,10 @@ Not supported:
 * Streaming
 * Large dataset optimization
 * Realtime updates
+
+Persistence and a multi-dashboard listing are the one **owner-approved
+exception** — added by **Portal mode** (below), scoped to `web/`. It does *not*
+relax the rest of this list: no auth, no multi-user, no caching.
 
 ---
 
@@ -241,9 +245,11 @@ The Python API (`ff.chart.table(...)`, `ff.chart.pie(...)`) stays for ad-hoc ren
 
 ## File shape
 
-A dashboard YAML has exactly three top-level sections:
+A dashboard YAML has four top-level sections:
 
 ```yaml
+name: <string>
+
 datasets:
   <id>: <dataset config>
 
@@ -255,6 +261,9 @@ dashboard:
   - <layout item>
 ```
 
+* `name` — required. A short human-readable title for the whole dashboard,
+  part of the definition. `Dashboard.from_yaml` rejects a missing or empty
+  `name`; **Portal mode** lists dashboards by it.
 * `datasets` — mapping of dataset id → dataset config.
 * `charts` — mapping of chart id → chart config.
 * `dashboard` — the page layout (the layout DSL, below). Either a flat list of
@@ -494,6 +503,8 @@ re-validated through `Dashboard.from_yaml`.
 ## Complete example
 
 ```yaml
+name: Orders overview
+
 datasets:
   orders:
     path: files/orders.csv
@@ -612,7 +623,7 @@ Fireflyer ships a **light and a dark palette**. Colors are never hardcoded in ru
 
 The editor exists only to improve the development experience.
 
-It is not part of the Firefly core architecture.
+It is not part of the Fireflyer core architecture.
 
 The editor is a temporary development tool.
 
@@ -641,6 +652,130 @@ No execution history.
 No autosave requirements.
 
 No realtime execution.
+
+---
+
+# Portal mode
+
+Portal mode is an **opt-in** way to store many dashboards in a database and
+browse them from a gallery, instead of hand-editing one YAML file. It is an
+**owner-approved exception** to the "no persistence / no multiple dashboards"
+anti-goal, and — like the editor and the AI assistant — it is **editor-only**,
+scoped to `web/`. It is not part of the Fireflyer core. It does not add
+authentication, multiple *users*, or caching; those stay out of scope.
+
+## Enabling it
+
+Off by default: `python -m fireflyer.web` serves the usual single-dashboard
+editor at `/`. Portal mode is switched on by the `FIREFLYER_PORTAL` environment
+variable; the `python -m fireflyer.portal` entrypoint sets it, reads runtime
+config from `portal.yaml` (title, database url; the environment overrides the
+file), and binds `0.0.0.0` for containers. With it on, `/` becomes the gallery.
+
+## It reuses the editor unchanged
+
+The editor is already **stateless**: every edit route (`/execute`,
+`/dashboard`, `/chart/config/*`) takes the current YAML text in from the browser
+and returns new YAML — nothing is persisted server-side. Portal mode only wraps
+this with a persistence and listing layer, so **no existing edit logic changes**.
+
+New routes, all gated behind the portal flag and addressing dashboards by
+**UUID**:
+
+* `GET /` — the gallery: a **table** of stored dashboards (name, author, last
+  updated) with per-row **Edit / Clone / Remove** actions and a **+ New
+  dashboard** button. New and Clone each prompt for a name in a small modal
+  (native `<dialog>`).
+* `POST /new` — create a **blank** dashboard with the given name (a valid but
+  empty YAML: no datasets, charts, or layout) and open it.
+* `POST /d/{id}/clone` — copy an existing dashboard under a new name and open
+  the copy.
+* `GET /d/{id}` — the normal editor page, seeded with that dashboard's stored
+  YAML and given a **Save** button (and a link back to the gallery).
+* `POST /d/{id}/save` — validate and persist the edited YAML.
+* `POST /d/{id}/delete` — remove it.
+
+## Storage model
+
+A dashboard is stored as an **opaque YAML text blob** — the same YAML the editor
+already produces — never decomposed into normalized tables. Decomposing it would
+break the surgical, comment-preserving block edits `config_edit.py` relies on.
+On every write the backend validates the YAML with `Dashboard.from_yaml`; an
+invalid dashboard is rejected and nothing is stored.
+
+The dashboard's **name** is stored in its own column but is the source-of-truth
+top-level `name:` key (see **File shape**): the store re-derives the column from
+the YAML on every save, so renaming is just editing the `name:` key in the
+editor, and New/Clone write the modal-provided name into the YAML. **Author** is
+separate metadata (not in the YAML) — the logged-in user, set once at
+create/clone and left untouched by saves. Datasets stay inline in the YAML (CSV
+paths on the server filesystem); per-dataset storage is deliberately out of
+scope for the first cut.
+
+## Two stores, one schema
+
+The store lives in `fireflyer/web/portal.py` behind two interchangeable
+backends over one small table (`id, name, author, yaml, created_at,
+updated_at`):
+
+* **sqlite** (stdlib) — powers local dev (a file) and the test suite
+  (in-memory). No service, no driver.
+* **Postgres** (`psycopg`) — the runtime backend for
+  `python -m fireflyer.portal`, selected when a `DATABASE_URL` is present.
+
+The Postgres driver is an optional `.[portal]` extra and is imported lazily, so
+the core install and `pip install -e ".[test]"` never require a database. Store
+logic and the gallery HTML are pure functions in `portal.py` (not `app.py`), so
+they unit-test without the web stack — the tests use in-memory sqlite and never
+touch a live database, the same rule the AI-assistant tests follow.
+
+## Authentication
+
+Portal mode is gated behind a login (`fireflyer/web/auth.py`). The default is a
+single hardcoded user — **admin / admin**, overridable with `FIREFLYER_USER` /
+`FIREFLYER_PASSWORD`. This is intentionally minimal; it is *not* hardened
+production auth. It exists so the portal isn't wide open, and so richer schemes
+have a clean place to plug in. Auth is on whenever portal mode is; local
+single-dashboard mode has no login.
+
+The design is built from **two independent seams**, and that separation is the
+whole point — it's what makes advanced schemes easy:
+
+1. **Who is allowed in** — the `Authenticator` protocol. Its one method,
+   `verify(username, password) -> identity | None`, is the credential check.
+   The default `PasswordAuthenticator` compares against the configured user.
+   Swap it for anything — an LDAP bind, a database user table, an API-key
+   lookup — by implementing that single method and setting
+   `app.state.authenticator`.
+2. **How the identity is remembered** — a session in an HMAC-signed cookie
+   (`set_session` / `current_user` / `clear_session`), signed with
+   `FIREFLYER_SECRET`. This is completely independent of *how* the identity was
+   proven.
+
+A single middleware guard redirects any unauthenticated request to `/login`;
+`GET/POST /login` and `POST /logout` are the only auth routes. The topbar shows
+the signed-in username and a **Log out** button, in both the gallery and the
+editor.
+
+### Adding SSO / OAuth (not implemented — the recipe)
+
+Because "how you remember the identity" is separate from "how you proved it," an
+external-IdP flow (Google, Okta, SAML, OIDC…) slots in **without touching the
+portal routes or the guard**:
+
+1. Add a provider route pair — e.g. `GET /login/oauth` that redirects to the
+   IdP, and `GET /auth/callback` that exchanges the code and verifies the token.
+2. In the callback, on success call `set_session(response, <identity>)` — the
+   same session layer the password flow already uses.
+3. Point the login page's button at your provider route instead of (or
+   alongside) the password form.
+
+The guard, logout, `current_user`, and every portal route stay exactly as they
+are: they only ever ask "is there a valid session?", never "how did you log
+in?". Enterprise concerns beyond this seam — per-user ownership/sharing (extend
+the store's rows with the identity `current_user` returns), roles, token
+refresh — are deliberately out of scope for the MVP; the seams are here so they
+can be added without a rewrite.
 
 ---
 

@@ -7,7 +7,7 @@ WORKDIR /app
 # them present at build time.
 COPY pyproject.toml LICENSE README.md ./
 COPY fireflyer ./fireflyer
-RUN pip install --no-cache-dir -e ".[test]"
+RUN pip install --no-cache-dir -e ".[test,portal]"
 
 # Sample data the default dashboard references (files/orders.csv).
 COPY files ./files

@@ -9,7 +9,8 @@ from fireflyer import config_edit as ce
 
 
 def _tabbed(csv_path: str) -> str:
-    return f"""datasets:
+    return f"""name: Test dashboard
+datasets:
   o: {{path: {csv_path}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -33,7 +34,8 @@ def test_tabs_parse_names_and_shape(orders_csv):
 
 
 def test_flat_dashboard_has_no_tabs(orders_csv):
-    yaml = f"""datasets:
+    yaml = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -44,7 +46,8 @@ dashboard:
 
 
 def test_empty_tab_rejected(orders_csv):
-    yaml = f"""datasets:
+    yaml = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -59,7 +62,8 @@ dashboard:
 
 def test_chart_in_two_tabs_rejected(orders_csv):
     """A chart resolves to one placement across the whole dashboard."""
-    yaml = f"""datasets:
+    yaml = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -76,7 +80,8 @@ dashboard:
 def test_span_within_a_lower_tab(orders_csv):
     """A bare-inherit span still works inside a tab that isn't the first — proof
     that per-tab grouping and global ordinal numbering are correct."""
-    yaml = f"""datasets:
+    yaml = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -137,7 +142,8 @@ def test_skeleton_editing_shows_tab_toolbar_not_add_first(orders_csv):
 def test_skeleton_flat_editing_has_no_tab_bar(orders_csv):
     """A flat dashboard renders no tab bar; tabs are created from the between-rows
     "+" menu (which lives in the editor page, not the skeleton)."""
-    yaml = f"""datasets:
+    yaml = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -157,7 +163,8 @@ def test_tabbed_dashboard_snapshot(orders_csv, snapshot):
 
 
 def _flat(csv_path: str) -> str:
-    return f"""datasets:
+    return f"""name: Test dashboard
+datasets:
   o: {{path: {csv_path}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -199,7 +206,8 @@ def test_set_tab_text_empty_rejected(orders_csv):
 def test_move_tab_repositions_boundary(orders_csv):
     """Move repositions the tab's start boundary (delimiter model): moving a
     tab's key line earlier hands it the rows it now sits above."""
-    yaml = f"""datasets:
+    yaml = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   x: {{type: table, dataset: o, title: X}}

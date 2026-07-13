@@ -100,9 +100,11 @@ Each chart's full options live in its spec: [`fireflyer/chart/<name>/spec.md`](f
 
 ## Dashboards
 
-A dashboard is **one YAML file** that declares its datasets, its charts, and how they lay out on a page:
+A dashboard is **one YAML file** that declares its name, its datasets, its charts, and how they lay out on a page:
 
 ```yaml
+name: Orders overview
+
 datasets:
   orders:
     path: files/orders.csv
