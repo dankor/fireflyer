@@ -134,6 +134,10 @@ class Dashboard:
     # `dashboard:` section is a mapping of tab name -> layout list.
     tabs: list[_Tab] | None = None
     yaml_source: str = ""
+    # Optional top-level `name:` — the dashboard's display name, part of the
+    # definition (not portal metadata). Portal lists dashboards by it; local
+    # mode just carries it. Empty when the key is absent.
+    name: str = ""
 
     @classmethod
     def from_yaml(cls, text: str) -> "Dashboard":
@@ -146,9 +150,13 @@ class Dashboard:
             raise DashboardError(
                 "top-level must be a mapping with keys: datasets, charts, dashboard"
             )
-        for key in ("datasets", "charts", "dashboard"):
+        for key in ("datasets", "charts", "dashboard", "name"):
             if key not in config:
                 raise DashboardError(f"missing top-level key: {key!r}")
+
+        name = config["name"]
+        if not isinstance(name, str) or not name.strip():
+            raise DashboardError("top-level `name` must be a non-empty string")
 
         datasets = _parse_datasets(config["datasets"])
         chart_configs = _parse_charts(config["charts"], datasets)
@@ -160,12 +168,16 @@ class Dashboard:
             # dashboard (span-aware), so the move machinery — which pulls a
             # chart from every row it's in — stays sound across tabs.
             _validate_unique_placements([g for t in tabs for g in t.items])
-            return cls(chart_configs=chart_configs, tabs=tabs, yaml_source=text)
+            return cls(
+                chart_configs=chart_configs, tabs=tabs, yaml_source=text, name=name
+            )
 
         items = _parse_layout(raw_dashboard, chart_configs)
         items = _group_layout(items)
         _validate_unique_placements(items)
-        return cls(chart_configs=chart_configs, items=items, yaml_source=text)
+        return cls(
+            chart_configs=chart_configs, items=items, yaml_source=text, name=name
+        )
 
     def _tab_context(self, active_tab: int):
         """(tabs_meta | None, clamped_active, active_items).

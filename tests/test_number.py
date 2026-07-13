@@ -131,6 +131,7 @@ def test_number_full_format_param(orders_csv):
 def test_number_in_dashboard(orders_csv):
     """The number type resolves in dashboard YAML and renders a KPI cell."""
     yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:
@@ -146,6 +147,7 @@ dashboard:
 
 def test_number_dashboard_rejects_bad_agg(orders_csv):
     yaml = f"""
+name: Test dashboard
 datasets:
   o: {{path: {orders_csv}}}
 charts:

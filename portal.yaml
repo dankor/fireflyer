@@ -1,0 +1,9 @@
+# Runtime config for portal mode (`python -m fireflyer.portal`).
+# The environment overrides every value here — DATABASE_URL and
+# FIREFLYER_PORTAL_TITLE take precedence, so containers need not edit this file.
+
+title: Fireflyer Portal
+
+# Postgres connection string. Leave unset to fall back to a local sqlite file
+# (portal.db) so you can try portal mode without standing up a database.
+# database_url: postgresql://fireflyer:fireflyer@localhost:5432/fireflyer

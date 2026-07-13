@@ -21,7 +21,8 @@ class FakeForm:
 
 def _doc(csv_path: str) -> str:
     # Includes comments + two charts so we can prove non-target content survives.
-    return f"""datasets:
+    return f"""name: Test dashboard
+datasets:
   orders:
     path: {csv_path}
 
@@ -110,7 +111,7 @@ def test_replace_chart_block_preserves_siblings_and_reparses(orders_csv):
     assert "by_status:              # sibling — must stay byte-for-byte" in new_text
     assert "title: By status" in new_text
     # Datasets + dashboard preserved.
-    assert new_text.startswith("datasets:")
+    assert new_text.startswith("name: Test dashboard\ndatasets:")
     assert '- ["@20", "revenue:1", "by_status:1"]' in new_text
     # Whole doc still parses as a dashboard.
     ff.Dashboard.from_yaml(new_text)
@@ -118,7 +119,8 @@ def test_replace_chart_block_preserves_siblings_and_reparses(orders_csv):
 
 def test_emit_drops_none_and_empty(orders_csv):
     """An unset nullable int (map zoom) and an empty filter list emit no key."""
-    text = f"""datasets:
+    text = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   m:
@@ -207,7 +209,8 @@ def test_delete_chart_from_shared_row_keeps_siblings(orders_csv):
 
 def test_delete_chart_drops_now_empty_row(orders_csv):
     """A chart that is the only cell in its row takes the row with it."""
-    text = f"""datasets:
+    text = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -251,7 +254,8 @@ def test_insert_unknown_kind_raises(orders_csv):
 
 
 def _headed_doc(csv_path: str) -> str:
-    return f"""datasets:
+    return f"""name: Test dashboard
+datasets:
   o: {{path: {csv_path}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -344,7 +348,8 @@ def test_delete_layout_item_rejects_a_row(orders_csv):
 
 
 def _move_doc(csv_path: str) -> str:
-    return f"""datasets:
+    return f"""name: Test dashboard
+datasets:
   o: {{path: {csv_path}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -401,7 +406,8 @@ def test_move_to_new_row_unknown(orders_csv):
 
 def _merge_doc(csv_path: str) -> str:
     # `status` spans the first two rows: sized in row 1, repeated bare below.
-    return f"""datasets:
+    return f"""name: Test dashboard
+datasets:
   o: {{path: {csv_path}}}
 charts:
   orders: {{type: table, dataset: o, title: O}}
@@ -452,7 +458,8 @@ def test_move_merge_member_out_dissolves_span(orders_csv):
 def test_move_span_across_two_rows(orders_csv):
     """`move_span` places the chart spanning a row and the row directly below:
     `src:1` in the top row, bare `src` below so it inherits and spans."""
-    doc = f"""datasets:
+    doc = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   orders: {{type: table, dataset: o, title: O}}
@@ -473,7 +480,8 @@ dashboard:
 def test_move_span_onto_merged_chart_extends_to_three_rows(orders_csv):
     """Merging onto a chart that already spans 2 rows makes the moved chart span
     that whole span + 1 row below (rows 1-3)."""
-    doc = f"""datasets:
+    doc = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   orders: {{type: table, dataset: o, title: O}}
@@ -500,7 +508,8 @@ dashboard:
 def test_merge_down_extends_own_span(orders_csv):
     """`merge_down` grows a chart's own span down one row: a single-row chart
     becomes a 2-row line; a 2-row line becomes 3."""
-    doc = f"""datasets:
+    doc = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   orders: {{type: table, dataset: o, title: O}}
@@ -517,7 +526,8 @@ dashboard:
 
 
 def test_merge_down_no_row_below_errors(orders_csv):
-    doc = f"""datasets:
+    doc = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   orders: {{type: table, dataset: o, title: O}}
@@ -530,7 +540,8 @@ dashboard:
 
 def test_move_span_no_row_below_is_single_insert(orders_csv):
     """With no adjacent row below the target, span degrades to a single insert."""
-    doc = f"""datasets:
+    doc = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   orders: {{type: table, dataset: o, title: O}}
@@ -558,7 +569,8 @@ def test_resize_columns_owner_row(orders_csv):
 def test_resize_columns_from_inherited_row(orders_csv):
     """Resizing a boundary owned by a lower (inherited) row updates that row's
     cells only, leaving the first row's sizes and the span intact."""
-    doc = f"""datasets:
+    doc = f"""name: Test dashboard
+datasets:
   o: {{path: {orders_csv}}}
 charts:
   a: {{type: table, dataset: o, title: A}}
@@ -574,6 +586,30 @@ dashboard:
     assert rows[0] == '- ["@20", "a:2", "pie:2"]'          # first row unchanged shape
     assert rows[1] == '- ["@20", "x:1.5", "y:0.5", "pie"]'  # x/y resized, pie bare
     assert "grid-template-columns: 1.5fr 0.5fr 2fr" in ff.Dashboard.from_yaml(out).to_html()
+
+
+def test_resize_columns_in_tabbed_dashboard(orders_csv):
+    """Row ordinals are global across tabs, so a column drag on a *tabbed*
+    dashboard must still find its group. It previously searched flat `.items`
+    only (empty when tabbed), silently no-op'd, and the drag snapped back."""
+    doc = f"""name: Test dashboard
+datasets:
+  o: {{path: {orders_csv}}}
+charts:
+  a: {{type: table, dataset: o, title: A}}
+  b: {{type: table, dataset: o, title: B}}
+  c: {{type: table, dataset: o, title: C}}
+  d: {{type: table, dataset: o, title: D}}
+dashboard:
+  Overview:
+    - ["@22", "a", "b", "c"]
+  More:
+    - ["@30", "d"]
+"""
+    out = ce.resize_columns(doc, [0], [10, 57, 33])
+    rows = [ln.strip() for ln in out.splitlines() if '"@' in ln]
+    assert rows[0] == '- ["@22", "a:10", "b:57", "c:33"]'  # widths actually applied
+    ff.Dashboard.from_yaml(out)
 
 
 def test_apply_edit_invalid_value_raises(orders_csv):

@@ -55,7 +55,8 @@ def fake_client(monkeypatch):
 
 
 def _valid_yaml(csv_path):
-    return f"""datasets:
+    return f"""name: Test dashboard
+datasets:
   orders:
     path: {csv_path}
 charts:

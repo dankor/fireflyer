@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import traceback
 from html import escape
 
@@ -12,15 +13,47 @@ from fireflyer import config_edit
 from fireflyer import filters as filters_mod
 from fireflyer.chart.map.chart import Map
 from fireflyer.chart.table.chart import Table
+from fastapi.responses import RedirectResponse
 from fireflyer.dashboard import Dashboard, DashboardError
+from fireflyer.web import auth as auth_mod
 from fireflyer.web import chat as chat_mod
+from fireflyer.web import portal as portal_mod
 
 # Load .env (ANTHROPIC_API_KEY) before reading it. The AI assistant is enabled
 # only when a key is present; otherwise the editor shows a setup notice.
 load_dotenv()
 CHAT_ENABLED = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
+# Portal mode (owner-approved exception to the no-persistence anti-goal, scoped
+# to web/): when FIREFLYER_PORTAL is set, `/` becomes a gallery of dashboards
+# stored in a DB and each opens in the existing editor. A DATABASE_URL selects
+# Postgres; otherwise a local sqlite file. Off by default — `/` is the usual
+# single-dashboard editor. Tests set `app.state.store` directly.
+PORTAL_ENABLED = bool(os.environ.get("FIREFLYER_PORTAL"))
+PORTAL_TITLE = os.environ.get("FIREFLYER_PORTAL_TITLE", "Fireflyer Portal")
+
 app = FastAPI()
+app.state.store = (
+    portal_mod.make_store(os.environ.get("DATABASE_URL")) if PORTAL_ENABLED else None
+)
+# Portal mode is gated behind a login. `authenticator` is the swappable
+# credential check (default: admin/admin); None disables auth entirely (local
+# mode). Tests set both `store` and `authenticator` directly.
+app.state.authenticator = auth_mod.default_authenticator() if PORTAL_ENABLED else None
+
+
+@app.middleware("http")
+async def _require_login(request: Request, call_next):
+    """When auth is on, every route except the login page requires a session;
+    unauthenticated requests are redirected to /login."""
+    auth = app.state.authenticator
+    if (
+        auth is not None
+        and request.url.path != "/login"
+        and auth_mod.current_user(request) is None
+    ):
+        return RedirectResponse("/login", status_code=303)
+    return await call_next(request)
 
 # Pinned htmx version. Loaded once on the editor page so charts embedded via
 # innerHTML can use hx-* attributes without each chart shipping its own script.
@@ -28,7 +61,9 @@ HTMX_SRC = "https://unpkg.com/htmx.org@1.9.12"
 
 # Starter — exercises every layout element: header, two-chart row, separator,
 # single-chart row. Small enough to read at a glance.
-DEFAULT_YAML = """datasets:
+DEFAULT_YAML = """name: Orders overview
+
+datasets:
   orders:
     path: files/orders.csv
 
@@ -165,12 +200,39 @@ INDEX = f"""<!DOCTYPE html>
     font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
     color: var(--text); background: var(--bg); }}
   .topbar {{
-    position: relative; height: 44px; display: flex; align-items: center; gap: 16px;
+    position: relative; height: 44px; display: flex; align-items: center;
+    justify-content: space-between;
     padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border);
   }}
-  .topbar .brand {{ font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }}
+  .topbar-left, .topbar-right {{ display: flex; align-items: center; gap: 14px; }}
+  .topbar .brand {{ font-weight: 600; font-size: 14px; letter-spacing: -0.01em;
+    color: var(--text); text-decoration: none; }}
+  a.brand:hover {{ color: var(--accent); }}
+  .topbar .ff-nav {{ display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: 5px; color: var(--text);
+    text-decoration: none; font-size: 16px; }}
+  .topbar .ff-nav:hover {{ background: var(--bg); }}
+  /* Dashboard title in the left group, after the logo (separated by a dot).
+     Click-to-rename: editable in place; capped width with ellipsis so a long
+     name doesn't push the right group (grows to full text while focused). */
+  .topbar .ff-sep {{ color: var(--muted); }}
+  .topbar .ff-dash-name {{ font-size: 14px; font-weight: 600; color: var(--text);
+    white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis;
+    padding: 3px 8px; border-radius: 4px; cursor: text; outline: none; }}
+  .topbar .ff-dash-name:hover {{ background: var(--bg); }}
+  .topbar .ff-dash-name:focus {{ background: var(--bg); overflow: visible; max-width: none;
+    box-shadow: 0 0 0 2px var(--accent); }}
+  /* 3-segment icon theme switch: Auto (A) / Light (sun) / Dark (moon). */
+  .topbar .ff-theme {{ display: inline-flex; border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden; }}
+  .topbar .ff-theme button {{ background: var(--panel); color: var(--muted); border: 0;
+    border-left: 1px solid var(--border); padding: 5px 8px; cursor: pointer;
+    display: inline-flex; align-items: center; }}
+  .topbar .ff-theme button:first-child {{ border-left: 0; }}
+  .topbar .ff-theme button svg {{ width: 16px; height: 16px; display: block; }}
+  .topbar .ff-theme button:hover {{ background: var(--bg); color: var(--text); }}
+  .topbar .ff-theme button.active {{ background: var(--accent); color: #fff; }}
   .topbar .toggle {{
-    margin-left: auto;
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
     padding: 5px 12px; border-radius: 4px; font-size: 12px; cursor: pointer;
   }}
@@ -181,7 +243,30 @@ INDEX = f"""<!DOCTYPE html>
   }}
   .topbar .run:hover {{ background: var(--accent-hover); }}
   .topbar .run:disabled {{ opacity: 0.6; cursor: not-allowed; }}
-  .topbar #status {{ font-size: 12px; color: var(--muted); }}
+{auth_mod.PROFILE_CSS}
+  /* Output pane: refresh overlay shown when the YAML is edited but not re-run. */
+  .pane.output {{ position: relative; }}
+  /* Greyed as a "stale" cue, but still interactive — the resize/move/edit
+     handlers read the live textarea and re-render on release, so acting on a
+     stale preview stays consistent (and blocking it broke vertical resize). */
+  .pane.output.stale .pane-body {{ opacity: 0.55; filter: grayscale(0.35);
+    transition: opacity 0.12s; }}
+  /* Centered in the output pane (both axes) and sized responsively via clamp,
+     so it stays a big, obvious target at any pane width. */
+  .ff-refresh {{ display: none; position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%); z-index: 6; align-items: center; gap: 10px;
+    background: var(--accent); color: #fff; border: 0;
+    padding: clamp(10px, 1.6vw, 18px) clamp(20px, 2.6vw, 34px);
+    border-radius: 10px; font-size: clamp(15px, 1.4vw, 20px); font-weight: 600;
+    cursor: pointer; white-space: nowrap; max-width: calc(100% - 32px);
+    box-shadow: 0 8px 26px rgba(0,0,0,0.32); transition: background 0.12s, transform 0.08s; }}
+  .ff-refresh:hover {{ background: var(--accent-hover); }}
+  .ff-refresh:active {{ transform: translate(-50%, -50%) scale(0.97); }}
+  .pane.output.stale .ff-refresh {{ display: inline-flex; }}
+  /* Transient error toast (bottom-centre). */
+  .ff-toast {{ position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--error); color: #fff; padding: 9px 16px; border-radius: 6px;
+    font-size: 13px; z-index: 50; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }}
   .layout {{
     display: grid; grid-template-columns: 1fr 5px 1fr;
     background: var(--border);
@@ -352,17 +437,23 @@ INDEX = f"""<!DOCTYPE html>
 </head>
 <body>
 <header class="topbar">
-  <span class="brand">Fireflyer</span>
-  <button class="run" id="run">Run</button>
-  <button class="toggle" id="theme-toggle" title="Cycle theme (Auto / Light / Dark)">Theme: Auto</button>
-  <button class="toggle" id="toggle">Preview</button>
-  <span id="status"></span>
+  <div class="topbar-left">
+    __FF_NAV__
+    __FF_BRAND__
+    __FF_DASH_NAME__
+  </div>
+  <div class="topbar-right">
+    __FF_SAVE__
+    <button class="toggle" id="toggle">Preview</button>
+    __FF_THEME__
+    __FF_USER_MENU__
+  </div>
   <button type="button" class="ff-move-discard" id="ff-move-cancel" hidden title="Cancel move (Esc)" aria-label="Cancel move (Esc)">✕ (Esc)</button>
 </header>
 <div class="layout" id="layout">
   <section class="pane editor">
     <div class="pane-body">
-      <textarea id="code" spellcheck="false" autocomplete="off">{escape(DEFAULT_YAML)}</textarea>
+      <textarea id="code" spellcheck="false" autocomplete="off">__FF_YAML_CONTENT__</textarea>
     </div>
     <div class="chat collapsed" id="chat">
       <div class="chat-header">AI editor
@@ -371,8 +462,10 @@ INDEX = f"""<!DOCTYPE html>
     </div>
   </section>
   <div class="pane-resizer" id="pane-resizer" title="Drag to resize"></div>
-  <section class="pane">
+  <section class="pane output" id="output-pane">
     <div class="pane-body"><div id="output"></div></div>
+    <!-- Shown (over a greyed-out, stale preview) only after a manual YAML edit. -->
+    <button type="button" class="ff-refresh" id="refresh" title="Refresh preview (⌘/Ctrl+Enter)">↻ Refresh</button>
   </section>
 </div>
 <div class="ff-modal-overlay" id="ff-modal-overlay">
@@ -384,30 +477,43 @@ INDEX = f"""<!DOCTYPE html>
   <button type="button" data-add-kind="separator">Separator</button>
   <button type="button" data-add-kind="tab">Tab</button>
 </div>
+<!-- Transient error toast (replaces the old topbar status text). -->
+<div class="ff-toast" id="ff-toast" hidden></div>
 <script>
-const runBtn = document.getElementById('run');
 const codeEl = document.getElementById('code');
 const outEl = document.getElementById('output');
-const statusEl = document.getElementById('status');
+const outPane = document.getElementById('output-pane');
+const refreshBtn = document.getElementById('refresh');
+const toastEl = document.getElementById('ff-toast');
 
-// Theme toggle — cycles Auto -> Light -> Dark. Sets `data-ff-theme` on <html>,
-// which themes the editor chrome, the dashboard preview, and every chart inside
-// it (their CSS keys off this attribute on any ancestor). "auto" leaves it off
-// so the OS preference wins. The choice persists across reloads.
-const themeBtn = document.getElementById('theme-toggle');
+// Transient error toast — replaces the old topbar status line for the rare
+// config-edit failure messages. Auto-hides after a few seconds.
+let toastTimer = null;
+function flash(msg) {{
+  toastEl.textContent = msg;
+  toastEl.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() {{ toastEl.hidden = true; }}, 3000);
+}}
+
+// Theme switch — a 3-segment Auto / Light / Dark control. Sets `data-ff-theme`
+// on <html>, which themes the editor chrome, the dashboard preview, and every
+// chart inside it (their CSS keys off this attribute on any ancestor). "auto"
+// leaves it off so the OS preference wins. The choice persists across reloads.
+const themeSwitch = document.getElementById('theme-switch');
 const THEME_MODES = ['auto', 'light', 'dark'];
-const THEME_LABELS = {{auto: 'Theme: Auto', light: 'Theme: Light', dark: 'Theme: Dark'}};
 let themeMode = localStorage.getItem('ffTheme') || 'auto';
 if (THEME_MODES.indexOf(themeMode) < 0) themeMode = 'auto';
 function applyTheme() {{
   if (themeMode === 'auto') delete document.documentElement.dataset.ffTheme;
   else document.documentElement.dataset.ffTheme = themeMode;
-  themeBtn.textContent = THEME_LABELS[themeMode];
+  themeSwitch.querySelectorAll('button').forEach(function(b) {{
+    b.classList.toggle('active', b.dataset.mode === themeMode);
+  }});
   localStorage.setItem('ffTheme', themeMode);
 }}
-themeBtn.addEventListener('click', () => {{
-  themeMode = THEME_MODES[(THEME_MODES.indexOf(themeMode) + 1) % THEME_MODES.length];
-  applyTheme();
+themeSwitch.querySelectorAll('button').forEach(function(b) {{
+  b.addEventListener('click', function() {{ themeMode = b.dataset.mode; applyTheme(); }});
 }});
 applyTheme();
 
@@ -421,8 +527,8 @@ function syncActiveTab() {{
 }}
 
 async function run() {{
-  statusEl.textContent = 'running…';
-  runBtn.disabled = true;
+  outPane.classList.remove('stale');  // re-rendering now: clear the stale overlay
+  refreshBtn.disabled = true;
   try {{
     const res = await fetch('/execute?active_tab=' + activeTab, {{
       method: 'POST',
@@ -434,13 +540,89 @@ async function run() {{
     // htmx doesn't auto-wire nodes inserted via innerHTML; wire them now.
     if (window.htmx) window.htmx.process(outEl);
     syncActiveTab();
-    statusEl.textContent = data.ok ? 'ok' : 'error';
   }} catch (e) {{
     outEl.innerHTML = '<pre class="error">' + e + '</pre>';
-    statusEl.textContent = 'error';
   }} finally {{
-    runBtn.disabled = false;
+    refreshBtn.disabled = false;
+    updateSaveState();  // config-edit ops change the YAML then run() — refresh Save
   }}
+}}
+
+// --- unsaved-changes (Save) + editable title ------------------------------
+// Two independent "dirty" notions: the preview is *stale* vs the last render
+// (drives Refresh), and the YAML is *unsaved* vs what's stored (drives Save).
+const saveBtn = document.getElementById('ff-save');       // portal only
+const nameEl = document.getElementById('ff-dash-name');   // editable title
+let savedYaml = codeEl.value;
+
+function markStale() {{ outPane.classList.add('stale'); }}
+function updateSaveState() {{ if (saveBtn) saveBtn.hidden = (codeEl.value === savedYaml); }}
+
+// Title <-> YAML `name:` key (two-way). Read/rewrite the top-level line.
+function yamlName(text) {{
+  const m = text.match(/^name:[ \\t]*(.*)$/m);
+  if (!m) return '';
+  let v = m[1].trim();
+  if (v.startsWith('"')) {{ try {{ return JSON.parse(v); }} catch (e) {{ return v.slice(1, -1); }} }}
+  if (v.startsWith("'") && v.endsWith("'")) return v.slice(1, -1).replace(/''/g, "'");
+  return v;
+}}
+function setYamlName(text, name) {{ return text.replace(/^name:.*$/m, 'name: ' + JSON.stringify(name)); }}
+function syncNameFromYaml() {{
+  if (nameEl && document.activeElement !== nameEl) nameEl.textContent = yamlName(codeEl.value);
+}}
+
+// A manual YAML edit greys out the (now stale) preview and reveals the refresh
+// button; it may also change the name or dirty state. Programmatic edits (chat,
+// config-edit) call run() directly, which refreshes Save on its own.
+codeEl.addEventListener('input', function() {{ markStale(); updateSaveState(); syncNameFromYaml(); }});
+
+async function doSave() {{
+  if (!saveBtn || saveBtn.hidden) return;   // nothing to save
+  const label = saveBtn.textContent;
+  saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+  try {{
+    const res = await fetch(saveBtn.dataset.saveUrl, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+      body: new URLSearchParams({{yaml_text: codeEl.value}}),
+    }});
+    const data = await res.json();
+    if (data.ok) {{ savedYaml = codeEl.value; saveBtn.textContent = 'Saved \\u2713'; }}
+    else {{ saveBtn.textContent = 'Save failed'; console.warn('Save failed:', data.error || ''); }}
+  }} catch (e) {{ saveBtn.textContent = 'Save failed'; }}
+  finally {{
+    saveBtn.disabled = false;
+    setTimeout(function() {{ saveBtn.textContent = label; updateSaveState(); }}, 1200);
+  }}
+}}
+
+if (saveBtn) {{
+  saveBtn.addEventListener('click', doSave);
+  window.addEventListener('keydown', function(e) {{
+    if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {{ e.preventDefault(); doSave(); }}
+  }});
+  // Guard against losing unsaved edits by navigating away (logo / ☰ / reload).
+  window.addEventListener('beforeunload', function(e) {{
+    if (!saveBtn.hidden) {{ e.preventDefault(); e.returnValue = ''; }}
+  }});
+}}
+
+if (nameEl) {{
+  nameEl.setAttribute('contenteditable', 'plaintext-only');
+  nameEl.setAttribute('spellcheck', 'false');
+  nameEl.setAttribute('title', 'Click to rename');
+  nameEl.addEventListener('keydown', function(e) {{
+    if (e.key === 'Enter') {{ e.preventDefault(); nameEl.blur(); }}
+    else if (e.key === 'Escape') {{ e.preventDefault(); nameEl.textContent = yamlName(codeEl.value); nameEl.blur(); }}
+  }});
+  nameEl.addEventListener('blur', function() {{
+    const nm = nameEl.textContent.trim();
+    if (!nm || nm === yamlName(codeEl.value)) {{ nameEl.textContent = yamlName(codeEl.value); return; }}
+    codeEl.value = setYamlName(codeEl.value, nm);   // rewrite the YAML `name:` key
+    nameEl.textContent = nm;
+    updateSaveState();   // renaming is an unsaved change (but not a preview change)
+  }});
 }}
 
 // A crossfilter click or deployed tab button swaps #fireflyer-dashboard via
@@ -460,7 +642,7 @@ outEl.addEventListener('htmx:afterSwap', () => {{
 
 // Render the default example immediately so the page isn't empty.
 window.addEventListener('DOMContentLoaded', run);
-runBtn.addEventListener('click', run);
+refreshBtn.addEventListener('click', run);
 codeEl.addEventListener('keydown', e => {{
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {{ e.preventDefault(); run(); }}
 }});
@@ -525,33 +707,25 @@ function reduceRatio(nums) {{
 
 const editingDisabled = () => layoutEl.classList.contains('editor-hidden');
 
-// Find the `[ ... ]` span of the Nth dashboard row (n = ordinal). Returns the
-// indices of the opening bracket and closing bracket, or null if the row isn't
-// written in flow style. Layout rows never nest, so the next ']' closes it.
-function rowBracketSpan(text, ordinal) {{
+// Rewrite the Nth @<height> token in the `dashboard:` section. `@<n>` is the
+// row-height indicator and rows carry exactly one each in order, so the Nth
+// token is row `ordinal`'s height. Rewriting the token directly works for any
+// YAML style (flow `["@30", ...]` or block `- "@30"`) — an earlier bracket-only
+// version silently no-op'd on block-style rows, so drags snapped back.
+function setRowUnits(ordinal, units) {{
+  const text = codeEl.value;
   const dashIdx = text.search(/^dashboard:/m);
   const re = /@(\\d+(?:\\.\\d+)?)/g;
   re.lastIndex = dashIdx === -1 ? 0 : dashIdx;
   let m, n = 0;
   while ((m = re.exec(text)) !== null) {{
     if (n === ordinal) {{
-      const lb = text.lastIndexOf('[', m.index);
-      const rb = text.indexOf(']', m.index);
-      return (lb === -1 || rb === -1) ? null : {{ lb, rb }};
+      codeEl.value = text.slice(0, m.index) + '@' + units
+        + text.slice(m.index + m[0].length);
+      return;
     }}
     n++;
   }}
-  return null;
-}}
-
-// Rewrite the Nth @<height> token, preserving surrounding formatting.
-function setRowUnits(ordinal, units) {{
-  const span = rowBracketSpan(codeEl.value, ordinal);
-  if (!span) return;
-  const text = codeEl.value;
-  const body = text.slice(span.lb, span.rb)
-    .replace(/@(\\d+(?:\\.\\d+)?)/, '@' + units);
-  codeEl.value = text.slice(0, span.lb) + body + text.slice(span.rb);
 }}
 
 outEl.addEventListener('mousedown', e => {{
@@ -853,7 +1027,7 @@ async function insertLayoutItem(kind, before) {{
   fd.append('before', before);
   const res = await fetch('/chart/config/insert-item', {{ method: 'POST', body: fd }});
   const data = await res.json();
-  if (!data.ok) {{ statusEl.textContent = data.error || 'Could not insert.'; return; }}
+  if (!data.ok) {{ flash(data.error || 'Could not insert.'); return; }}
   codeEl.value = data.yaml;
   run();
 }}
@@ -963,7 +1137,7 @@ async function saveHeader(index, text) {{
   fd.append('text', text);
   const res = await fetch('/chart/config/header', {{ method: 'POST', body: fd }});
   const data = await res.json();
-  if (!data.ok) {{ statusEl.textContent = data.error || 'Could not rename.'; return; }}
+  if (!data.ok) {{ flash(data.error || 'Could not rename.'); return; }}
   codeEl.value = data.yaml;
   run();
 }}
@@ -978,7 +1152,7 @@ async function postTab(url, params) {{
   for (const [k, v] of Object.entries(params)) fd.append(k, v);
   const res = await fetch(url, {{ method: 'POST', body: fd }});
   const data = await res.json();
-  if (!data.ok) {{ statusEl.textContent = data.error || 'Tab action failed.'; return null; }}
+  if (!data.ok) {{ flash(data.error || 'Tab action failed.'); return null; }}
   codeEl.value = data.yaml;
   return data;
 }}
@@ -1075,7 +1249,7 @@ async function postMove(url, params) {{
   for (const [k, v] of Object.entries(params)) fd.append(k, v);
   const res = await fetch(url, {{ method: 'POST', body: fd }});
   const data = await res.json();
-  if (!data.ok) {{ statusEl.textContent = data.error || 'Could not move.'; return; }}
+  if (!data.ok) {{ flash(data.error || 'Could not move.'); return; }}
   codeEl.value = data.yaml;
   run();
 }}
@@ -1442,9 +1616,200 @@ modalBox.addEventListener('submit', async e => {{
 """
 
 
+# Topbar pieces. Nav is a hamburger link to the dashboards gallery; the brand is
+# a link there too in portal mode (a plain span locally, where `/` is the editor
+# itself). The save button/name-edit/theme JS all live in the main INDEX script.
+_NAV_HTML = '<a class="ff-nav" href="/" title="Dashboards" aria-label="Dashboards">☰</a>'
+
+
+def _brand_html(link: bool) -> str:
+    if link:
+        return '<a class="brand" href="/" title="Dashboards">Fireflyer</a>'
+    return '<span class="brand">Fireflyer</span>'
+
+
+def _dash_name_html(name: str) -> str:
+    # Sits after the logo, set off by a dot. Editable in place (wired by the
+    # INDEX script); two-way with the YAML `name:`.
+    return (
+        '<span class="ff-sep" aria-hidden="true">·</span>'
+        f'<span class="ff-dash-name" id="ff-dash-name">{escape(name)}</span>'
+    )
+
+
+def _save_html(dash_id: str) -> str:
+    # Hidden until there are unsaved changes (toggled by updateSaveState()).
+    return f'<button class="run" id="ff-save" data-save-url="/d/{dash_id}/save" hidden>Save</button>'
+
+
+# Icon-only theme switch. Inline SVG (stroke=currentColor so it inherits the
+# segment colour): "A" for auto, sun for light, moon for dark. No text labels —
+# `title`/`aria-label` carry the meaning.
+_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{}</svg>'
+_THEME_ICONS = {
+    "auto": _ICON_SVG.format('<path d="M5 20 12 4l7 16M7.5 14h9"/>'),
+    "light": _ICON_SVG.format(
+        '<circle cx="12" cy="12" r="4"/>'
+        '<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4'
+        'M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
+    ),
+    "dark": _ICON_SVG.format('<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>'),
+}
+
+
+def _theme_switch() -> str:
+    labels = {"auto": "Auto (follow OS)", "light": "Light", "dark": "Dark"}
+    buttons = "".join(
+        f'<button type="button" data-mode="{mode}" title="Theme: {labels[mode]}"'
+        f' aria-label="Theme: {labels[mode]}">{_THEME_ICONS[mode]}</button>'
+        for mode in ("auto", "light", "dark")
+    )
+    return f'<div class="ff-theme" id="theme-switch" role="group" aria-label="Theme">{buttons}</div>'
+
+
+def render_editor_page(
+    yaml_text: str,
+    *,
+    nav: str = "",
+    brand: str = "",
+    dash_name: str = "",
+    save: str = "",
+    theme: str = "",
+    user_menu: str = "",
+) -> str:
+    """The editor page seeded with `yaml_text` and topbar pieces — left: `nav`
+    (Dashboards link) + `brand` (logo); centered editable `dash_name`; right:
+    `save` (shown only when unsaved), Preview, `theme` switch, `user_menu`
+    (profile). INDEX carries the placeholders; both modes share it."""
+    return (
+        INDEX.replace("__FF_YAML_CONTENT__", escape(yaml_text))
+        .replace("__FF_NAV__", nav)
+        .replace("__FF_BRAND__", brand)
+        .replace("__FF_DASH_NAME__", dash_name)
+        .replace("__FF_SAVE__", save)
+        .replace("__FF_THEME__", theme)
+        .replace("__FF_USER_MENU__", user_menu)
+    )
+
+
+def _user_menu(request: Request, extra: str = "") -> str:
+    """The profile dropdown (username + optional `extra` + logout), or empty when
+    auth is off."""
+    if app.state.authenticator is None:
+        return ""
+    return auth_mod.user_menu(auth_mod.current_user(request) or "", extra=extra)
+
+
+@app.get("/login")
+def login_form():
+    if app.state.authenticator is None:  # auth off: nothing to log in to
+        return RedirectResponse("/", status_code=303)
+    return auth_mod.login_page(title=PORTAL_TITLE)
+
+
+@app.post("/login")
+async def login_submit(username: str = Form(""), password: str = Form("")):
+    identity = app.state.authenticator.verify(username, password)
+    if not identity:
+        return auth_mod.login_page("Invalid username or password.", PORTAL_TITLE)
+    resp = RedirectResponse("/", status_code=303)
+    auth_mod.set_session(resp, identity)
+    return resp
+
+
+@app.post("/logout")
+async def logout() -> RedirectResponse:
+    resp = RedirectResponse("/login", status_code=303)
+    auth_mod.clear_session(resp)
+    return resp
+
+
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return INDEX
+def index(request: Request) -> str:
+    # Portal on: gallery of stored dashboards. Off: the single-dashboard editor.
+    if app.state.store is not None:
+        return portal_mod.render_gallery(
+            app.state.store.list(), PORTAL_TITLE, _user_menu(request)
+        )
+    # Local mode: no nav/save/profile; just logo, editable name, theme switch.
+    return render_editor_page(
+        DEFAULT_YAML,
+        brand=_brand_html(link=False),
+        dash_name=_dash_name_html(Dashboard.from_yaml(DEFAULT_YAML).name),
+        theme=_theme_switch(),
+    )
+
+
+def _empty_yaml(name: str) -> str:
+    """A blank but valid dashboard named `name` — no datasets, charts, or layout
+    yet. The author fills it in the editor. json.dumps quotes the name safely."""
+    return f"name: {json.dumps(name)}\n\ndatasets: {{}}\n\ncharts: {{}}\n\ndashboard: []\n"
+
+
+def _set_yaml_name(yaml_text: str, name: str) -> str:
+    """Rewrite the top-level `name:` line (used when cloning). `name:` is a
+    required column-0 key, so replacing the first such line suffices."""
+    return re.sub(r"(?m)^name:.*$", f"name: {json.dumps(name)}", yaml_text, count=1)
+
+
+def _current_author(request: Request) -> str:
+    """The logged-in user, recorded as a dashboard's author. Empty when auth is
+    off (local dev)."""
+    if app.state.authenticator is None:
+        return ""
+    return auth_mod.current_user(request) or ""
+
+
+@app.post("/new")
+async def portal_new(request: Request, name: str = Form("")) -> RedirectResponse:
+    yaml_text = _empty_yaml(name.strip() or "Untitled dashboard")
+    new_id = app.state.store.create(yaml_text, _current_author(request))
+    return RedirectResponse(f"/d/{new_id}", status_code=303)
+
+
+@app.post("/d/{dash_id}/clone")
+async def portal_clone(dash_id: str, request: Request, name: str = Form("")):
+    row = app.state.store.get(dash_id)
+    if row is None:
+        return HTMLResponse("Dashboard not found", status_code=404)
+    new_name = name.strip() or f"{row.name} (copy)"
+    new_id = app.state.store.create(
+        _set_yaml_name(row.yaml, new_name), _current_author(request)
+    )
+    return RedirectResponse(f"/d/{new_id}", status_code=303)
+
+
+@app.get("/d/{dash_id}", response_class=HTMLResponse)
+def portal_open(dash_id: str, request: Request) -> HTMLResponse:
+    row = app.state.store.get(dash_id)
+    if row is None:
+        return HTMLResponse("Dashboard not found", status_code=404)
+    # Theme switch lives centered inside the profile menu (topbar slot empty).
+    theme_in_menu = f'<div class="ff-profile-theme">{_theme_switch()}</div>'
+    page = render_editor_page(
+        row.yaml,
+        nav=_NAV_HTML,
+        brand=_brand_html(link=True),
+        dash_name=_dash_name_html(row.name),
+        save=_save_html(row.id),
+        user_menu=_user_menu(request, extra=theme_in_menu),
+    )
+    return HTMLResponse(page)
+
+
+@app.post("/d/{dash_id}/save")
+async def portal_save(dash_id: str, yaml_text: str = Form("")) -> dict:
+    try:
+        app.state.store.save(dash_id, yaml_text)
+        return {"ok": True}
+    except DashboardError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/d/{dash_id}/delete")
+async def portal_delete(dash_id: str) -> RedirectResponse:
+    app.state.store.delete(dash_id)
+    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/execute")

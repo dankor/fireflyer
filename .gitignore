@@ -1,6 +1,10 @@
 # Secrets — never commit
 .env
 
+# Portal mode's local sqlite fallback store (created by `python -m fireflyer.portal`
+# when no DATABASE_URL is set)
+portal.db
+
 # Python
 .venv/
 __pycache__/
