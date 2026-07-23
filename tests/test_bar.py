@@ -1,9 +1,9 @@
 import fireflyer as ff
 
 
-def test_bar_orders_by_day_stacked(orders_csv, snapshot):
+def test_bar_orders_by_day_stacked(orders_parquet, snapshot):
     chart = ff.chart.bar(
-        dataset=orders_csv,
+        dataset=orders_parquet,
         title="Orders by Day, stacked by status",
         x="day",
         y="status",
@@ -11,14 +11,14 @@ def test_bar_orders_by_day_stacked(orders_csv, snapshot):
     snapshot(chart.to_html())
 
 
-def test_bar_segments_match_data(orders_csv):
+def test_bar_segments_match_data(orders_parquet):
     """Fixture distribution by (day, status):
         2026-06-01 → paid:3                 (1 segment)
         2026-06-02 → pending:1, paid:1      (2 segments)
         2026-06-03 → cancelled:1            (1 segment)
         2026-06-04 → pending:1              (1 segment)
     """
-    chart = ff.chart.bar(dataset=orders_csv, title="t", x="day", y="status")
+    chart = ff.chart.bar(dataset=orders_parquet, title="t", x="day", y="status")
     html = chart.to_html()
     # 5 stack segments total across 4 bars.
     assert html.count("<rect") == 5
@@ -35,9 +35,9 @@ def test_bar_segments_match_data(orders_csv):
     assert '<span class="meta">4</span>' in html
 
 
-def test_bar_segments_clickable_with_crossfilter(orders_csv):
+def test_bar_segments_clickable_with_crossfilter(orders_parquet):
     """With a crossfilter ctx, segments carry hx-* attrs and emitter-prefixed tokens."""
-    chart = ff.chart.bar(dataset=orders_csv, title="t", x="day", y="status")
+    chart = ff.chart.bar(dataset=orders_parquet, title="t", x="day", y="status")
     crossfilter = {
         "endpoint": "/dashboard",
         "target": "#fireflyer-dashboard",
@@ -58,9 +58,9 @@ def test_bar_segments_clickable_with_crossfilter(orders_csv):
     assert '<li class="active">' in html
 
 
-def test_bar_hover_tooltip_renders(orders_csv):
+def test_bar_hover_tooltip_renders(orders_parquet):
     """Each segment gets a paired tooltip below the SVG, indexed by data-i."""
-    chart = ff.chart.bar(dataset=orders_csv, title="t", x="day", y="status")
+    chart = ff.chart.bar(dataset=orders_parquet, title="t", x="day", y="status")
     html = chart.to_html()
     # Fixture has 5 segments total.
     assert html.count('class="fireflyer-bar-tooltip"') == 5
@@ -70,10 +70,10 @@ def test_bar_hover_tooltip_renders(orders_csv):
     assert 'class="fireflyer-bar-tooltip-meta">3<' in html
 
 
-def test_bar_filter_narrows_before_grouping(orders_csv):
+def test_bar_filter_narrows_before_grouping(orders_parquet):
     """Declared filter applies before the (x, y) group-by + count."""
     chart = ff.chart.bar(
-        dataset=orders_csv,
+        dataset=orders_parquet,
         title="Paid only",
         x="day",
         y="status",

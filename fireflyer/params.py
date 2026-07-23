@@ -92,12 +92,17 @@ class TextParam(Param):
 
 
 class DatasetParam(Param):
+    """The chart's dataset — its unique name. A plain text field for now; once
+    the portal's dataset gallery is wired in, `ctx.datasets` can turn this back
+    into a dropdown of the stored dataset names."""
+
     kind = "dataset"
 
     def render(self, value, ctx: ParamContext) -> str:
+        val = "" if value is None else str(value)
         return self._wrap(
-            f'<select class="ff-input" name="{escape(self.name, quote=True)}">'
-            f'{_options(list(ctx.datasets.keys()), value)}</select>'
+            f'<input class="ff-input" type="text" name="{escape(self.name, quote=True)}" '
+            f'value="{escape(val, quote=True)}">'
         )
 
     def parse(self, form):

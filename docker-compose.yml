@@ -6,6 +6,14 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # Local paths mode: every host folder you map under this base dir (see the
+      # volumes below) becomes a switchable **path** in the UI, holding its
+      # dashboards in `<path>/dashboards/*.yaml`.
+      FIREFLYER_PATHS: /paths
+      # Datasets (Parquet) live here, isolated per path — a container volume, so
+      # web uploads never touch your dashboard files.
+      FIREFLYER_DATA: /data/datasets
     ports:
       - "8000:8000"
     volumes:
@@ -15,6 +23,16 @@ services:
       - ./fireflyer:/app/fireflyer
       - ./files:/app/files
       - ./tests:/app/tests
+      # PATHS: each host folder you map under /paths is a path you can switch
+      # between in the UI. Add/remove/repoint one by editing these mappings and
+      # re-running `docker compose up` (there's no in-app path management). The
+      # default mounts ./paths so the seeded `demo` path persists on your host;
+      # map any other host folder as its own path, e.g.:
+      #   - /Users/me/team-a:/paths/team-a
+      #   - /Users/me/personal:/paths/personal
+      - ${FIREFLYER_PATHS_HOST:-./paths}:/paths
+      # Per-path dataset blobs (isolated), kept out of your dashboard folders.
+      - fireflyer-data:/data
     command: >
       uvicorn fireflyer.web.app:app
       --host 0.0.0.0 --port 8000 --reload
@@ -32,6 +50,22 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # Garage — S3-compatible object storage for dataset Parquet. One-time init
+  # after first `up` (creates the layout, an access key, and the bucket):
+  #   docker compose exec garage /garage layout assign -z dc1 -c 1G $(docker compose exec garage /garage node id -q | cut -d@ -f1)
+  #   docker compose exec garage /garage layout apply --version 1
+  #   docker compose exec garage /garage bucket create fireflyer
+  #   docker compose exec garage /garage key create fireflyer-key   # prints the key id + secret
+  #   docker compose exec garage /garage bucket allow --read --write fireflyer --key fireflyer-key
+  # Put the printed key id/secret into FIREFLYER_S3_ACCESS_KEY / _SECRET_KEY below.
+  garage:
+    image: dxflrs/garage:v1.0.1
+    profiles: ["portal"]
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+
   portal:
     build: .
     profiles: ["portal"]
@@ -46,13 +80,27 @@ services:
       # Login defaults to admin/admin. Override user/pass and set a real session
       # secret for anything beyond local use (FIREFLYER_USER/PASSWORD/SECRET).
       FIREFLYER_SECRET: dev-portal-secret-change-me
+      # Datasets: by default stored in a persistent folder (works out of the box).
+      FIREFLYER_DATA: /data/datasets
+      # To use Garage instead, do the one-time init above, then uncomment these
+      # with the key from `garage key create` (and add `garage` to depends_on):
+      # FIREFLYER_S3_ENDPOINT: http://garage:3900
+      # FIREFLYER_S3_BUCKET: fireflyer
+      # FIREFLYER_S3_ACCESS_KEY: <access key id>
+      # FIREFLYER_S3_SECRET_KEY: <secret access key>
+      # FIREFLYER_S3_REGION: garage
     ports:
       - "8001:8000"
     volumes:
       - ./fireflyer:/app/fireflyer
       - ./files:/app/files
       - ./tests:/app/tests
+      - datasets:/data
     command: python -m fireflyer.portal
 
 volumes:
   pgdata:
+  datasets:
+  fireflyer-data:
+  garage-meta:
+  garage-data:

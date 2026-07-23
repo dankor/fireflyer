@@ -54,11 +54,8 @@ def fake_client(monkeypatch):
     monkeypatch.setattr(chat_mod, "_client", None)
 
 
-def _valid_yaml(csv_path):
-    return f"""name: Test dashboard
-datasets:
-  orders:
-    path: {csv_path}
+def _valid_yaml(csv_path=None):
+    return """name: Test dashboard
 charts:
   t:
     type: table

@@ -6,6 +6,7 @@ import polars as pl
 
 from fireflyer import filters as filters_mod
 from fireflyer.params import ColumnParam, DatasetParam, FilterListParam, TextParam
+from fireflyer.scan import scan
 
 # Categorical palette mirroring the pie chart's so the same `y` value gets the
 # same color across charts on a dashboard. Per the per-chart-CSS policy each
@@ -111,6 +112,8 @@ class Bar:
     y: str
     filters: list = field(default_factory=list)
 
+    _resolve = None  # name -> (uri, storage_options); not a dataclass field
+
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
@@ -136,9 +139,13 @@ class Bar:
         Outside a dashboard the argument is omitted and segments render with
         no click attrs and no fade — identical to the standalone form.
         """
-        df = pl.read_csv(self.dataset)
-        df = filters_mod.apply(df, self.filters)
-        counts = df.group_by([self.x, self.y]).agg(pl.len().alias("count"))
+        # Lazy scan with predicate + projection pushdown: only x, y (+ filter
+        # columns) are read from the Parquet.
+        lf = scan(self.dataset, self._resolve)
+        preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
+        if preds:
+            lf = lf.filter(*preds)
+        counts = lf.group_by([self.x, self.y]).agg(pl.len().alias("count")).collect()
 
         # Stable tie-breaker (lexicographic value) keeps the rendered HTML
         # deterministic — polars' group_by has no order guarantee otherwise.

@@ -8,6 +8,7 @@ import polars as pl
 import yaml
 
 from fireflyer import filters as filters_mod
+from fireflyer.scan import scan
 from fireflyer.chart.bar.chart import Bar
 from fireflyer.chart.map.chart import Map
 from fireflyer.chart.number.chart import Number
@@ -139,8 +140,17 @@ class Dashboard:
     # mode just carries it. Empty when the key is absent.
     name: str = ""
 
+    # Dataset resolver: name -> (uri, storage_options). Set by `from_yaml` from
+    # the `datasets` argument (a DatasetStore or a callable); None means a
+    # chart's `dataset` is a Parquet path/URI directly. Not a dataclass field.
+    _resolve = None
+
     @classmethod
-    def from_yaml(cls, text: str) -> "Dashboard":
+    def from_yaml(cls, text: str, datasets=None) -> "Dashboard":
+        """Parse a dashboard. `datasets` resolves chart dataset *names* to their
+        stored Parquet — a `DatasetStore` (uses `.source`) or a
+        `name -> (uri, storage_options)` callable. Omitted (validation-only or
+        standalone), a chart's `dataset` is taken as a Parquet path/URI."""
         try:
             config = yaml.safe_load(text)
         except yaml.YAMLError as exc:
@@ -148,9 +158,9 @@ class Dashboard:
 
         if not isinstance(config, dict):
             raise DashboardError(
-                "top-level must be a mapping with keys: datasets, charts, dashboard"
+                "top-level must be a mapping with keys: name, charts, dashboard"
             )
-        for key in ("datasets", "charts", "dashboard", "name"):
+        for key in ("charts", "dashboard", "name"):
             if key not in config:
                 raise DashboardError(f"missing top-level key: {key!r}")
 
@@ -158,8 +168,8 @@ class Dashboard:
         if not isinstance(name, str) or not name.strip():
             raise DashboardError("top-level `name` must be a non-empty string")
 
-        datasets = _parse_datasets(config["datasets"])
-        chart_configs = _parse_charts(config["charts"], datasets)
+        resolve = _resolver_from(datasets)
+        chart_configs = _parse_charts(config["charts"])
 
         raw_dashboard = config["dashboard"]
         if isinstance(raw_dashboard, dict):
@@ -168,16 +178,29 @@ class Dashboard:
             # dashboard (span-aware), so the move machinery — which pulls a
             # chart from every row it's in — stays sound across tabs.
             _validate_unique_placements([g for t in tabs for g in t.items])
-            return cls(
-                chart_configs=chart_configs, tabs=tabs, yaml_source=text, name=name
-            )
+            dash = cls(chart_configs=chart_configs, tabs=tabs, yaml_source=text, name=name)
+        else:
+            items = _parse_layout(raw_dashboard, chart_configs)
+            items = _group_layout(items)
+            _validate_unique_placements(items)
+            dash = cls(chart_configs=chart_configs, items=items, yaml_source=text, name=name)
+        dash._resolve = resolve
+        return dash
 
-        items = _parse_layout(raw_dashboard, chart_configs)
-        items = _group_layout(items)
-        _validate_unique_placements(items)
-        return cls(
-            chart_configs=chart_configs, items=items, yaml_source=text, name=name
-        )
+    @staticmethod
+    def dataset_names(text: str) -> set[str]:
+        """The dataset names a dashboard references (its charts' `dataset:`
+        values). Best-effort — empty set if the YAML doesn't parse. Powers the
+        portal's delete-guard and cascade-rename."""
+        try:
+            dash = Dashboard.from_yaml(text)
+        except DashboardError:
+            return set()
+        return {
+            cfg.kwargs.get("dataset")
+            for cfg in dash.chart_configs.values()
+            if cfg.kwargs.get("dataset")
+        }
 
     def _tab_context(self, active_tab: int):
         """(tabs_meta | None, clamped_active, active_items).
@@ -377,6 +400,7 @@ class Dashboard:
         merged = declared + cross
         kwargs["filters"] = [f.as_dict() for f in merged]
         chart = cfg.cls(**kwargs)
+        chart._resolve = self._resolve  # name -> Parquet source at read time
 
         if isinstance(chart, Pie):
             active = filters_mod.active_values_for(cf_tokens, cid, chart.column)
@@ -406,21 +430,20 @@ class Dashboard:
         # When both apply (chart is both source and downstream of others),
         # the template prefers the emitter state — the user typically wants
         # to know which chart is causing the cascade.
-        applied = _applied_filters_for(merged, kwargs["dataset"])
+        applied = _applied_filters_for(merged, kwargs["dataset"], self._resolve)
         emitted = filters_mod.emitted_by(cf_tokens, cid)
         return {"html": chart_html, "filters": applied, "emitted": emitted}
 
 
 def _applied_filters_for(
-    filters: list[filters_mod.Filter], dataset_path: str
+    filters: list[filters_mod.Filter], dataset: str, resolve
 ) -> list[filters_mod.Filter]:
     """Filters that actually narrow this chart's data — column must exist."""
     if not filters:
         return []
-    # `scan_csv` reads only the schema. Cheaper than `read_csv`. The chart's
-    # own to_html also reads the CSV, so a second header read is acceptable
-    # at MVP scale; revisit if rendering many charts becomes hot.
-    columns = pl.scan_csv(dataset_path).collect_schema().names()
+    # `scan(...).collect_schema()` reads only the Parquet footer/schema, not the
+    # data. The chart's own to_html scans it too; a second schema read is cheap.
+    columns = scan(dataset, resolve).collect_schema().names()
     return [f for f in filters if f.column in columns]
 
 
@@ -563,20 +586,30 @@ def _validate_unique_placements(items: list) -> None:
         )
 
 
-def _parse_datasets(raw) -> dict[str, str]:
-    if not isinstance(raw, dict):
-        raise DashboardError("`datasets` must be a mapping of id -> config")
-    out = {}
-    for did, cfg in raw.items():
-        if not isinstance(cfg, dict) or "path" not in cfg:
-            raise DashboardError(
-                f"dataset {did!r}: must be a mapping with a `path` field"
-            )
-        out[did] = cfg["path"]
-    return out
+def rename_dataset_ref(text: str, old: str, new: str) -> str:
+    """Rewrite chart `dataset: <old>` references to `<new>` in a dashboard's
+    YAML text (cascade-rename). Word-boundary lookahead so `orders` doesn't
+    match `orders_2`; leaves unrelated text (comments, layout) untouched."""
+    return re.sub(
+        r"(dataset:[ \t]*)" + re.escape(old) + r"(?=[\s,}])",
+        r"\g<1>" + new,
+        text,
+    )
 
 
-def _parse_charts(raw, datasets: dict[str, str]) -> dict[str, _ChartConfig]:
+def _resolver_from(datasets):
+    """Turn the `from_yaml` `datasets` argument into a name -> (uri, options)
+    callable, or None (chart `dataset` is a Parquet path/URI)."""
+    if datasets is None:
+        return None
+    if hasattr(datasets, "source"):  # a DatasetStore
+        return datasets.source
+    if callable(datasets):
+        return datasets
+    raise DashboardError("datasets must be a DatasetStore or a resolver callable")
+
+
+def _parse_charts(raw) -> dict[str, _ChartConfig]:
     if not isinstance(raw, dict):
         raise DashboardError("`charts` must be a mapping of id -> config")
     out = {}
@@ -590,12 +623,12 @@ def _parse_charts(raw, datasets: dict[str, str]) -> dict[str, _ChartConfig]:
                 f"chart {cid!r}: unknown type {ctype!r} "
                 f"(expected one of {sorted(CHART_TYPES)})"
             )
+        # `dataset` is a dataset name (resolved to Parquet at render time), no
+        # longer a ref into a top-level `datasets:` block.
         dataset_ref = params.pop("dataset", None)
-        if dataset_ref not in datasets:
-            raise DashboardError(
-                f"chart {cid!r}: unknown dataset {dataset_ref!r}"
-            )
-        kwargs = {"dataset": datasets[dataset_ref], **params}
+        if not isinstance(dataset_ref, str) or not dataset_ref:
+            raise DashboardError(f"chart {cid!r}: missing `dataset` (a dataset name)")
+        kwargs = {"dataset": dataset_ref, **params}
         # Smoke-instantiate so YAML errors surface at parse time, not render time.
         try:
             CHART_TYPES[ctype](**kwargs)

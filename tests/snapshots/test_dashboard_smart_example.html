@@ -694,26 +694,23 @@ body.fireflyer-resizing-col * {
 <div id="fireflyer-dashboard" class="fireflyer-dashboard">
   <input type="hidden" name="yaml_text" value="
 name: Test dashboard
-datasets:
-  orders:
-    path: <TEST_DATA>/orders.csv
 
 charts:
   orders_table:
     type: table
-    dataset: orders
+    dataset: <TEST_DATA>/orders.parquet
     title: Orders
     pagination: 5
 
   status_pie:
     type: pie
-    dataset: orders
+    dataset: <TEST_DATA>/orders.parquet
     title: Orders by Status
     column: status
 
   orders_detail:
     type: table
-    dataset: orders
+    dataset: <TEST_DATA>/orders.parquet
     title: All Orders
     pagination: 10
 
@@ -946,7 +943,7 @@ dashboard:
     <div class="fireflyer-table-search">
       <input type="search" name="q" value="" placeholder="Search…"
              autocomplete="off" spellcheck="false"
-             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5"
+             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=Orders&search=1&pagination=5"
              hx-target="#fireflyer-table-<ID>"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"
@@ -1010,16 +1007,16 @@ dashboard:
     </div>
     <nav class="fireflyer-table-pagination" aria-label="pagination">
       <a class="page-link disabled"
-         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=1"
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=Orders&search=1&pagination=5&q=&page=1"
          hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">‹</a>
       <a class="page-link active"
-         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=1"
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=Orders&search=1&pagination=5&q=&page=1"
          hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">1</a>
       <a class="page-link "
-         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=2"
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=Orders&search=1&pagination=5&q=&page=2"
          hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">2</a>
       <a class="page-link "
-         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5&q=&page=2"
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=Orders&search=1&pagination=5&q=&page=2"
          hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">›</a>
     </nav>
   </article>
@@ -1478,7 +1475,7 @@ dashboard:
     <div class="fireflyer-table-search">
       <input type="search" name="q" value="" placeholder="Search…"
              autocomplete="off" spellcheck="false"
-             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=All+Orders&search=1&pagination=10"
+             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=All+Orders&search=1&pagination=10"
              hx-target="#fireflyer-table-<ID>"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"

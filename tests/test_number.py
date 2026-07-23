@@ -40,9 +40,9 @@ def test_format_passes_strings_and_none_through():
     assert _format_value(None, "compact") == "—"
 
 
-def test_number_sum_amount(orders_csv, snapshot):
+def test_number_sum_amount(orders_parquet, snapshot):
     chart = ff.chart.number(
-        dataset=orders_csv,
+        dataset=orders_parquet,
         title="Revenue",
         column="amount",
         agg="sum",
@@ -50,54 +50,54 @@ def test_number_sum_amount(orders_csv, snapshot):
     snapshot(chart.to_html())
 
 
-def test_number_count_is_non_null(orders_csv):
+def test_number_count_is_non_null(orders_parquet):
     """count = number of non-null values. Seed CSV has 7 rows, all with an id."""
-    chart = ff.chart.number(dataset=orders_csv, title="t", column="id", agg="count")
+    chart = ff.chart.number(dataset=orders_parquet, title="t", column="id", agg="count")
     html = chart.to_html()
     assert '<div class="fireflyer-number-value" title="7">7</div>' in html
 
 
-def test_number_sum_thousands_separated(orders_csv):
+def test_number_sum_thousands_separated(orders_parquet):
     """amount sums to 42+15+99+30+75+12+60 = 333 (small here, but format check)."""
-    chart = ff.chart.number(dataset=orders_csv, title="t", column="amount", agg="sum")
+    chart = ff.chart.number(dataset=orders_parquet, title="t", column="amount", agg="sum")
     html = chart.to_html()
     assert '<div class="fireflyer-number-value" title="333">333</div>' in html
     # No caption text is rendered anymore.
     assert "fireflyer-number-caption" not in html
 
 
-def test_number_dcount_distinct_values(orders_csv):
+def test_number_dcount_distinct_values(orders_parquet):
     """dcount = distinct values. status has paid, pending, cancelled → 3."""
     chart = ff.chart.number(
-        dataset=orders_csv, title="t", column="status", agg="dcount"
+        dataset=orders_parquet, title="t", column="status", agg="dcount"
     )
     html = chart.to_html()
     assert '<div class="fireflyer-number-value" title="3">3</div>' in html
 
 
-def test_number_compact_value_hover_shows_exact(orders_csv):
+def test_number_compact_value_hover_shows_exact(orders_parquet):
     """Compact display abbreviates, but the title carries the full figure so a
     hover reveals it. Filter down to a single big row to exercise it."""
     # A synthetic big value isn't in the seed CSV; assert via the formatter path
     # by checking the title/display pair the template builds.
-    chart = ff.chart.number(dataset=orders_csv, title="t", column="amount", agg="sum")
+    chart = ff.chart.number(dataset=orders_parquet, title="t", column="amount", agg="sum")
     html = chart.to_html()
     # display == exact here (333 < 1000); the title attribute is always present.
     assert 'title="333"' in html
 
 
-def test_number_max_and_min(orders_csv):
+def test_number_max_and_min(orders_parquet):
     """max/min reduce the amount column (min 12, max 99)."""
-    hi = ff.chart.number(dataset=orders_csv, title="t", column="amount", agg="max")
-    lo = ff.chart.number(dataset=orders_csv, title="t", column="amount", agg="min")
+    hi = ff.chart.number(dataset=orders_parquet, title="t", column="amount", agg="max")
+    lo = ff.chart.number(dataset=orders_parquet, title="t", column="amount", agg="min")
     assert '<div class="fireflyer-number-value" title="99">99</div>' in hi.to_html()
     assert '<div class="fireflyer-number-value" title="12">12</div>' in lo.to_html()
 
 
-def test_number_filter_applies_before_aggregating(orders_csv):
+def test_number_filter_applies_before_aggregating(orders_parquet):
     """A declared filter narrows the rows before the reduction runs."""
     chart = ff.chart.number(
-        dataset=orders_csv,
+        dataset=orders_parquet,
         title="Paid revenue",
         column="amount",
         agg="sum",
@@ -107,35 +107,33 @@ def test_number_filter_applies_before_aggregating(orders_csv):
     assert '<div class="fireflyer-number-value" title="276">276</div>' in chart.to_html()
 
 
-def test_number_rejects_unknown_agg(orders_csv):
+def test_number_rejects_unknown_agg(orders_parquet):
     with pytest.raises(ValueError, match="unknown agg"):
-        ff.chart.number(dataset=orders_csv, title="t", column="amount", agg="avg")
+        ff.chart.number(dataset=orders_parquet, title="t", column="amount", agg="avg")
 
 
-def test_number_rejects_unknown_format(orders_csv):
+def test_number_rejects_unknown_format(orders_parquet):
     with pytest.raises(ValueError, match="unknown format"):
         ff.chart.number(
-            dataset=orders_csv, title="t", column="amount", format="scientific"
+            dataset=orders_parquet, title="t", column="amount", format="scientific"
         )
 
 
-def test_number_full_format_param(orders_csv):
+def test_number_full_format_param(orders_parquet):
     """format=full renders the whole number (seed sums are < 1000, so compact
     would match here too — this asserts the param threads through)."""
     chart = ff.chart.number(
-        dataset=orders_csv, title="t", column="amount", agg="sum", format="full"
+        dataset=orders_parquet, title="t", column="amount", agg="sum", format="full"
     )
     assert '<div class="fireflyer-number-value" title="333">333</div>' in chart.to_html()
 
 
-def test_number_in_dashboard(orders_csv):
+def test_number_in_dashboard(orders_parquet):
     """The number type resolves in dashboard YAML and renders a KPI cell."""
     yaml = f"""
 name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  revenue: {{type: number, dataset: o, title: Revenue, column: amount, agg: sum}}
+  revenue: {{type: number, dataset: {orders_parquet}, title: Revenue, column: amount, agg: sum}}
 dashboard:
   - ["@20", "revenue:100"]
 """
@@ -145,13 +143,11 @@ dashboard:
     assert '<div class="fireflyer-number-value" title="333">333</div>' in html
 
 
-def test_number_dashboard_rejects_bad_agg(orders_csv):
+def test_number_dashboard_rejects_bad_agg(orders_parquet):
     yaml = f"""
 name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  bad: {{type: number, dataset: o, title: T, column: amount, agg: median}}
+  bad: {{type: number, dataset: {orders_parquet}, title: T, column: amount, agg: median}}
 dashboard:
   - ["@20", "bad:100"]
 """

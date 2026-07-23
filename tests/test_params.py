@@ -40,11 +40,13 @@ def test_text_param_render_and_parse():
     assert p.parse(FakeForm({"title": "  Sales "})) == "Sales"
 
 
-def test_dataset_param_lists_datasets_and_selects_current():
+def test_dataset_param_is_text_field_with_current_value():
+    # Dataset is a name now (text field); a dropdown of stored datasets is
+    # wired when the portal dataset gallery lands.
     p = DatasetParam("dataset", "Dataset")
     html = p.render("orders", CTX)
-    assert '<option value="orders" selected>' in html
-    assert '<option value="events">' in html
+    assert 'type="text"' in html and 'name="dataset"' in html
+    assert 'value="orders"' in html
 
 
 def test_column_param_options_from_context():

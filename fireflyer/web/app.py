@@ -5,19 +5,24 @@ import traceback
 from html import escape
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Request
+from urllib.parse import quote
+
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from fireflyer import config_edit
 from fireflyer import filters as filters_mod
+from fireflyer.datasets import DatasetError, DatasetStore
+from fireflyer.storage import make_object_store
 from fireflyer.chart.map.chart import Map
 from fireflyer.chart.table.chart import Table
 from fastapi.responses import RedirectResponse
-from fireflyer.dashboard import Dashboard, DashboardError
+from fireflyer.dashboard import Dashboard, DashboardError, rename_dataset_ref
 from fireflyer.web import auth as auth_mod
 from fireflyer.web import chat as chat_mod
 from fireflyer.web import portal as portal_mod
+from fireflyer.web import paths as paths_mod
 
 # Load .env (ANTHROPIC_API_KEY) before reading it. The AI assistant is enabled
 # only when a key is present; otherwise the editor shows a setup notice.
@@ -41,6 +46,52 @@ app.state.store = (
 # mode). Tests set both `store` and `authenticator` directly.
 app.state.authenticator = auth_mod.default_authenticator() if PORTAL_ENABLED else None
 
+# Datasets are named entities (unique name -> Parquet in object storage),
+# referenced by name from dashboard YAML in both modes. With FIREFLYER_S3_ENDPOINT
+# set (portal runtime) they live in Garage/S3; otherwise in a local folder
+# (FIREFLYER_DATA, default ./data/datasets). Tests set `app.state.datasets`.
+def _object_store_config() -> dict:
+    endpoint = os.environ.get("FIREFLYER_S3_ENDPOINT")
+    if endpoint:
+        return {
+            "endpoint_url": endpoint,
+            "bucket": os.environ.get("FIREFLYER_S3_BUCKET", "fireflyer"),
+            "access_key": os.environ.get("FIREFLYER_S3_ACCESS_KEY", ""),
+            "secret_key": os.environ.get("FIREFLYER_S3_SECRET_KEY", ""),
+            "region": os.environ.get("FIREFLYER_S3_REGION", "garage"),
+        }
+    return {"base": os.environ.get("FIREFLYER_DATA", "data/datasets")}
+
+
+app.state.datasets = DatasetStore(make_object_store(_object_store_config()))
+
+
+def _seed_sample_dataset() -> None:
+    """Seed the `orders` dataset the starter dashboard references so a fresh
+    **local** checkout renders out of the box. Skipped for S3/Garage (don't
+    auto-write a shared object store) and best-effort — a misconfigured or
+    unreachable object store must never crash startup. Paths mode seeds a
+    per-path demo instead (see `_seed_demo_path`)."""
+    import pathlib
+
+    if os.environ.get("FIREFLYER_S3_ENDPOINT"):
+        return
+    if os.environ.get("FIREFLYER_PATHS") and not PORTAL_ENABLED:
+        return
+    csv = pathlib.Path("files/orders.csv")
+    if not csv.exists():
+        return
+    try:
+        if app.state.datasets.get("orders") is None:
+            app.state.datasets.create(
+                "orders", csv.read_bytes(), description="Sample orders data"
+            )
+    except Exception:
+        pass
+
+
+_seed_sample_dataset()
+
 
 @app.middleware("http")
 async def _require_login(request: Request, call_next):
@@ -62,10 +113,6 @@ HTMX_SRC = "https://unpkg.com/htmx.org@1.9.12"
 # Starter — exercises every layout element: header, two-chart row, separator,
 # single-chart row. Small enough to read at a glance.
 DEFAULT_YAML = """name: Orders overview
-
-datasets:
-  orders:
-    path: files/orders.csv
 
 charts:
   total_orders:
@@ -205,17 +252,11 @@ INDEX = f"""<!DOCTYPE html>
     padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border);
   }}
   .topbar-left, .topbar-right {{ display: flex; align-items: center; gap: 14px; }}
-  .topbar .brand {{ font-weight: 600; font-size: 14px; letter-spacing: -0.01em;
-    color: var(--text); text-decoration: none; }}
-  a.brand:hover {{ color: var(--accent); }}
-  .topbar .ff-nav {{ display: inline-flex; align-items: center; justify-content: center;
-    width: 30px; height: 30px; border-radius: 5px; color: var(--text);
-    text-decoration: none; font-size: 16px; }}
-  .topbar .ff-nav:hover {{ background: var(--bg); }}
-  /* Dashboard title in the left group, after the logo (separated by a dot).
+  /* Dot setting the nav group off from the dashboard name (paths mode). */
+  .topbar .ff-sep {{ color: var(--muted); }}
+  /* Dashboard title in the left group, after the back button.
      Click-to-rename: editable in place; capped width with ellipsis so a long
      name doesn't push the right group (grows to full text while focused). */
-  .topbar .ff-sep {{ color: var(--muted); }}
   .topbar .ff-dash-name {{ font-size: 14px; font-weight: 600; color: var(--text);
     white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis;
     padding: 3px 8px; border-radius: 4px; cursor: text; outline: none; }}
@@ -244,6 +285,7 @@ INDEX = f"""<!DOCTYPE html>
   .topbar .run:hover {{ background: var(--accent-hover); }}
   .topbar .run:disabled {{ opacity: 0.6; cursor: not-allowed; }}
 {auth_mod.PROFILE_CSS}
+{portal_mod.NAV_CSS}
   /* Output pane: refresh overlay shown when the YAML is edited but not re-run. */
   .pane.output {{ position: relative; }}
   /* Greyed as a "stale" cue, but still interactive — the resize/move/edit
@@ -439,10 +481,10 @@ INDEX = f"""<!DOCTYPE html>
 <header class="topbar">
   <div class="topbar-left">
     __FF_NAV__
-    __FF_BRAND__
     __FF_DASH_NAME__
   </div>
   <div class="topbar-right">
+    __FF_PATHDD__
     __FF_SAVE__
     <button class="toggle" id="toggle">Preview</button>
     __FF_THEME__
@@ -1619,22 +1661,15 @@ modalBox.addEventListener('submit', async e => {{
 # Topbar pieces. Nav is a hamburger link to the dashboards gallery; the brand is
 # a link there too in portal mode (a plain span locally, where `/` is the editor
 # itself). The save button/name-edit/theme JS all live in the main INDEX script.
-_NAV_HTML = '<a class="ff-nav" href="/" title="Dashboards" aria-label="Dashboards">☰</a>'
-
-
-def _brand_html(link: bool) -> str:
-    if link:
-        return '<a class="brand" href="/" title="Dashboards">Fireflyer</a>'
-    return '<span class="brand">Fireflyer</span>'
+# Back arrow to the gallery — the opened-dashboard editor mirrors the dataset
+# detail page (same shared `back_button` style, no brand text).
+_BACK_HTML = portal_mod.back_button("/", "Back to dashboards")
 
 
 def _dash_name_html(name: str) -> str:
-    # Sits after the logo, set off by a dot. Editable in place (wired by the
-    # INDEX script); two-way with the YAML `name:`.
-    return (
-        '<span class="ff-sep" aria-hidden="true">·</span>'
-        f'<span class="ff-dash-name" id="ff-dash-name">{escape(name)}</span>'
-    )
+    # Leads the left group (after the back button). Editable in place (wired by
+    # the INDEX script); two-way with the YAML `name:`.
+    return f'<span class="ff-dash-name" id="ff-dash-name">{escape(name)}</span>'
 
 
 def _save_html(dash_id: str) -> str:
@@ -1671,25 +1706,131 @@ def render_editor_page(
     yaml_text: str,
     *,
     nav: str = "",
-    brand: str = "",
     dash_name: str = "",
+    path_dropdown: str = "",
     save: str = "",
     theme: str = "",
     user_menu: str = "",
 ) -> str:
     """The editor page seeded with `yaml_text` and topbar pieces — left: `nav`
-    (Dashboards link) + `brand` (logo); centered editable `dash_name`; right:
-    `save` (shown only when unsaved), Preview, `theme` switch, `user_menu`
-    (profile). INDEX carries the placeholders; both modes share it."""
+    (back button + switch) + editable `dash_name`; right: `path_dropdown` (local
+    paths mode), `save` (shown only when unsaved), Preview, `theme` switch,
+    `user_menu` (profile). INDEX carries the placeholders; both modes share it."""
     return (
         INDEX.replace("__FF_YAML_CONTENT__", escape(yaml_text))
         .replace("__FF_NAV__", nav)
-        .replace("__FF_BRAND__", brand)
         .replace("__FF_DASH_NAME__", dash_name)
+        .replace("__FF_PATHDD__", path_dropdown)
         .replace("__FF_SAVE__", save)
         .replace("__FF_THEME__", theme)
         .replace("__FF_USER_MENU__", user_menu)
     )
+
+
+# --- store selection (portal DB vs local paths) -----------------------------
+# Local *paths mode* is on when FIREFLYER_PATHS is set (a base dir; each host
+# folder mapped under it is a switchable "path"). A path's dashboards are files
+# in <path>/dashboards; its datasets are an isolated blob store. The active path
+# rides in a cookie.
+PATHS_BASE = os.environ.get("FIREFLYER_PATHS", "")
+_DATA_BASE = os.environ.get("FIREFLYER_DATA", "data/datasets")
+_PATH_COOKIE = "ff_path"
+# Seeded on first run so a fresh paths-mode checkout opens on a working example.
+DEMO_PATH = "demo"
+
+
+def _paths_mode() -> bool:
+    return app.state.store is None and bool(PATHS_BASE)
+
+
+def _active_path(request: Request) -> str | None:
+    """The selected path (paths mode), validated against the real mapped-folder
+    list so a stale/forged cookie can't point outside the base. Defaults to the
+    first."""
+    paths = paths_mod.list_paths(PATHS_BASE)
+    want = request.cookies.get(_PATH_COOKIE)
+    if want in paths:
+        return want
+    return paths[0] if paths else None
+
+
+def _dash_store(request: Request):
+    """Dashboard store for this request: portal DB, or the active path's folder
+    store (None in paths mode when no path exists yet)."""
+    if app.state.store is not None:
+        return app.state.store
+    path = _active_path(request)
+    return paths_mod.PathDashboardStore(f"{PATHS_BASE}/{path}") if path else None
+
+
+def _dataset_store(request: Request):
+    """Dataset store for this request: portal singleton, or the active path's
+    isolated blob store."""
+    if not _paths_mode():
+        return app.state.datasets
+    path = _active_path(request)
+    if path is None:
+        return app.state.datasets
+    return DatasetStore(make_object_store({"base": f"{_DATA_BASE}/{path}"}))
+
+
+@app.get("/path/{name}")
+def switch_path(name: str) -> RedirectResponse:
+    """Switch the active path (paths mode) — sets the cookie, back to the gallery."""
+    resp = RedirectResponse("/", status_code=303)
+    if name in paths_mod.list_paths(PATHS_BASE):
+        resp.set_cookie(_PATH_COOKIE, name, httponly=True, samesite="lax")
+    return resp
+
+
+def _page_title() -> str:
+    """Browser-tab title for the gallery pages."""
+    return PORTAL_TITLE if app.state.store is not None else "Fireflyer"
+
+
+def _gallery_kwargs(request: Request) -> dict:
+    """Path-picker args for the gallery/datasets pages — the path list + active
+    path in paths mode, nothing in portal or plain-local mode."""
+    if not _paths_mode():
+        return {}
+    return {
+        "paths": paths_mod.list_paths(PATHS_BASE),
+        "active_path": _active_path(request),
+    }
+
+
+def _seed_demo_path() -> None:
+    """Paths mode: on first run, seed a `demo` path so the gallery opens on a
+    working example — the starter dashboard in `demo/dashboards/`, and the
+    `orders` dataset it references in the demo path's isolated blob store. The
+    dashboard is only written when the path is brand new (its `dashboards/` dir is
+    absent), so it never clobbers your edits; the dataset is (re)seeded whenever
+    it's missing (the blob volume can reset independently of the path files).
+    Best-effort — never crashes startup."""
+    import pathlib
+
+    if not _paths_mode():
+        return
+    if not (pathlib.Path(PATHS_BASE) / DEMO_PATH / "dashboards").exists():
+        try:
+            paths_mod.PathDashboardStore(
+                f"{PATHS_BASE}/{DEMO_PATH}"
+            ).create(DEFAULT_YAML)
+        except Exception:
+            pass
+    csv = pathlib.Path("files/orders.csv")
+    if csv.exists():
+        datasets = DatasetStore(make_object_store({"base": f"{_DATA_BASE}/{DEMO_PATH}"}))
+        try:
+            if datasets.get("orders") is None:
+                datasets.create(
+                    "orders", csv.read_bytes(), description="Sample orders data"
+                )
+        except Exception:
+            pass
+
+
+_seed_demo_path()
 
 
 def _user_menu(request: Request, extra: str = "") -> str:
@@ -1726,15 +1867,22 @@ async def logout() -> RedirectResponse:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> str:
-    # Portal on: gallery of stored dashboards. Off: the single-dashboard editor.
+    # Portal: DB gallery. Paths mode: gallery of the active path's dashboards
+    # (with the path picker). Plain local: the single-dashboard editor.
     if app.state.store is not None:
         return portal_mod.render_gallery(
             app.state.store.list(), PORTAL_TITLE, _user_menu(request)
         )
-    # Local mode: no nav/save/profile; just logo, editable name, theme switch.
+    if _paths_mode():
+        store = _dash_store(request)
+        return portal_mod.render_gallery(
+            store.list() if store else [], _page_title(), "",
+            **_gallery_kwargs(request),
+        )
+    # Plain local mode: no gallery to go back to, no save/profile; just the
+    # editable name and theme switch.
     return render_editor_page(
         DEFAULT_YAML,
-        brand=_brand_html(link=False),
         dash_name=_dash_name_html(Dashboard.from_yaml(DEFAULT_YAML).name),
         theme=_theme_switch(),
     )
@@ -1763,17 +1911,18 @@ def _current_author(request: Request) -> str:
 @app.post("/new")
 async def portal_new(request: Request, name: str = Form("")) -> RedirectResponse:
     yaml_text = _empty_yaml(name.strip() or "Untitled dashboard")
-    new_id = app.state.store.create(yaml_text, _current_author(request))
+    new_id = _dash_store(request).create(yaml_text, _current_author(request))
     return RedirectResponse(f"/d/{new_id}", status_code=303)
 
 
 @app.post("/d/{dash_id}/clone")
 async def portal_clone(dash_id: str, request: Request, name: str = Form("")):
-    row = app.state.store.get(dash_id)
+    store = _dash_store(request)
+    row = store.get(dash_id)
     if row is None:
         return HTMLResponse("Dashboard not found", status_code=404)
     new_name = name.strip() or f"{row.name} (copy)"
-    new_id = app.state.store.create(
+    new_id = store.create(
         _set_yaml_name(row.yaml, new_name), _current_author(request)
     )
     return RedirectResponse(f"/d/{new_id}", status_code=303)
@@ -1781,42 +1930,169 @@ async def portal_clone(dash_id: str, request: Request, name: str = Form("")):
 
 @app.get("/d/{dash_id}", response_class=HTMLResponse)
 def portal_open(dash_id: str, request: Request) -> HTMLResponse:
-    row = app.state.store.get(dash_id)
+    row = _dash_store(request).get(dash_id)
     if row is None:
         return HTMLResponse("Dashboard not found", status_code=404)
-    # Theme switch lives centered inside the profile menu (topbar slot empty).
-    theme_in_menu = f'<div class="ff-profile-theme">{_theme_switch()}</div>'
+    # Portal (auth on): theme lives centered inside the profile menu, topbar slot
+    # empty. Paths mode (no auth): no profile, so theme stands alone in the topbar.
+    if app.state.authenticator is not None:
+        theme_in_menu = f'<div class="ff-profile-theme">{_theme_switch()}</div>'
+        user_menu, theme = _user_menu(request, extra=theme_in_menu), ""
+    else:
+        user_menu, theme = "", _theme_switch()
+    # A selected item (like the dataset detail): back button + the editable name;
+    # no Dashboards|Datasets switch (that's for the lists). In local paths mode the
+    # path dropdown rides on the right.
+    nav, path_dd = _BACK_HTML, ""
+    if _paths_mode():
+        kw = _gallery_kwargs(request)
+        path_dd = portal_mod.path_dropdown(kw["paths"], kw["active_path"])
     page = render_editor_page(
         row.yaml,
-        nav=_NAV_HTML,
-        brand=_brand_html(link=True),
+        nav=nav,
         dash_name=_dash_name_html(row.name),
+        path_dropdown=path_dd,
         save=_save_html(row.id),
-        user_menu=_user_menu(request, extra=theme_in_menu),
+        user_menu=user_menu,
+        theme=theme,
     )
     return HTMLResponse(page)
 
 
 @app.post("/d/{dash_id}/save")
-async def portal_save(dash_id: str, yaml_text: str = Form("")) -> dict:
+async def portal_save(
+    dash_id: str, request: Request, yaml_text: str = Form("")
+) -> dict:
     try:
-        app.state.store.save(dash_id, yaml_text)
+        _dash_store(request).save(dash_id, yaml_text)
         return {"ok": True}
     except DashboardError as exc:
         return {"ok": False, "error": str(exc)}
 
 
 @app.post("/d/{dash_id}/delete")
-async def portal_delete(dash_id: str) -> RedirectResponse:
-    app.state.store.delete(dash_id)
+async def portal_delete(dash_id: str, request: Request) -> RedirectResponse:
+    _dash_store(request).delete(dash_id)
     return RedirectResponse("/", status_code=303)
+
+
+# --- datasets (portal gallery tab) ------------------------------------------
+
+
+def _dashboards_using(request: Request, name: str) -> list[tuple[str, str]]:
+    """(id, name) of stored dashboards that reference dataset `name`. Empty when
+    there's no dashboard store (plain local mode)."""
+    store = _dash_store(request)
+    if store is None:
+        return []
+    return [
+        (row.id, row.name)
+        for row in store.list()
+        if name in Dashboard.dataset_names(row.yaml)
+    ]
+
+
+@app.get("/datasets", response_class=HTMLResponse)
+def datasets_gallery(request: Request) -> str:
+    return portal_mod.render_datasets(
+        _dataset_store(request).list(), _page_title(), _user_menu(request),
+        **_gallery_kwargs(request),
+    )
+
+
+@app.post("/datasets/new")
+async def datasets_new(
+    request: Request,
+    name: str = Form(""),
+    description: str = Form(""),
+    delimiter: str = Form(","),
+    file: UploadFile = File(...),
+):
+    try:
+        _dataset_store(request).create(
+            name,
+            await file.read(),
+            description=description,
+            delimiter=delimiter or ",",
+            author=_current_author(request),
+        )
+    except DatasetError as exc:
+        return HTMLResponse(f'<pre class="error">{escape(str(exc))}</pre>', status_code=400)
+    except Exception as exc:  # object-store errors (S3/Garage unreachable, bad creds)
+        return HTMLResponse(
+            f'<pre class="error">Storage error: {escape(str(exc))}</pre>', status_code=502
+        )
+    return RedirectResponse("/datasets", status_code=303)
+
+
+@app.get("/datasets/{name}", response_class=HTMLResponse)
+def dataset_detail(name: str, request: Request):
+    datasets = _dataset_store(request)
+    ds = datasets.get(name)
+    if ds is None:
+        return HTMLResponse("Dataset not found", status_code=404)
+    cols, rows = datasets.preview(name, n=20)
+    return HTMLResponse(
+        portal_mod.render_dataset_detail(
+            ds, cols, rows, _page_title(), _user_menu(request),
+            used_by=_dashboards_using(request, name),
+            **_gallery_kwargs(request),
+        )
+    )
+
+
+@app.post("/datasets/{name}/replace")
+async def dataset_replace(
+    name: str,
+    request: Request,
+    description: str = Form(""),
+    delimiter: str = Form(","),
+    file: UploadFile = File(...),
+):
+    try:
+        _dataset_store(request).replace(
+            name, await file.read(),
+            description=description or None, delimiter=delimiter or ",",
+        )
+    except DatasetError as exc:
+        return HTMLResponse(f'<pre class="error">{escape(str(exc))}</pre>', status_code=400)
+    return RedirectResponse(f"/datasets/{quote(name)}", status_code=303)
+
+
+@app.post("/datasets/{old_name}/rename")
+async def dataset_rename(
+    old_name: str, request: Request, name: str = Form(""), description: str = Form("")
+):
+    new = name.strip()
+    try:
+        _dataset_store(request).rename(old_name, new, description=description)
+    except DatasetError as exc:
+        return HTMLResponse(f'<pre class="error">{escape(str(exc))}</pre>', status_code=400)
+    # Cascade: rewrite every dashboard that referenced the old name.
+    store = _dash_store(request)
+    if store is not None and new != old_name:
+        for row in store.list():
+            if old_name in Dashboard.dataset_names(row.yaml):
+                store.save(row.id, rename_dataset_ref(row.yaml, old_name, new))
+    return RedirectResponse("/datasets", status_code=303)
+
+
+@app.post("/datasets/{name}/delete")
+async def dataset_delete(name: str, request: Request):
+    used = _dashboards_using(request, name)
+    if used:  # guard: don't orphan dashboards
+        names = ", ".join(n for _, n in used)
+        msg = f"Cannot remove {name!r}: still used by {len(used)} dashboard(s): {names}"
+        return HTMLResponse(f'<pre class="error">{escape(msg)}</pre>', status_code=409)
+    _dataset_store(request).delete(name)
+    return RedirectResponse("/datasets", status_code=303)
 
 
 @app.post("/execute")
 async def execute(request: Request, active_tab: int = 0) -> dict:
     body = (await request.body()).decode("utf-8")
     try:
-        dashboard = Dashboard.from_yaml(body)
+        dashboard = Dashboard.from_yaml(body, datasets=_dataset_store(request))
         # The response is a skeleton — each cell fetches itself via htmx so
         # charts render in parallel and slow charts don't block fast ones.
         # editing=True adds the editor-only row resize handles. `active_tab`
@@ -1859,6 +2135,7 @@ async def chat(req: ChatRequest) -> dict:
 
 @app.get("/chart/map", response_class=HTMLResponse)
 def chart_map(
+    request: Request,
     dataset: str,
     title: str,
     lat: str,
@@ -1877,11 +2154,13 @@ def chart_map(
         zoom=zoom,
         filters=parsed,
     )
+    chart._resolve = _dataset_store(request).source  # dataset name -> Parquet source
     return chart.to_html()
 
 
 @app.get("/chart/table", response_class=HTMLResponse)
 def chart_table(
+    request: Request,
     dataset: str,
     title: str,
     search: int = 1,
@@ -1900,11 +2179,13 @@ def chart_table(
         pagination=pagination,
         filters=parsed,
     )
+    chart._resolve = _dataset_store(request).source  # dataset name -> Parquet source
     return chart.to_html(page=page, query=q)
 
 
 @app.post("/dashboard", response_class=HTMLResponse)
 async def dashboard_render(
+    request: Request,
     yaml_text: str = Form(""),
     cf: list[str] = Form(default=[]),
     toggle: str = Form(""),
@@ -1922,7 +2203,7 @@ async def dashboard_render(
     handles and per-chart edit buttons after a crossfilter click.
     """
     try:
-        dashboard = Dashboard.from_yaml(yaml_text)
+        dashboard = Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request))
     except DashboardError as exc:
         return f'<pre class="error">{escape(str(exc))}</pre>'
     new_tokens = filters_mod.toggle_token(list(cf), toggle) if toggle else list(cf)
@@ -1938,6 +2219,7 @@ async def dashboard_render(
 
 @app.post("/dashboard/cell", response_class=HTMLResponse)
 async def dashboard_cell(
+    request: Request,
     yaml_text: str = Form(""),
     cid: str = Form(""),
     cf: list[str] = Form(default=[]),
@@ -1952,7 +2234,7 @@ async def dashboard_cell(
     rendered cell lands in the right slot (and preserves any merged span).
     `editing` adds the per-chart edit (pencil) button."""
     try:
-        dashboard = Dashboard.from_yaml(yaml_text)
+        dashboard = Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request))
         return dashboard.render_cell(
             cid, cf_tokens=list(cf), col=col, row=row, editing=bool(editing)
         )
@@ -1962,6 +2244,7 @@ async def dashboard_cell(
 
 @app.post("/chart/config/form", response_class=HTMLResponse)
 async def chart_config_form(
+    request: Request,
     yaml_text: str = Form(""),
     cid: str = Form(""),
     type_override: str = Form(""),
@@ -1971,7 +2254,10 @@ async def chart_config_form(
     `type_override` re-renders the fields for a different chart type when the
     user changes the type dropdown."""
     try:
-        return config_edit.build_form(yaml_text, cid, type_override=type_override)
+        return config_edit.build_form(
+            yaml_text, cid, type_override=type_override,
+            resolve=_dataset_store(request).source,
+        )
     except (config_edit.ConfigEditError, DashboardError) as exc:
         return f'<div class="ff-modal-error" role="alert">{escape(str(exc))}</div>'
 

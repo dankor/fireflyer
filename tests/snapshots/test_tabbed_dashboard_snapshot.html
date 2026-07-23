@@ -693,12 +693,10 @@ body.fireflyer-resizing-col * {
 </style>
 <div id="fireflyer-dashboard" class="fireflyer-dashboard">
   <input type="hidden" name="yaml_text" value="name: Test dashboard
-datasets:
-  o: {path: <TEST_DATA>/orders.csv}
 charts:
-  a: {type: table, dataset: o, title: A}
-  b: {type: pie, dataset: o, title: B, column: status}
-  c: {type: table, dataset: o, title: C}
+  a: {type: table, dataset: <TEST_DATA>/orders.parquet, title: A}
+  b: {type: pie, dataset: <TEST_DATA>/orders.parquet, title: B, column: status}
+  c: {type: table, dataset: <TEST_DATA>/orders.parquet, title: C}
 dashboard:
   Overview:
     - [&#34;@22&#34;, &#34;a&#34;, &#34;b&#34;]
@@ -932,7 +930,7 @@ dashboard:
     <div class="fireflyer-table-search">
       <input type="search" name="q" value="" placeholder="Search…"
              autocomplete="off" spellcheck="false"
-             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=A&search=1&pagination=5"
+             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=A&search=1&pagination=5"
              hx-target="#fireflyer-table-<ID>"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"
@@ -996,16 +994,16 @@ dashboard:
     </div>
     <nav class="fireflyer-table-pagination" aria-label="pagination">
       <a class="page-link disabled"
-         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=A&search=1&pagination=5&q=&page=1"
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=A&search=1&pagination=5&q=&page=1"
          hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">‹</a>
       <a class="page-link active"
-         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=A&search=1&pagination=5&q=&page=1"
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=A&search=1&pagination=5&q=&page=1"
          hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">1</a>
       <a class="page-link "
-         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=A&search=1&pagination=5&q=&page=2"
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=A&search=1&pagination=5&q=&page=2"
          hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">2</a>
       <a class="page-link "
-         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=A&search=1&pagination=5&q=&page=2"
+         hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=A&search=1&pagination=5&q=&page=2"
          hx-target="#fireflyer-table-<ID>" hx-swap="outerHTML">›</a>
     </nav>
   </article>

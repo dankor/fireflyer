@@ -10,6 +10,7 @@ import polars as pl
 
 from fireflyer import filters as filters_mod
 from fireflyer.params import ColumnParam, DatasetParam, FilterListParam, IntParam, TextParam
+from fireflyer.scan import scan
 
 # OpenStreetMap raster tiles. The tile.openstreetmap.org server is okay for
 # light personal use as long as we keep request volume low and display the
@@ -147,6 +148,8 @@ class Map:
     zoom: int | None = None
     filters: list = field(default_factory=list)
 
+    _resolve = None  # name -> (uri, storage_options); not a dataclass field
+
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
@@ -170,10 +173,15 @@ class Map:
         when nested). Only the card chrome is themed — the tile basemap and its
         hex overlay stay fixed."""
         ff_theme = theme if theme in ("dark", "light") else ""
-        df = pl.read_csv(self.dataset)
-        df = filters_mod.apply(df, self.filters)
-        df = df.filter(
-            pl.col(self.lat).is_not_null() & pl.col(self.lng).is_not_null()
+        # Lazy scan: only lat/lng (+ filter columns) are read from the Parquet.
+        lf = scan(self.dataset, self._resolve)
+        preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
+        if preds:
+            lf = lf.filter(*preds)
+        df = (
+            lf.select(self.lat, self.lng)
+            .filter(pl.col(self.lat).is_not_null() & pl.col(self.lng).is_not_null())
+            .collect()
         )
 
         chart_id = self._chart_id()

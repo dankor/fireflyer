@@ -1,0 +1,26 @@
+# Single-node Garage for local portal dev (dataset Parquet object storage).
+# Not for production — replication_factor 1, dev secret. See docker-compose.yml
+# for the one-time init (layout / key / bucket) after the first `up`.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "8f1ddb089294a76859f43bf2e7e53f59281cb594132aa7e32577c3fe9718e513"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.garage.localhost"
+index = "index.html"
+
+[admin]
+api_bind_addr = "[::]:3903"
+admin_token = "6ad0d9444549b89ac142166adbf075986d2da690a7481add19689544a7f0829c"

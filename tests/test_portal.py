@@ -12,10 +12,8 @@ from fireflyer.web.portal import SqliteStore, render_gallery
 # from the top-level `name:` key — the store never takes a separate name.
 def _yaml(name: str = "Sales", title: str = "KPI") -> str:
     return f"""name: {name}
-datasets:
-  o: {{path: x.csv}}
 charts:
-  kpi: {{type: number, dataset: o, title: {title}, column: amount, agg: sum}}
+  kpi: {{type: number, dataset: orders, title: {title}, column: amount, agg: sum}}
 dashboard:
   Main:
     - ["@100", "kpi"]
@@ -110,3 +108,60 @@ def test_gallery_escapes_dashboard_names(store):
 def test_gallery_empty_state():
     html = render_gallery([])
     assert "No dashboards yet" in html
+
+
+# --- datasets gallery rendering ---------------------------------------------
+
+from fireflyer.datasets import Column, Dataset
+from fireflyer.web.portal import render_dataset_detail, render_datasets
+
+
+def _ds(name="orders"):
+    return Dataset(
+        name=name, description="Q3 orders", delimiter=",",
+        columns=[Column("id", "Int64"), Column("status", "String")],
+        rows=3, author="dana", updated_at="2026-07-14T10:00:00",
+    )
+
+
+def test_render_datasets_table():
+    html = render_datasets([_ds()])
+    # Overview nav is the Dashboards | Datasets switch, Datasets segment active.
+    assert 'class="ff-switch"' in html
+    assert '<a class="ff-switch-seg active" href="/datasets">Datasets</a>' in html
+    assert ">orders<" in html and ">dana<" in html
+    assert "openUpload" in html
+
+
+def test_render_datasets_escapes_name():
+    html = render_datasets([_ds(name="<script>x</script>")])
+    assert "<script>x</script>" not in html and "&lt;script&gt;" in html
+
+
+def test_render_datasets_empty_state():
+    assert "No datasets yet" in render_datasets([])
+
+
+def test_render_dataset_detail_types_and_preview():
+    html = render_dataset_detail(_ds(), ["id", "status"], [[1, "paid"], [2, "refunded"]])
+    assert "paid" in html and "refunded" in html   # preview data
+    # Column types live in the preview header: an icon + the exact dtype tooltip.
+    assert '<th title="Int64"><span class="type-icon"' in html
+    # No separate column-list card.
+    assert "col-list" not in html
+
+
+def test_render_dataset_detail_delete_when_unused():
+    html = render_dataset_detail(_ds(), ["id"], [[1]])   # used_by empty
+    assert 'action="/datasets/orders/delete"' in html    # trash deletes
+    assert "usage-dialog" not in html
+
+
+def test_render_dataset_detail_usage_lists_dashboards():
+    html = render_dataset_detail(
+        _ds(), ["id"], [[1]], used_by=[("id1", "Sales"), ("id2", "Ops")]
+    )
+    assert 'class="badge">2<' in html                     # count badge on the trash icon
+    assert 'href="/d/id1" target="_blank"' in html        # opens in a new tab
+    assert ">Sales<" in html and ">Ops<" in html
+    assert 'class="warn"' not in html                     # no red text

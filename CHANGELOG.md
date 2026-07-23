@@ -7,61 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-14
+
+### Added
+
+- **Managed datasets.** Datasets are first-class named entities, not inline CSV
+  paths: upload a CSV in the new **Datasets** tab → **Parquet** in object storage,
+  referenced by **name** (`dataset: orders`); metadata (schema, rows, description,
+  delimiter, author) is a YAML sidecar. `datasets.py` (`DatasetStore`) over
+  `storage.py` (`ObjectStore`: a local folder, or **Garage/S3** via the
+  `.[portal]` extra, chosen by `FIREFLYER_S3_ENDPOINT`).
+- **Datasets tab** — list + upload / replace / rename / remove, and a detail view
+  (per-column type icons + 20-row preview). **Delete-guard** (can't remove a
+  dataset a dashboard uses) and **cascade-rename** (rewrites `dataset:` refs).
+- **Local paths mode** (`FIREFLYER_PATHS`, `web/paths.py`) — a non-portal,
+  no-DB/no-login way to manage many dashboards + datasets on your filesystem. Each
+  host folder you Docker-map is a switchable **path** (dashboards as
+  `<path>/dashboards/*.yaml`, datasets in an isolated per-path blob store); a
+  **`demo` path** is seeded on first run. Data-free dashboard YAML is meant to be
+  kept in git and deployed by a coming CLI/API — a **GitOps** workflow; datasets
+  stay server-side.
+
+### Changed
+
+- **Dashboard YAML dropped its `datasets:` block.** `dataset:` is now a name
+  resolved to Parquet at render (`Dashboard.from_yaml(text, datasets=<store>)`),
+  or a path/URI directly when no store is given. Required top-level keys: `name`,
+  `charts`, `dashboard`.
+- **Charts read Parquet efficiently** — lazy `scan_parquet` with projection +
+  predicate pushdown, so only the needed columns/row-groups are read.
+- **Gallery / editor navigation.** List pages lead with a **Dashboards | Datasets**
+  switch on the left and (local paths mode) a **path dropdown** on the right;
+  selected items (a dataset detail, the dashboard editor) lead with a **back
+  button** + name and keep the path dropdown, no switch. The Fireflyer brand text
+  is gone from the editor.
+
 ## [0.4.0] - 2026-07-10
 
 ### Added
 
-- **Portal mode** — an opt-in, DB-backed way to store and browse many
-  dashboards, reusing the existing editor unchanged. Enabled with
-  `python -m fireflyer.portal` (reads `portal.yaml`) or the compose `portal`
-  profile. `/` becomes a gallery of stored dashboards — a table of name,
-  author, and last-updated with per-row **Edit / Clone / Remove** actions and a
-  **+ New dashboard** button; New and Clone each prompt for a name in a modal.
-  New dashboards start **blank**; each opens in the normal editor with a
-  **Save** button. Dashboards are stored as an opaque YAML text blob (validated
-  by `Dashboard.from_yaml` on save, never decomposed into tables), so every
-  stateless editor route keeps working byte-for-byte. Rows also carry an
-  **author** (the logged-in user, recorded at create/clone).
-- **Portal login** — portal mode is gated behind a simple auth (`web/auth.py`),
-  default **admin/admin** (`FIREFLYER_USER`/`FIREFLYER_PASSWORD`); a topbar
-  **profile** dropdown shows the username with a **Log out** action. It's a deliberately small,
-  swappable backbone: an `Authenticator` protocol (the credential check) and an
-  HMAC-signed session cookie (how the identity is remembered) are independent,
-  so an SSO/OAuth callback just reuses `set_session` — no route changes. No
-  advanced provider is implemented; the extension recipe is documented in
-  `architecture.md`. Local single-dashboard mode has no login.
-- **Editor topbar** reorganized — left: a **☰ Dashboards** link and the
-  Fireflyer **logo** (both link to the gallery in portal), then an **editable
-  dashboard title** after a dot separator (click to rename → rewrites the YAML
-  `name:` key, and editing `name:` in the YAML updates the title); right:
-  **Save**, Preview,
-  a **3-segment Auto / Light / Dark theme switch**, and the profile button.
-  **Save only appears when there are unsaved changes**, saves on click or
-  ⌘/Ctrl+S, and warns before you navigate away with unsaved edits. The theme
-  control is a **3-segment icon switch** (A / sun / moon for Auto / Light /
-  Dark, inline SVG, no text) — in the profile
-  dropdown in portal mode, standalone in the topbar in local mode.
-- **Refresh-on-edit preview.** The topbar **Run** button and status text are
-  gone. Editing the YAML now greys out the (stale) preview and reveals a **↻
-  Refresh** button over the output pane; clicking it re-renders. The greyed
-  preview stays **interactive** (row/column resize keeps working). Two resize
-  snap-back bugs were fixed: row-height drags now persist for **block-style**
-  dashboard rows (the height rewrite was flow-style only), and **column** drags
-  now persist on **tabbed** dashboards (`resize_columns` searched flat `.items`
-  only, which are empty when the layout is tabbed, so it silently no-op'd). Save
-  feedback shows on the Save button itself, and rare edit errors use a toast.
-- **Required top-level `name:` key** in the dashboard YAML — the dashboard's
-  display name, part of the definition (not portal metadata), so it works the
-  same in local and portal mode. `Dashboard.from_yaml` now rejects a dashboard
-  with no (or empty) `name`. Portal lists dashboards by it and re-derives the
-  listing name from the YAML on every save (no separate name field); the
-  gallery's "new" form seeds the typed name into the YAML's `name:` key. The store lives in `fireflyer/web/portal.py` behind two
-  backends: stdlib **sqlite** (local/dev + tests) and **Postgres**
-  (`python -m fireflyer.portal`); the Postgres driver is an optional `.[portal]`
-  extra so the core install and test suite never require a database. Portal is
-  an owner-approved exception to the "no persistence/multi-user" anti-goal,
-  scoped to `web/`. Auth and per-dataset storage are intentionally out of scope
-  for this first cut.
+- **Portal mode** (`FIREFLYER_PORTAL`, `python -m fireflyer.portal`, compose
+  `portal` profile) — an opt-in, DB-backed way to store and browse many
+  dashboards, reusing the editor unchanged. `/` becomes a gallery table (name,
+  author, last updated) with per-row **Edit / Clone / Remove** and **+ New**; each
+  opens in the editor with a **Save** button. Dashboards are stored as an opaque
+  YAML blob (validated on save, never decomposed), so every stateless editor route
+  keeps working. Two backends in `web/portal.py`: stdlib **sqlite** (dev/tests) and
+  **Postgres** (the optional `.[portal]` extra). An owner-approved exception to the
+  no-persistence anti-goal, scoped to `web/`.
+- **Portal login** (`web/auth.py`) — a simple auth gate, default **admin/admin**,
+  with a topbar profile dropdown + **Log out**. A deliberately small, swappable
+  backbone — an `Authenticator` protocol and an HMAC session cookie are
+  independent, so an SSO/OAuth callback just reuses `set_session` (recipe in
+  `architecture.md`); none implemented. Local mode has no login.
+- **Required top-level `name:` key** — the dashboard's display name, part of the
+  definition (same in local and portal); `Dashboard.from_yaml` rejects an empty
+  name, and portal re-derives its listing name from the YAML on every save.
+- **Editor topbar + refresh-on-edit preview.** The Run button and status text are
+  gone; editing the YAML greys the (still-interactive) preview and shows a **↻
+  Refresh** overlay. **Save** appears only when there are unsaved changes (⌘/Ctrl+S,
+  with a navigate-away guard), and a **3-segment Auto / Light / Dark** icon theme
+  switch replaces the old toggle. Fixed two resize snap-back bugs — block-style
+  row-height drags, and column drags on tabbed dashboards.
 
 ## [0.3.1] - 2026-07-09
 
@@ -141,7 +148,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/dankor/fireflyer/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dankor/fireflyer/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/dankor/fireflyer/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/dankor/fireflyer/compare/v0.2.0...v0.3.0

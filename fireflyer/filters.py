@@ -64,19 +64,27 @@ def apply(df: pl.DataFrame, filters: Iterable[Filter]) -> pl.DataFrame:
     one chart emits a filter that other charts may not be able to apply if
     their dataset lacks that column. The architecture spec calls this out.
     """
+    preds = predicates(filters, df.columns)
+    return df.filter(*preds) if preds else df
+
+
+def predicates(filters: Iterable[Filter], columns: Iterable[str]) -> list[pl.Expr]:
+    """Polars filter expressions for the filters whose column exists in
+    `columns` — the lazy-scan counterpart to `apply`, so charts can push
+    predicates down into `scan_parquet`. Absent-column filters are skipped
+    (crossfilter contract). Passing an empty list to `.filter(*[])` is a no-op.
+    """
+    have = set(columns)
+    exprs: list[pl.Expr] = []
     for f in filters:
-        if f.column not in df.columns:
+        if f.column not in have:
             continue
-        # Stringifying both sides keeps comparison consistent — crossfilter
-        # values always arrive as strings (URL form data), declared filters
-        # can be any literal in YAML/Python.
+        # Stringify both sides — crossfilter values arrive as strings (URL form
+        # data); declared filters can be any literal in YAML/Python.
         col = pl.col(f.column).cast(pl.String, strict=False)
         targets = [str(v) for v in f.values]
-        if f.op == "in":
-            df = df.filter(col.is_in(targets))
-        else:  # "ni"
-            df = df.filter(~col.is_in(targets))
-    return df
+        exprs.append(col.is_in(targets) if f.op == "in" else ~col.is_in(targets))
+    return exprs
 
 
 # --- Crossfilter URL tokens ----------------------------------------------------

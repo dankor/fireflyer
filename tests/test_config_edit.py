@@ -19,24 +19,21 @@ class FakeForm:
         return self._multi.get(key, [])
 
 
-def _doc(csv_path: str) -> str:
+def _doc(orders_parquet: str) -> str:
     # Includes comments + two charts so we can prove non-target content survives.
     return f"""name: Test dashboard
-datasets:
-  orders:
-    path: {csv_path}
 
 charts:
   revenue:
     type: number
-    dataset: orders
+    dataset: {orders_parquet}
     title: Revenue        # a comment inside the block
     column: amount
     agg: sum
 
   by_status:              # sibling — must stay byte-for-byte
     type: pie
-    dataset: orders
+    dataset: {orders_parquet}
     title: By status
     column: status
 
@@ -45,44 +42,44 @@ dashboard:
 """
 
 
-def test_build_form_lists_params(orders_csv):
-    html = ce.build_form(_doc(orders_csv), "revenue")
+def test_build_form_lists_params(orders_parquet):
+    html = ce.build_form(_doc(orders_parquet), "revenue")
     assert 'name="agg"' in html          # choice widget
     assert 'name="column"' in html       # column widget
     assert "ff-filter-add" in html       # filter builder
     assert 'data-cid="revenue"' in html
 
 
-def test_build_form_unknown_chart_raises(orders_csv):
+def test_build_form_unknown_chart_raises(orders_parquet):
     with pytest.raises(ce.ConfigEditError, match="unknown chart"):
-        ce.build_form(_doc(orders_csv), "ghost")
+        ce.build_form(_doc(orders_parquet), "ghost")
 
 
-def test_build_form_has_type_dropdown_with_all_types(orders_csv):
-    html = ce.build_form(_doc(orders_csv), "revenue")
+def test_build_form_has_type_dropdown_with_all_types(orders_parquet):
+    html = ce.build_form(_doc(orders_parquet), "revenue")
     assert "data-type-select" in html
     for t in ("number", "pie", "bar", "map", "table"):
         assert f'value="{t}"' in html
     assert 'value="number" selected' in html   # revenue is a number chart
 
 
-def test_build_form_type_override_switches_fields(orders_csv):
+def test_build_form_type_override_switches_fields(orders_parquet):
     """Overriding the type re-renders the fields for that type: a pie has a
     column but no aggregation."""
-    html = ce.build_form(_doc(orders_csv), "revenue", type_override="pie")
+    html = ce.build_form(_doc(orders_parquet), "revenue", type_override="pie")
     assert 'value="pie" selected' in html
     assert 'name="column"' in html
     assert 'name="agg"' not in html            # agg is number-only
 
 
-def test_apply_edit_swaps_chart_type(orders_csv):
+def test_apply_edit_swaps_chart_type(orders_parquet):
     """Submitting a different `type` rewrites the block with the new type's
     params and drops the old ones."""
     form = FakeForm(
         single={"type": "pie", "dataset": "orders", "title": "Revenue", "column": "status"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
-    new_text = ce.apply_edit(_doc(orders_csv), "revenue", form)
+    new_text = ce.apply_edit(_doc(orders_parquet), "revenue", form)
     block = yaml.safe_load(new_text)["charts"]["revenue"]
     assert block["type"] == "pie"
     assert block["column"] == "status"
@@ -92,8 +89,8 @@ def test_apply_edit_swaps_chart_type(orders_csv):
     ff.Dashboard.from_yaml(new_text)
 
 
-def test_replace_chart_block_preserves_siblings_and_reparses(orders_csv):
-    text = _doc(orders_csv)
+def test_replace_chart_block_preserves_siblings_and_reparses(orders_parquet):
+    text = _doc(orders_parquet)
     form = FakeForm(
         single={"dataset": "orders", "title": "Revenue", "column": "amount",
                 "agg": "max", "format": "compact"},
@@ -111,21 +108,19 @@ def test_replace_chart_block_preserves_siblings_and_reparses(orders_csv):
     assert "by_status:              # sibling — must stay byte-for-byte" in new_text
     assert "title: By status" in new_text
     # Datasets + dashboard preserved.
-    assert new_text.startswith("name: Test dashboard\ndatasets:")
+    assert new_text.startswith("name: Test dashboard\n\ncharts:")
     assert '- ["@20", "revenue:1", "by_status:1"]' in new_text
     # Whole doc still parses as a dashboard.
     ff.Dashboard.from_yaml(new_text)
 
 
-def test_emit_drops_none_and_empty(orders_csv):
+def test_emit_drops_none_and_empty(orders_parquet):
     """An unset nullable int (map zoom) and an empty filter list emit no key."""
     text = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
   m:
     type: map
-    dataset: o
+    dataset: {orders_parquet}
     title: M
     lat: lat
     lng: lng
@@ -145,22 +140,22 @@ dashboard:
     assert block["grid_size"] == 20
 
 
-def test_build_add_form_defaults_and_placement(orders_csv):
-    html = ce.build_add_form(_doc(orders_csv), "table", "row", "end")
+def test_build_add_form_defaults_and_placement(orders_parquet):
+    html = ce.build_add_form(_doc(orders_parquet), "table", "row", "end")
     assert "data-type-select" in html
     assert 'name="add_mode" value="row"' in html
     assert 'name="add_index" value="end"' in html
-    assert 'value="orders" selected' in html   # default dataset pre-filled
+    assert 'name="dataset"' in html              # dataset field (text) present
     assert ">Add<" in html                       # Add button, not Save
 
 
-def test_add_chart_new_row_at_end(orders_csv):
+def test_add_chart_new_row_at_end(orders_parquet):
     form = FakeForm(
         single={"type": "pie", "dataset": "orders", "title": "By status",
                 "column": "status", "add_mode": "row", "add_index": "end"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
-    new_text = ce.add_chart(_doc(orders_csv), form)
+    new_text = ce.add_chart(_doc(orders_parquet), form)
     cfg = yaml.safe_load(new_text)
     # New chart added under charts:, id derived from type.
     assert cfg["charts"]["pie"]["type"] == "pie"
@@ -170,35 +165,35 @@ def test_add_chart_new_row_at_end(orders_csv):
     ff.Dashboard.from_yaml(new_text)
 
 
-def test_add_chart_to_existing_row(orders_csv):
+def test_add_chart_to_existing_row(orders_parquet):
     form = FakeForm(
         single={"type": "table", "dataset": "orders", "title": "Orders",
                 "add_mode": "cell", "add_index": "0"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
-    new_text = ce.add_chart(_doc(orders_csv), form)
+    new_text = ce.add_chart(_doc(orders_parquet), form)
     # The one dashboard row (revenue + by_status) gained a third cell.
     row = [ln for ln in new_text.splitlines() if '"revenue:1"' in ln][0]
     assert '"table:1"' in row
     ff.Dashboard.from_yaml(new_text)
 
 
-def test_add_chart_generates_unique_id(orders_csv):
+def test_add_chart_generates_unique_id(orders_parquet):
     """Adding a second chart of a type that already exists gets a suffixed id."""
     form = FakeForm(
         single={"type": "pie", "dataset": "orders", "title": "P", "column": "status",
                 "add_mode": "row", "add_index": "end"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
-    once = ce.add_chart(_doc(orders_csv), form)
+    once = ce.add_chart(_doc(orders_parquet), form)
     twice = ce.add_chart(once, form)
     charts = yaml.safe_load(twice)["charts"]
     assert "pie" in charts and "pie_2" in charts
 
 
-def test_delete_chart_from_shared_row_keeps_siblings(orders_csv):
+def test_delete_chart_from_shared_row_keeps_siblings(orders_parquet):
     """Deleting one chart in a two-chart row leaves the other in place."""
-    new_text = ce.delete_chart(_doc(orders_csv), "by_status")
+    new_text = ce.delete_chart(_doc(orders_parquet), "by_status")
     cfg = yaml.safe_load(new_text)
     assert "by_status" not in cfg["charts"]        # block gone
     assert "revenue" in cfg["charts"]              # sibling kept
@@ -207,14 +202,12 @@ def test_delete_chart_from_shared_row_keeps_siblings(orders_csv):
     ff.Dashboard.from_yaml(new_text)
 
 
-def test_delete_chart_drops_now_empty_row(orders_csv):
+def test_delete_chart_drops_now_empty_row(orders_parquet):
     """A chart that is the only cell in its row takes the row with it."""
     text = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  a: {{type: table, dataset: o, title: A}}
-  b: {{type: pie, dataset: o, title: B, column: status}}
+  a: {{type: table, dataset: {orders_parquet}, title: A}}
+  b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
 dashboard:
   - ["@20", "a:1"]
   - ["@20", "b:1"]
@@ -226,13 +219,13 @@ dashboard:
     ff.Dashboard.from_yaml(new_text)
 
 
-def test_delete_unknown_chart_raises(orders_csv):
+def test_delete_unknown_chart_raises(orders_parquet):
     with pytest.raises(ce.ConfigEditError, match="unknown chart"):
-        ce.delete_chart(_doc(orders_csv), "ghost")
+        ce.delete_chart(_doc(orders_parquet), "ghost")
 
 
-def test_insert_header_before_row(orders_csv):
-    new_text = ce.insert_layout_item(_doc(orders_csv), "header", "0")
+def test_insert_header_before_row(orders_parquet):
+    new_text = ce.insert_layout_item(_doc(orders_parquet), "header", "0")
     lines = [ln.strip() for ln in new_text.splitlines()]
     assert "- New header" in lines
     # It lands above the first row (which holds revenue).
@@ -242,24 +235,22 @@ def test_insert_header_before_row(orders_csv):
     ff.Dashboard.from_yaml(new_text)
 
 
-def test_insert_separator_at_end(orders_csv):
-    new_text = ce.insert_layout_item(_doc(orders_csv), "separator", "end")
+def test_insert_separator_at_end(orders_parquet):
+    new_text = ce.insert_layout_item(_doc(orders_parquet), "separator", "end")
     assert new_text.rstrip().endswith('- "-"')
     ff.Dashboard.from_yaml(new_text)
 
 
-def test_insert_unknown_kind_raises(orders_csv):
+def test_insert_unknown_kind_raises(orders_parquet):
     with pytest.raises(ce.ConfigEditError, match="unknown layout item"):
-        ce.insert_layout_item(_doc(orders_csv), "widget", "end")
+        ce.insert_layout_item(_doc(orders_parquet), "widget", "end")
 
 
-def _headed_doc(csv_path: str) -> str:
+def _headed_doc(orders_parquet: str) -> str:
     return f"""name: Test dashboard
-datasets:
-  o: {{path: {csv_path}}}
 charts:
-  a: {{type: table, dataset: o, title: A}}
-  b: {{type: pie, dataset: o, title: B, column: status}}
+  a: {{type: table, dataset: {orders_parquet}, title: A}}
+  b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
 dashboard:
   - Overview
   - ["@20", "a:1"]
@@ -269,8 +260,8 @@ dashboard:
 """
 
 
-def test_set_header_text_by_index(orders_csv):
-    text = _headed_doc(orders_csv)
+def test_set_header_text_by_index(orders_parquet):
+    text = _headed_doc(orders_parquet)
     out = ce.set_header_text(text, 1, "Line items")   # second header = "Details"
     lines = [ln.strip() for ln in out.splitlines()]
     assert "- Overview" in lines                       # first header untouched
@@ -280,18 +271,18 @@ def test_set_header_text_by_index(orders_csv):
     ff.Dashboard.from_yaml(out)
 
 
-def test_set_header_text_quotes_when_unsafe(orders_csv):
+def test_set_header_text_quotes_when_unsafe(orders_parquet):
     """A colon would otherwise turn the item into a mapping, so it's quoted."""
-    out = ce.set_header_text(_headed_doc(orders_csv), 0, "Revenue: paid")
+    out = ce.set_header_text(_headed_doc(orders_parquet), 0, "Revenue: paid")
     assert '- "Revenue: paid"' in out
     ff.Dashboard.from_yaml(out)
 
 
-def test_set_header_text_validates(orders_csv):
+def test_set_header_text_validates(orders_parquet):
     with pytest.raises(ce.ConfigEditError, match="header 9 not found"):
-        ce.set_header_text(_headed_doc(orders_csv), 9, "x")
+        ce.set_header_text(_headed_doc(orders_parquet), 9, "x")
     with pytest.raises(ce.ConfigEditError, match="cannot be empty"):
-        ce.set_header_text(_headed_doc(orders_csv), 0, "   ")
+        ce.set_header_text(_headed_doc(orders_parquet), 0, "   ")
 
 
 # _headed_doc layout items, by full-list index:
@@ -301,34 +292,34 @@ def _item_lines(text: str) -> list[str]:
     return [ln.strip() for ln in text.splitlines()[di + 1:] if ln.strip()]
 
 
-def test_move_layout_item_separator_between_rows(orders_csv):
+def test_move_layout_item_separator_between_rows(orders_parquet):
     # Separator (item 3) up to before the first row (item 1).
-    out = ce.move_layout_item(_headed_doc(orders_csv), 3, "1")
+    out = ce.move_layout_item(_headed_doc(orders_parquet), 3, "1")
     items = _item_lines(out)
     assert items.index('- "-"') < items.index('- ["@20", "a:1"]')
     assert items.count('- "-"') == 1
     ff.Dashboard.from_yaml(out)
 
 
-def test_move_layout_item_header_to_end(orders_csv):
+def test_move_layout_item_header_to_end(orders_parquet):
     # "Overview" (item 0) to the end of the layout.
-    out = ce.move_layout_item(_headed_doc(orders_csv), 0, "end")
+    out = ce.move_layout_item(_headed_doc(orders_parquet), 0, "end")
     assert _item_lines(out)[-1] == "- Overview"
     ff.Dashboard.from_yaml(out)
 
 
-def test_move_layout_item_rejects_a_row(orders_csv):
+def test_move_layout_item_rejects_a_row(orders_parquet):
     with pytest.raises(ce.ConfigEditError, match="only headers and separators"):
-        ce.move_layout_item(_headed_doc(orders_csv), 1, "end")
+        ce.move_layout_item(_headed_doc(orders_parquet), 1, "end")
 
 
-def test_move_layout_item_out_of_range(orders_csv):
+def test_move_layout_item_out_of_range(orders_parquet):
     with pytest.raises(ce.ConfigEditError, match="layout item 9 not found"):
-        ce.move_layout_item(_headed_doc(orders_csv), 9, "end")
+        ce.move_layout_item(_headed_doc(orders_parquet), 9, "end")
 
 
-def test_delete_layout_item_header(orders_csv):
-    out = ce.delete_layout_item(_headed_doc(orders_csv), 2)   # "Details"
+def test_delete_layout_item_header(orders_parquet):
+    out = ce.delete_layout_item(_headed_doc(orders_parquet), 2)   # "Details"
     items = _item_lines(out)
     assert "- Details" not in items
     assert "- Overview" in items                              # other header intact
@@ -336,84 +327,80 @@ def test_delete_layout_item_header(orders_csv):
     ff.Dashboard.from_yaml(out)
 
 
-def test_delete_layout_item_separator(orders_csv):
-    out = ce.delete_layout_item(_headed_doc(orders_csv), 3)   # the "-"
+def test_delete_layout_item_separator(orders_parquet):
+    out = ce.delete_layout_item(_headed_doc(orders_parquet), 3)   # the "-"
     assert '- "-"' not in _item_lines(out)
     ff.Dashboard.from_yaml(out)
 
 
-def test_delete_layout_item_rejects_a_row(orders_csv):
+def test_delete_layout_item_rejects_a_row(orders_parquet):
     with pytest.raises(ce.ConfigEditError, match="only headers and separators"):
-        ce.delete_layout_item(_headed_doc(orders_csv), 1)
+        ce.delete_layout_item(_headed_doc(orders_parquet), 1)
 
 
-def _move_doc(csv_path: str) -> str:
+def _move_doc(orders_parquet: str) -> str:
     return f"""name: Test dashboard
-datasets:
-  o: {{path: {csv_path}}}
 charts:
-  a: {{type: table, dataset: o, title: A}}
-  b: {{type: pie, dataset: o, title: B, column: status}}
-  c: {{type: number, dataset: o, title: C, column: amount, agg: sum}}
+  a: {{type: table, dataset: {orders_parquet}, title: A}}
+  b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
+  c: {{type: number, dataset: {orders_parquet}, title: C, column: amount, agg: sum}}
 dashboard:
   - ["@20", "a:3", "b:2"]
   - ["@20", "c:1"]
 """
 
 
-def test_move_reorder_within_row(orders_csv):
-    out = ce.move_placement(_move_doc(orders_csv), "b", "a", "before")
+def test_move_reorder_within_row(orders_parquet):
+    out = ce.move_placement(_move_doc(orders_parquet), "b", "a", "before")
     row = [ln for ln in out.splitlines() if "@20" in ln][0]
     assert row.strip() == '- ["@20", "b:1", "a:3"]'   # b moved ahead of a, re-inserted at :1
     ff.Dashboard.from_yaml(out)
 
 
-def test_move_across_rows_drops_empty_source(orders_csv):
-    out = ce.move_placement(_move_doc(orders_csv), "c", "a", "after")
+def test_move_across_rows_drops_empty_source(orders_parquet):
+    out = ce.move_placement(_move_doc(orders_parquet), "c", "a", "after")
     rows = [ln.strip() for ln in out.splitlines() if "@20" in ln]
     # c joined row 0 (row 1 gone) as :1; a and b keep their own widths.
     assert rows == ['- ["@20", "a:3", "c:1", "b:2"]']
     ff.Dashboard.from_yaml(out)
 
 
-def test_move_noop_and_unknown(orders_csv):
-    doc = _move_doc(orders_csv)
+def test_move_noop_and_unknown(orders_parquet):
+    doc = _move_doc(orders_parquet)
     assert ce.move_placement(doc, "a", "a", "before") == doc      # onto itself
     with pytest.raises(ce.ConfigEditError, match="not in the layout"):
         ce.move_placement(doc, "ghost", "a", "before")
 
 
-def test_move_to_new_row_between_rows(orders_csv):
+def test_move_to_new_row_between_rows(orders_parquet):
     """Drop into the gap before row 1: b leaves row 0 into its own row there."""
-    out = ce.move_to_new_row(_move_doc(orders_csv), "b", "1")
+    out = ce.move_to_new_row(_move_doc(orders_parquet), "b", "1")
     rows = [ln.strip() for ln in out.splitlines() if "@" in ln]
     assert rows == ['- ["@20", "a:3"]', '- ["@30", "b:1"]', '- ["@20", "c:1"]']
     ff.Dashboard.from_yaml(out)
 
 
-def test_move_to_new_row_at_end(orders_csv):
-    out = ce.move_to_new_row(_move_doc(orders_csv), "a", "end")
+def test_move_to_new_row_at_end(orders_parquet):
+    out = ce.move_to_new_row(_move_doc(orders_parquet), "a", "end")
     rows = [ln.strip() for ln in out.splitlines() if "@" in ln]
     assert rows[0] == '- ["@20", "b:2"]'       # a left row 0
     assert rows[-1] == '- ["@30", "a:1"]'       # new lone row (width irrelevant)
     ff.Dashboard.from_yaml(out)
 
 
-def test_move_to_new_row_unknown(orders_csv):
+def test_move_to_new_row_unknown(orders_parquet):
     with pytest.raises(ce.ConfigEditError, match="not in the layout"):
-        ce.move_to_new_row(_move_doc(orders_csv), "ghost", "end")
+        ce.move_to_new_row(_move_doc(orders_parquet), "ghost", "end")
 
 
-def _merge_doc(csv_path: str) -> str:
+def _merge_doc(orders_parquet: str) -> str:
     # `status` spans the first two rows: sized in row 1, repeated bare below.
     return f"""name: Test dashboard
-datasets:
-  o: {{path: {csv_path}}}
 charts:
-  orders: {{type: table, dataset: o, title: O}}
-  by_day: {{type: bar, dataset: o, title: D, x: day, y: status}}
-  status: {{type: pie, dataset: o, title: S, column: status}}
-  kpi: {{type: number, dataset: o, title: K, column: amount, agg: sum}}
+  orders: {{type: table, dataset: {orders_parquet}, title: O}}
+  by_day: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
+  status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
+  kpi: {{type: number, dataset: {orders_parquet}, title: K, column: amount, agg: sum}}
 dashboard:
   - ["@40", "orders:3", "status:2"]
   - ["@30", "by_day", "status"]
@@ -421,32 +408,32 @@ dashboard:
 """
 
 
-def test_move_next_to_spanning_chart_adopts(orders_csv):
+def test_move_next_to_spanning_chart_adopts(orders_parquet):
     """Next to the spanning chart (`status`) the newcomer adopts the span:
     `kpi:1` in the first row, bare `kpi` in the sibling so it inherits and spans."""
-    out = ce.move_placement(_merge_doc(orders_csv), "kpi", "status", "before")
+    out = ce.move_placement(_merge_doc(orders_parquet), "kpi", "status", "before")
     rows = [ln.strip() for ln in out.splitlines() if "@" in ln]
     assert rows == ['- ["@40", "orders:3", "kpi:1", "status:2"]',
                     '- ["@30", "by_day", "kpi", "status"]']
     assert "grid-row: 1 / span 2" in ff.Dashboard.from_yaml(out).to_html()
 
 
-def test_move_next_to_merge_member_single_row(orders_csv):
+def test_move_next_to_merge_member_single_row(orders_parquet):
     """Next to a single-row cell (`orders`), the chart lands in that one row only.
     No spacer — the sibling's `by_day` fills and column-spans the leftover, so
     `status` keeps spanning."""
-    out = ce.move_placement(_merge_doc(orders_csv), "kpi", "orders", "after")
+    out = ce.move_placement(_merge_doc(orders_parquet), "kpi", "orders", "after")
     rows = [ln.strip() for ln in out.splitlines() if "@" in ln]
     assert rows == ['- ["@40", "orders:3", "kpi:1", "status:2"]',
                     '- ["@30", "by_day", "status"]']
     assert "grid-row: 1 / span 2" in ff.Dashboard.from_yaml(out).to_html()
 
 
-def test_move_merge_member_out_dissolves_span(orders_csv):
+def test_move_merge_member_out_dissolves_span(orders_parquet):
     """Moving a chart out of a merge group (its removal would misalign the
     spanning chart) repairs the layout: the span collapses to its fuller row and
     the result stays valid."""
-    out = ce.move_to_new_row(_merge_doc(orders_csv), "orders", "end")
+    out = ce.move_to_new_row(_merge_doc(orders_parquet), "orders", "end")
     rows = [ln.strip() for ln in out.splitlines() if "@" in ln]
     # status keeps its fuller row (with by_day); orders becomes its own row.
     assert '- ["@30", "by_day", "status"]' in rows
@@ -455,16 +442,14 @@ def test_move_merge_member_out_dissolves_span(orders_csv):
     ff.Dashboard.from_yaml(out)
 
 
-def test_move_span_across_two_rows(orders_csv):
+def test_move_span_across_two_rows(orders_parquet):
     """`move_span` places the chart spanning a row and the row directly below:
     `src:1` in the top row, bare `src` below so it inherits and spans."""
     doc = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  orders: {{type: table, dataset: o, title: O}}
-  by_day: {{type: bar, dataset: o, title: D, x: day, y: status}}
-  status: {{type: pie, dataset: o, title: S, column: status}}
+  orders: {{type: table, dataset: {orders_parquet}, title: O}}
+  by_day: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
+  status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
 dashboard:
   - ["@40", "orders"]
   - ["@30", "by_day"]
@@ -477,18 +462,16 @@ dashboard:
     assert "grid-row: 1 / span 2" in ff.Dashboard.from_yaml(out).to_html()
 
 
-def test_move_span_onto_merged_chart_extends_to_three_rows(orders_csv):
+def test_move_span_onto_merged_chart_extends_to_three_rows(orders_parquet):
     """Merging onto a chart that already spans 2 rows makes the moved chart span
     that whole span + 1 row below (rows 1-3)."""
     doc = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  orders: {{type: table, dataset: o, title: O}}
-  by_day: {{type: bar, dataset: o, title: D, x: day, y: status}}
-  status: {{type: pie, dataset: o, title: S, column: status}}
-  density: {{type: table, dataset: o, title: De}}
-  kpi: {{type: number, dataset: o, title: K, column: amount, agg: sum}}
+  orders: {{type: table, dataset: {orders_parquet}, title: O}}
+  by_day: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
+  status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
+  density: {{type: table, dataset: {orders_parquet}, title: De}}
+  kpi: {{type: number, dataset: {orders_parquet}, title: K, column: amount, agg: sum}}
 dashboard:
   - ["@20", "orders", "status"]
   - ["@20", "by_day", "status"]
@@ -505,16 +488,14 @@ dashboard:
     assert "grid-row: 1 / span 3" in html   # kpi spans 3
 
 
-def test_merge_down_extends_own_span(orders_csv):
+def test_merge_down_extends_own_span(orders_parquet):
     """`merge_down` grows a chart's own span down one row: a single-row chart
     becomes a 2-row line; a 2-row line becomes 3."""
     doc = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  orders: {{type: table, dataset: o, title: O}}
-  status: {{type: pie, dataset: o, title: S, column: status}}
-  byday: {{type: bar, dataset: o, title: D, x: day, y: status}}
+  orders: {{type: table, dataset: {orders_parquet}, title: O}}
+  status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
+  byday: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
 dashboard:
   - ["@20", "orders", "status"]
   - ["@20", "byday"]
@@ -525,12 +506,10 @@ dashboard:
     assert "grid-row: 1 / span 2" in ff.Dashboard.from_yaml(out).to_html()
 
 
-def test_merge_down_no_row_below_errors(orders_csv):
+def test_merge_down_no_row_below_errors(orders_parquet):
     doc = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  orders: {{type: table, dataset: o, title: O}}
+  orders: {{type: table, dataset: {orders_parquet}, title: O}}
 dashboard:
   - ["@20", "orders"]
 """
@@ -538,14 +517,12 @@ dashboard:
         ce.merge_down(doc, "orders")
 
 
-def test_move_span_no_row_below_is_single_insert(orders_csv):
+def test_move_span_no_row_below_is_single_insert(orders_parquet):
     """With no adjacent row below the target, span degrades to a single insert."""
     doc = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  orders: {{type: table, dataset: o, title: O}}
-  status: {{type: pie, dataset: o, title: S, column: status}}
+  orders: {{type: table, dataset: {orders_parquet}, title: O}}
+  status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
 dashboard:
   - ["@40", "status:1"]
   - ["@30", "orders"]
@@ -556,27 +533,25 @@ dashboard:
     ff.Dashboard.from_yaml(out)
 
 
-def test_resize_columns_owner_row(orders_csv):
+def test_resize_columns_owner_row(orders_parquet):
     """Dragging the boundary of a merge group rewrites the owner row's widths and
     keeps the spanning chart bare below."""
-    out = ce.resize_columns(_merge_doc(orders_csv), [0, 1], [1, 1])
+    out = ce.resize_columns(_merge_doc(orders_parquet), [0, 1], [1, 1])
     rows = [ln.strip() for ln in out.splitlines() if "@" in ln]
     assert rows[0] == '- ["@40", "orders:1", "status:1"]'
     assert rows[1] == '- ["@30", "by_day:1", "status"]'   # status stays bare
     ff.Dashboard.from_yaml(out)
 
 
-def test_resize_columns_from_inherited_row(orders_csv):
+def test_resize_columns_from_inherited_row(orders_parquet):
     """Resizing a boundary owned by a lower (inherited) row updates that row's
     cells only, leaving the first row's sizes and the span intact."""
     doc = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  a: {{type: table, dataset: o, title: A}}
-  x: {{type: table, dataset: o, title: X}}
-  y: {{type: table, dataset: o, title: Y}}
-  pie: {{type: pie, dataset: o, title: P, column: status}}
+  a: {{type: table, dataset: {orders_parquet}, title: A}}
+  x: {{type: table, dataset: {orders_parquet}, title: X}}
+  y: {{type: table, dataset: {orders_parquet}, title: Y}}
+  pie: {{type: pie, dataset: {orders_parquet}, title: P, column: status}}
 dashboard:
   - ["@20", "a", "pie"]
   - ["@20", "x", "y", "pie"]
@@ -588,18 +563,16 @@ dashboard:
     assert "grid-template-columns: 1.5fr 0.5fr 2fr" in ff.Dashboard.from_yaml(out).to_html()
 
 
-def test_resize_columns_in_tabbed_dashboard(orders_csv):
+def test_resize_columns_in_tabbed_dashboard(orders_parquet):
     """Row ordinals are global across tabs, so a column drag on a *tabbed*
     dashboard must still find its group. It previously searched flat `.items`
     only (empty when tabbed), silently no-op'd, and the drag snapped back."""
     doc = f"""name: Test dashboard
-datasets:
-  o: {{path: {orders_csv}}}
 charts:
-  a: {{type: table, dataset: o, title: A}}
-  b: {{type: table, dataset: o, title: B}}
-  c: {{type: table, dataset: o, title: C}}
-  d: {{type: table, dataset: o, title: D}}
+  a: {{type: table, dataset: {orders_parquet}, title: A}}
+  b: {{type: table, dataset: {orders_parquet}, title: B}}
+  c: {{type: table, dataset: {orders_parquet}, title: C}}
+  d: {{type: table, dataset: {orders_parquet}, title: D}}
 dashboard:
   Overview:
     - ["@22", "a", "b", "c"]
@@ -612,9 +585,9 @@ dashboard:
     ff.Dashboard.from_yaml(out)
 
 
-def test_apply_edit_invalid_value_raises(orders_csv):
+def test_apply_edit_invalid_value_raises(orders_parquet):
     """A bad enum value surfaces as a DashboardError (the whole doc is validated)."""
-    text = _doc(orders_csv)
+    text = _doc(orders_parquet)
     form = FakeForm(
         single={"dataset": "orders", "title": "Revenue", "column": "amount",
                 "agg": "median", "format": "compact"},  # median is not a valid agg
