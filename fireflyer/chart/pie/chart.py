@@ -7,6 +7,7 @@ import polars as pl
 
 from fireflyer import filters as filters_mod
 from fireflyer.params import ColumnParam, DatasetParam, FilterListParam, TextParam
+from fireflyer.scan import scan
 
 # Fixed categorical palette for slices — theme-independent, so a value keeps
 # its color across light and dark.
@@ -101,6 +102,8 @@ class Pie:
     column: str
     filters: list = field(default_factory=list)
 
+    _resolve = None  # name -> (uri, storage_options); not a dataclass field
+
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
@@ -134,12 +137,18 @@ class Pie:
         Outside a dashboard (e.g. standalone Python use, snapshot tests) the
         argument is omitted and slices render exactly as before.
         """
-        df = pl.read_csv(self.dataset)
-        df = filters_mod.apply(df, self.filters)
+        # Lazy scan: Polars pushes the filter predicates and the column
+        # projection into the Parquet read, so only `column` (+ filter columns)
+        # is scanned, not the whole file.
+        lf = scan(self.dataset, self._resolve)
+        preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
+        if preds:
+            lf = lf.filter(*preds)
         counts = (
-            df.group_by(self.column)
+            lf.group_by(self.column)
             .agg(pl.len().alias("count"))
             .sort("count", descending=True)
+            .collect()
         )
         labels = [str(v) if v is not None else "" for v in counts[self.column].to_list()]
         values = [int(v) for v in counts["count"].to_list()]

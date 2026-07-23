@@ -210,7 +210,7 @@
     <div class="fireflyer-table-search">
       <input type="search" name="q" value="" placeholder="Search…"
              autocomplete="off" spellcheck="false"
-             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Open+orders&search=1&pagination=5&filters=%5B%7B%22column%22%3A%22status%22%2C%22op%22%3A%22in%22%2C%22values%22%3A%5B%22paid%22%5D%7D%5D"
+             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=Open+orders&search=1&pagination=5&filters=%5B%7B%22column%22%3A%22status%22%2C%22op%22%3A%22in%22%2C%22values%22%3A%5B%22paid%22%5D%7D%5D"
              hx-target="#fireflyer-table-<ID>"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"

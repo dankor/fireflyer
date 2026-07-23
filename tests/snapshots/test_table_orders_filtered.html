@@ -210,7 +210,7 @@
     <div class="fireflyer-table-search">
       <input type="search" name="q" value="paid" placeholder="Search…"
              autocomplete="off" spellcheck="false"
-             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.csv&title=Orders&search=1&pagination=5"
+             hx-get="/chart/table?dataset=<TEST_DATA>%2Forders.parquet&title=Orders&search=1&pagination=5"
              hx-target="#fireflyer-table-<ID>"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"

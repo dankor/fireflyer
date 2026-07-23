@@ -10,6 +10,7 @@ import polars as pl
 
 from fireflyer import filters as filters_mod
 from fireflyer.params import BoolParam, DatasetParam, FilterListParam, IntParam, TextParam
+from fireflyer.scan import scan
 
 # Per the spec, the table chart reads at most the first 1000 rows.
 MAX_ROWS = 1000
@@ -90,6 +91,10 @@ class Table:
     pagination: int = 5
     filters: list = field(default_factory=list)
 
+    # Name -> (uri, storage_options) resolver, injected by the dashboard/route.
+    # None: `dataset` is a Parquet path/URI (standalone). Not a dataclass field.
+    _resolve = None
+
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
@@ -105,7 +110,10 @@ class Table:
     def to_html(
         self, page: int = 1, query: str = "", *, theme: str | None = None
     ) -> str:
-        df = pl.read_csv(self.dataset).head(MAX_ROWS)
+        # head() pushes down into the scan, so only ~MAX_ROWS are read from the
+        # Parquet, not the whole file. Filters/search then apply to that slice
+        # (same semantics as the old read_csv().head() path).
+        df = scan(self.dataset, self._resolve).head(MAX_ROWS).collect()
         df = filters_mod.apply(df, self.filters)
         if query:
             df = _search(df, query)

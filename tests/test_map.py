@@ -3,9 +3,9 @@ import pytest
 import fireflyer as ff
 
 
-def test_map_orders_density(orders_csv, snapshot):
+def test_map_orders_density(orders_parquet, snapshot):
     chart = ff.chart.map(
-        dataset=orders_csv,
+        dataset=orders_parquet,
         title="Order density (Kyiv)",
         lat="lat",
         lng="lng",
@@ -14,7 +14,7 @@ def test_map_orders_density(orders_csv, snapshot):
     snapshot(chart.to_html())
 
 
-def test_map_bins_match_fixture(orders_csv):
+def test_map_bins_match_fixture(orders_parquet):
     """Fixture has 4 distinct (lat, lng) points:
        (50.450, 30.520) → ids 1,3,7 = 3 records
        (50.430, 30.520) → ids 2,5   = 2 records
@@ -23,7 +23,7 @@ def test_map_bins_match_fixture(orders_csv):
     With a coarse-enough grid every point lands in its own hex.
     """
     chart = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=20
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=20
     )
     html = chart.to_html()
     # Four populated hexes.
@@ -36,10 +36,10 @@ def test_map_bins_match_fixture(orders_csv):
     assert ">3</span>" in html  # max-count legend label
 
 
-def test_map_filter_narrows_before_binning(orders_csv):
+def test_map_filter_narrows_before_binning(orders_parquet):
     """Declared filter narrows rows before lat/lng binning."""
     chart = ff.chart.map(
-        dataset=orders_csv,
+        dataset=orders_parquet,
         title="paid only",
         lat="lat",
         lng="lng",
@@ -64,13 +64,13 @@ def test_map_grid_size_clamped():
     assert chart2.grid_size == 4  # GRID_MIN
 
 
-def test_map_zoom_controls_target_tile_zoom(orders_csv):
+def test_map_zoom_controls_target_tile_zoom(orders_parquet):
     """The +/- buttons step the OSM tile zoom; the grid adopts because the
     hex pixel size stays fixed while the viewBox grows."""
     import re
 
     chart = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=16
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=16
     )
     html = chart.to_html()
     # The label displays the chosen tile zoom (auto-fit picks it; we don't
@@ -86,11 +86,11 @@ def test_map_zoom_controls_target_tile_zoom(orders_csv):
     assert "grid_size=16" in html
 
 
-def test_map_grid_size_controls_target_grid_size(orders_csv):
+def test_map_grid_size_controls_target_grid_size(orders_parquet):
     """The hex `+`/`−` buttons halve / double `grid_size`. `+` means more
     detail (smaller hexes → smaller grid_size); `−` means coarser."""
     chart = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=16
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=16
     )
     html = chart.to_html()
     # Both controls' base_params share the same identity URL; the buttons
@@ -104,43 +104,42 @@ def test_map_grid_size_controls_target_grid_size(orders_csv):
     assert label and int(label.group(1)) == 16
 
 
-def test_map_grid_size_step_is_clamped(orders_csv):
+def test_map_grid_size_step_is_clamped(orders_parquet):
     """Halving / doubling stays inside [GRID_MIN, GRID_MAX]."""
     # At grid_size=4 (GRID_MIN), `+` should keep us at 4, not 2.
     small = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=4
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=4
     ).to_html()
     assert "grid_size=4" in small   # finer button can't go below 4
     # At grid_size=200 (GRID_MAX), `−` should keep us at 200, not 400.
     big = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=200
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=200
     ).to_html()
     assert "grid_size=200" in big   # coarser button can't go above 200
 
 
-def test_map_explicit_zoom_overrides_autofit(orders_csv):
+def test_map_explicit_zoom_overrides_autofit(orders_parquet):
     """Passing `zoom=` bypasses the auto-fit selection."""
     chart = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng",
+        dataset=orders_parquet, title="t", lat="lat", lng="lng",
         grid_size=16, zoom=14,
     )
     html = chart.to_html()
     assert ">z14<" in html
 
 
-def test_map_hex_grid_adopts_to_zoom(tmp_path):
+def test_map_hex_grid_adopts_to_zoom(csv_to_parquet):
     """Higher tile zoom produces more (smaller-relative-to-data) hexes
     because the hex side length stays fixed in world-pixel units."""
     # Densely cluster 60 points inside a tiny lat/lng box so they can pack
     # into a small number of hexes at low zoom and spread out at high zoom.
-    csv_path = tmp_path / "dense.csv"
     lines = ["id,lat,lng"]
     for i in range(60):
         # Deterministic spread: i across a 0.02° × 0.02° area.
         lat = 50.45 + (i % 8) * 0.0025
         lng = 30.52 + (i // 8) * 0.0025
         lines.append(f"{i},{lat:.6f},{lng:.6f}")
-    csv_path.write_text("\n".join(lines) + "\n")
+    csv_path = csv_to_parquet("\n".join(lines) + "\n", "dense")
 
     low = ff.chart.map(
         dataset=str(csv_path), title="t", lat="lat", lng="lng",
@@ -158,10 +157,10 @@ def test_map_hex_grid_adopts_to_zoom(tmp_path):
     )
 
 
-def test_map_renders_osm_tiles_with_attribution(orders_csv):
+def test_map_renders_osm_tiles_with_attribution(orders_parquet):
     """Tile layer uses tile.openstreetmap.org URLs and carries OSM attribution."""
     chart = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=10
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=10
     )
     html = chart.to_html()
     # At least one tile <image>, all pointing at OSM.
@@ -183,10 +182,10 @@ def test_map_renders_osm_tiles_with_attribution(orders_csv):
     assert "openstreetmap.org/copyright" in html
 
 
-def test_map_hex_has_hover_label_group(orders_csv):
+def test_map_hex_has_hover_label_group(orders_parquet):
     """Each hex is wrapped in a <g> with a count <text> for CSS-only hover."""
     chart = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=20
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=20
     )
     html = chart.to_html()
     # One group per hex (fixture has 4 bins).
@@ -197,11 +196,11 @@ def test_map_hex_has_hover_label_group(orders_csv):
     assert ">3</text>" in html
 
 
-def test_map_svg_is_responsive(orders_csv):
+def test_map_svg_is_responsive(orders_parquet):
     """SVG carries `width="100%" height="100%"` with `preserveAspectRatio="meet"`
     so it always fills its dashboard cell regardless of cell dimensions."""
     chart = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=10
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=10
     )
     html = chart.to_html()
     import re
@@ -213,10 +212,10 @@ def test_map_svg_is_responsive(orders_csv):
     assert m, "map SVG should have width/height=100% and preserveAspectRatio meet"
 
 
-def test_map_zoom_label_includes_tile_zoom(orders_csv):
+def test_map_zoom_label_includes_tile_zoom(orders_parquet):
     """Footer shows the chosen tile zoom alongside the data bounds."""
     chart = ff.chart.map(
-        dataset=orders_csv, title="t", lat="lat", lng="lng", grid_size=10
+        dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=10
     )
     html = chart.to_html()
     # `z<N>` token appears once in the bounds footer.
@@ -224,12 +223,11 @@ def test_map_zoom_label_includes_tile_zoom(orders_csv):
     assert re.search(r"z\d+</span>", html)
 
 
-def test_map_empty_dataset_renders_no_polygons(tmp_path):
-    """A CSV with zero rows after filtering renders the empty state."""
-    csv_path = tmp_path / "empty.csv"
-    csv_path.write_text("id,lat,lng\n")
+def test_map_empty_dataset_renders_no_polygons(csv_to_parquet):
+    """A dataset with zero rows after filtering renders the empty state."""
+    dataset = csv_to_parquet("id,lat,lng\n", "empty")
     chart = ff.chart.map(
-        dataset=str(csv_path), title="empty", lat="lat", lng="lng"
+        dataset=dataset, title="empty", lat="lat", lng="lng"
     )
     html = chart.to_html()
     assert "<polygon" not in html

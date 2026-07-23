@@ -12,6 +12,7 @@ from fireflyer.params import (
     FilterListParam,
     TextParam,
 )
+from fireflyer.scan import scan
 
 # Supported aggregations — each a polars reduction over the target column.
 # A plain tuple per project style — no registry abstraction.
@@ -43,8 +44,9 @@ _TEMPLATE = jinja2.Template(
 )
 
 
-def _reduce(df: pl.DataFrame, column: str, agg: str):
-    """Apply one aggregation and return the scalar Python result.
+def _reduce(lf: pl.LazyFrame, column: str, agg: str):
+    """Apply one aggregation and return the scalar Python result. Takes a
+    LazyFrame so Polars reads only `column` (+ any filter columns) from Parquet.
 
     polars' `count()` already excludes nulls, so `count` means "non-null
     values". `dcount` drops nulls first so it counts distinct *values*, not
@@ -58,7 +60,7 @@ def _reduce(df: pl.DataFrame, column: str, agg: str):
         "max": col.max(),
         "min": col.min(),
     }
-    return df.select(exprs[agg].alias("value")).item()
+    return lf.select(exprs[agg].alias("value")).collect().item()
 
 
 def _trim(text: str) -> str:
@@ -121,6 +123,8 @@ class Number:
     format: str = "compact"
     filters: list = field(default_factory=list)
 
+    _resolve = None  # name -> (uri, storage_options); not a dataclass field
+
     # Editor modal schema — one Param per constructor kwarg, in display order.
     # See fireflyer/params.py and the "chart params" skill.
     PARAMS = [
@@ -149,9 +153,11 @@ class Number:
         """`theme` forces a palette (`"dark"`/`"light"`); omitted, the chart
         follows the viewer's OS preference (inherited from the dashboard root
         when nested)."""
-        df = pl.read_csv(self.dataset)
-        df = filters_mod.apply(df, self.filters)
-        value = _reduce(df, self.column, self.agg)
+        lf = scan(self.dataset, self._resolve)
+        preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
+        if preds:
+            lf = lf.filter(*preds)
+        value = _reduce(lf, self.column, self.agg)
 
         # `exact` is the un-abbreviated value, surfaced as a native hover tooltip
         # so a compact "1.42K" can still reveal its precise figure on hover.

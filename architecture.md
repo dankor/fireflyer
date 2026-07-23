@@ -60,7 +60,7 @@ Polars is an internal implementation detail.
 
 Supported in MVP:
 
-* CSV files
+* CSV upload → Parquet datasets (in object storage)
 * Table chart
 * Pie chart
 * Dashboards (see Dashboard Layout DSL below)
@@ -85,9 +85,12 @@ Not supported:
 * Large dataset optimization
 * Realtime updates
 
-Persistence and a multi-dashboard listing are the one **owner-approved
-exception** — added by **Portal mode** (below), scoped to `web/`. It does *not*
-relax the rest of this list: no auth, no multi-user, no caching.
+Two **owner-approved exceptions** to this list: **Portal mode** (below) adds
+persistence + a multi-dashboard listing, scoped to `web/`; and **datasets** are
+Parquet in object storage with efficient (pushdown) scans — so "only CSV" and
+"large-dataset optimization" no longer hold for the dataset layer. Neither
+relaxes the rest: no auth beyond the portal's simple login, no multi-user, no
+caching, no SQL/joins/calculated columns.
 
 ---
 
@@ -245,13 +248,10 @@ The Python API (`ff.chart.table(...)`, `ff.chart.pie(...)`) stays for ad-hoc ren
 
 ## File shape
 
-A dashboard YAML has four top-level sections:
+A dashboard YAML has three top-level sections:
 
 ```yaml
 name: <string>
-
-datasets:
-  <id>: <dataset config>
 
 charts:
   <id>: <chart config>
@@ -264,24 +264,31 @@ dashboard:
 * `name` — required. A short human-readable title for the whole dashboard,
   part of the definition. `Dashboard.from_yaml` rejects a missing or empty
   `name`; **Portal mode** lists dashboards by it.
-* `datasets` — mapping of dataset id → dataset config.
 * `charts` — mapping of chart id → chart config.
 * `dashboard` — the page layout (the layout DSL, below). Either a flat list of
   layout items, or a mapping of tab name → layout list (see **Tabs**).
 
-All ids are local to the file. There is no cross-file inclusion in the MVP.
+Chart ids are local to the file. There is no cross-file inclusion in the MVP.
 
-## Datasets section
+## Datasets
 
-A dataset declares where data comes from:
+Datasets are **managed, named entities** — not inline paths. A CSV is uploaded,
+converted to **Parquet**, and stored in an object store; a chart references a
+dataset by its **unique name** (`dataset: orders`). There is **no `datasets:`
+block** in the dashboard YAML.
 
-```yaml
-datasets:
-  orders:
-    path: files/orders.csv
-```
+`Dashboard.from_yaml(text, datasets=<store>)` resolves each chart's dataset name
+to its Parquet `(uri, storage_options)` at render time; charts read via lazy
+`scan_parquet` with projection + predicate pushdown, so only the columns and
+row-groups a chart needs are read. Without a resolver (standalone use, tests), a
+chart's `dataset` is taken as a Parquet path/URI directly.
 
-For the MVP, only CSV is supported and `path` is the only required key. Additional keys can be added later without breaking existing dashboards.
+The dataset entity (Parquet + a small YAML metadata sidecar: schema, row count,
+description, delimiter, author) lives in an `ObjectStore` — a local folder for
+dev/tests, S3-compatible **Garage** for portal runtime. Managed in the portal's
+**Datasets** gallery tab (upload / preview / rename-with-cascade /
+guarded-delete). See **Portal mode** and `fireflyer/datasets.py` /
+`fireflyer/storage.py`.
 
 ## Charts section
 
@@ -304,7 +311,7 @@ charts:
 ```
 
 * `type` selects the chart implementation (e.g. `table`, `pie`).
-* `dataset` references a key in the `datasets:` section.
+* `dataset` is a dataset **name** (resolved to its stored Parquet at render time; see **Datasets**).
 * Remaining keys map directly to that chart's Python constructor arguments. A chart's YAML schema is its constructor — no extra translation layer.
 
 ## Chart params & editor modal
@@ -434,7 +441,7 @@ A chart spans multiple rows by being **sized in one row and repeated bare** (no 
 
 * All heights and any **given** widths MUST be greater than zero. Width is optional (defaults to 1); there is **no** sum requirement.
 * The first element of a row MUST be a height token (`"@..."`); the rest MUST be widget tokens (`"<id>"` or `"<id>:<width>"`).
-* Every chart id referenced in the layout MUST be declared in `charts:`. Every dataset id referenced by a chart MUST be declared in `datasets:`.
+* Every chart id referenced in the layout MUST be declared in `charts:`. A chart's `dataset` names a managed dataset, resolved (to Parquet) at render time.
 * A chart id MAY appear more than once ONLY as one **contiguous bare-inherit span** — sized once, then bare in the immediately following row(s) with no header/separator between. Repeating an id **with** a width, across a header/separator, skipping a row, or twice in one row is invalid.
 
 ### Rendering model
@@ -504,10 +511,6 @@ re-validated through `Dashboard.from_yaml`.
 
 ```yaml
 name: Orders overview
-
-datasets:
-  orders:
-    path: files/orders.csv
 
 charts:
   orders_table:
@@ -708,9 +711,9 @@ top-level `name:` key (see **File shape**): the store re-derives the column from
 the YAML on every save, so renaming is just editing the `name:` key in the
 editor, and New/Clone write the modal-provided name into the YAML. **Author** is
 separate metadata (not in the YAML) — the logged-in user, set once at
-create/clone and left untouched by saves. Datasets stay inline in the YAML (CSV
-paths on the server filesystem); per-dataset storage is deliberately out of
-scope for the first cut.
+create/clone and left untouched by saves. Datasets are **not** in the YAML:
+charts reference them by name and they live in the dataset store (see the
+**Datasets** section), so a dashboard blob is self-contained layout only.
 
 ## Two stores, one schema
 
@@ -728,6 +731,26 @@ the core install and `pip install -e ".[test]"` never require a database. Store
 logic and the gallery HTML are pure functions in `portal.py` (not `app.py`), so
 they unit-test without the web stack — the tests use in-memory sqlite and never
 touch a live database, the same rule the AI-assistant tests follow.
+
+## Datasets tab
+
+The gallery's overview pages lead with a **Dashboards | Datasets** switch. A
+selected dataset is a **detail** page led by a **back button** (no switch — that's
+for the list pages); in local paths mode it, like the dashboard editor, carries
+the path dropdown on the right, so the selected-item pages are consistent (portal
+detail is back-only).
+The Datasets tab manages datasets (see the
+**Datasets** section above): upload a CSV (name, description, delimiter) →
+converted to Parquet and stored; a detail view shows the schema (per-column type
+icon) and a data preview. A dataset **can't be
+removed** while a dashboard references it (the trash shows the count and lists
+those dashboards), and **renaming cascades** — every dashboard's `dataset:`
+refs are rewritten (`Dashboard.dataset_names()` + `rename_dataset_ref()`). The
+`DatasetStore` (`datasets.py`) sits over an `ObjectStore` (`storage.py`): a
+local folder for dev/tests, S3-compatible **Garage** at runtime
+(`FIREFLYER_S3_ENDPOINT`, `boto3` in the `.[portal]` extra, imported lazily).
+`app.state.datasets` resolves dataset names in the render routes; the store is
+unit-tested with a local folder, never a live object store.
 
 ## Authentication
 
@@ -777,6 +800,49 @@ the store's rows with the identity `current_user` returns), roles, token
 refresh — are deliberately out of scope for the MVP; the seams are here so they
 can be added without a rewrite.
 
+## Local paths mode (no database)
+
+Portal mode needs a database. **Local paths mode** (`fireflyer/web/paths.py`) is
+the *non-portal* way to manage many dashboards + datasets — against your own
+filesystem, with **no DB and no login**. It's for the intended local workflow:
+you **develop a folder of dashboards on your machine**, then later push them to a
+server with the command-line tool / API (both to come). That upload covers
+**dashboards only** — datasets are managed on the server side (each environment
+owns its own data), and a dashboard just references them by name, so the same
+YAML works locally and remotely.
+
+Turn it on with **`FIREFLYER_PATHS`** — a base directory inside the container.
+**Each host folder you Docker-map under that base is a switchable "path"** — a
+labelled **path dropdown** on the **right** of the topbar, present on the gallery,
+the dataset detail, and the dashboard editor (the Dashboards | Datasets switch is
+on the left, but **only on the list pages** — selected items lead with just a
+back button); there is no
+filesystem browser and no in-app path management — you add / remove / repoint a
+path by **editing the compose volume mappings and restarting** (deliberately the
+only mechanism — it keeps the mapping explicit and host-controlled). Unset → `/`
+stays the single-dashboard editor; set → `/` and `/datasets` become the same
+gallery and editor as portal, minus auth. The active path rides in an `ff_path` cookie
+(`GET /path/{name}` sets it, validated against the mapped-folder list).
+
+* A path's **dashboards are `<path>/dashboards/*.yaml`** — files you own and
+  commit — via `PathDashboardStore`, which mirrors the portal store surface
+  (`list/get/create/save/delete` over `DashboardRow`) so **every route is
+  store-agnostic**. A dashboard's **id is its filename stem** (slugged from the
+  `name:` key, path-traversal guarded).
+* A path's **datasets are an isolated blob store per path** at
+  `<FIREFLYER_DATA>/<path>/` — Parquet you upload through the web, kept out of
+  your dashboard files (they're not part of what you commit or later upload).
+* On first run a **`demo` path is seeded** so the gallery opens on a working
+  example: the starter dashboard in `demo/dashboards/`, plus the `orders`
+  dataset it references in the demo path's blob store. Seeding is best-effort and
+  non-destructive — the dashboard is written only when the path is brand new, so
+  it never clobbers your edits.
+
+`app.py` stays mode-agnostic through request-scoped `_dash_store(request)` /
+`_dataset_store(request)` helpers: portal → the DB store / dataset singleton;
+paths mode → the active path's `PathDashboardStore` / per-path blob store.
+`paths.py` logic is unit-tested without the web stack (`tests/test_paths.py`).
+
 ---
 
 # Testing
@@ -805,6 +871,38 @@ tests/
 ```
 
 The goal of tests is to verify generated HTML.
+
+---
+
+# Dashboards as code (GitOps)
+
+A dashboard is a plain YAML file — self-contained layout that references datasets
+**by name** and carries no data. That makes dashboards **code you can version and
+deploy like anything else**, and it's the whole point of local paths mode: you
+author a path of dashboards locally (browser editor, AI assistant, or by hand),
+keep it in **your own git repo**, and review changes as diffs and pull requests.
+
+The intended deployment path (a command-line tool + API, both to come) lets
+anyone build a **GitOps workflow** around that folder:
+
+* **Author** locally in paths mode (`FIREFLYER_PATHS`) and commit the
+  `dashboards/*.yaml` to your repo.
+* **Validate in CI** — the same `Dashboard.from_yaml` check the editor runs on
+  every save is a cheap "does it parse and lay out?" gate for a pull request.
+* **Deploy on merge** — the tool pushes the folder's dashboards to a running
+  Fireflyer instance (a portal, or any target environment). Each dashboard is
+  keyed by its slug/name, so a deploy is an idempotent upsert.
+
+**Datasets are intentionally out of this loop.** They live on the *target*
+environment (each server owns its own data — the per-path blob store is the
+authoring-side equivalent), and dashboards reference them by name, so the same
+YAML deploys unchanged to any environment that already has those datasets. The
+deploy tool therefore ships **dashboards only**; data isn't something you commit
+or push through this path.
+
+This is deliberately *your* pipeline, not Fireflyer's: the tool provides the
+folder format and the upsert, and you wire whatever git host / CI you like around
+it.
 
 ---
 

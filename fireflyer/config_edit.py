@@ -16,11 +16,11 @@ import re
 from dataclasses import MISSING, fields as dataclass_fields
 from html import escape
 
-import polars as pl
 import yaml
 
 from fireflyer.dashboard import CHART_TYPES, DashboardError
 from fireflyer.params import ParamContext
+from fireflyer.scan import scan
 
 
 class ConfigEditError(ValueError):
@@ -37,23 +37,16 @@ def _load(text: str) -> dict:
     return config
 
 
-def _dataset_paths(config: dict) -> dict[str, str]:
-    raw = config.get("datasets") or {}
-    out = {}
-    if isinstance(raw, dict):
-        for did, cfg in raw.items():
-            if isinstance(cfg, dict) and "path" in cfg:
-                out[did] = cfg["path"]
-    return out
 
 
-def _columns(path: str | None) -> list[str]:
-    """Column names of a dataset CSV, or [] if it can't be read. Reads only the
-    header (scan_csv), the same cheap trick dashboard.py uses."""
-    if not path:
+def _columns(dataset: str | None, resolve=None) -> list[str]:
+    """Column names of a dataset's Parquet, or [] if it can't be read (reads
+    only the schema). `dataset` is a name resolved via `resolve` (the app's
+    dataset store) or a Parquet path directly."""
+    if not dataset:
         return []
     try:
-        return list(pl.scan_csv(path).collect_schema().names())
+        return list(scan(dataset, resolve).collect_schema().names())
     except Exception:
         return []
 
@@ -68,13 +61,11 @@ def _chart_config(config: dict, cid: str) -> dict:
     return cfg
 
 
-def _context(config: dict, cfg: dict) -> ParamContext:
-    datasets = _dataset_paths(config)
-    dataset_id = cfg.get("dataset")
+def _context(config: dict, cfg: dict, resolve=None) -> ParamContext:
+    # `dataset` is a name (resolved via `resolve`) or a Parquet path directly.
+    dataset = cfg.get("dataset")
     return ParamContext(
-        datasets=datasets,
-        dataset_id=dataset_id,
-        columns=_columns(datasets.get(dataset_id)),
+        datasets={}, dataset_id=dataset, columns=_columns(dataset, resolve)
     )
 
 
@@ -94,12 +85,14 @@ def _type_select(current: str) -> str:
     )
 
 
-def build_form(text: str, cid: str, type_override: str = "") -> str:
+def build_form(text: str, cid: str, type_override: str = "", resolve=None) -> str:
     """Render the edit-modal form for chart `cid` against the current YAML.
 
     `type_override` (set when the user changes the type dropdown) builds the form
     for a different chart type, carrying over the current config's overlapping
-    values (dataset, title, filters, shared columns) and defaulting the rest."""
+    values (dataset, title, filters, shared columns) and defaulting the rest.
+    `resolve` (the app's dataset store) turns the chart's dataset name into its
+    Parquet so the column dropdown can list its columns."""
     config = _load(text)
     cfg = _chart_config(config, cid)
     ctype = type_override or cfg.get("type")
@@ -107,7 +100,7 @@ def build_form(text: str, cid: str, type_override: str = "") -> str:
     if cls is None:
         raise ConfigEditError(f"chart {cid!r}: unknown type {ctype!r}")
 
-    ctx = _context(config, cfg)
+    ctx = _context(config, cfg, resolve)
     fields = _type_select(ctype) + "".join(
         p.render(cfg.get(p.name), ctx) for p in cls.PARAMS
     )
@@ -264,13 +257,11 @@ def build_add_form(text: str, ctype: str, add_mode: str, add_index: str) -> str:
     if cls is None:
         raise ConfigEditError(f"unknown type {ctype!r}")
 
-    datasets = _dataset_paths(config)
-    default_ds = next(iter(datasets), None)
-    ctx = ParamContext(
-        datasets=datasets, dataset_id=default_ds, columns=_columns(datasets.get(default_ds))
-    )
+    # No datasets: block anymore — the new chart's dataset starts blank (the
+    # author types a dataset name / picks one once the gallery is wired).
+    ctx = ParamContext(datasets={}, dataset_id=None, columns=[])
     values = _defaults(cls)
-    values["dataset"] = default_ds
+    values["dataset"] = ""
     if not values.get("title"):
         values["title"] = ctype.capitalize()
 

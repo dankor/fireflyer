@@ -31,6 +31,30 @@ def orders_csv() -> str:
 
 
 @pytest.fixture
+def orders_parquet() -> str:
+    """Datasets are Parquet now; charts scan this. Path lives under DATA_DIR so
+    the snapshot fixture normalizes it (and the SHA chart ids) the same way."""
+    return str(DATA_DIR / "orders.parquet")
+
+
+@pytest.fixture
+def csv_to_parquet(tmp_path):
+    """Write ad-hoc CSV text as Parquet (charts scan Parquet) and return the
+    path. For tests that build their own data and assert on structure, not a
+    snapshot."""
+    import io
+
+    import polars as pl
+
+    def make(csv_text: str, name: str = "d") -> str:
+        path = tmp_path / f"{name}.parquet"
+        pl.read_csv(io.BytesIO(csv_text.encode())).write_parquet(path)
+        return str(path)
+
+    return make
+
+
+@pytest.fixture
 def snapshot(request):
     """Compare a string against tests/snapshots/<test_name>.html.
 
