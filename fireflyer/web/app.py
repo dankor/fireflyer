@@ -305,6 +305,38 @@ INDEX = f"""<!DOCTYPE html>
   .ff-refresh:hover {{ background: var(--accent-hover); }}
   .ff-refresh:active {{ transform: translate(-50%, -50%) scale(0.97); }}
   .pane.output.stale .ff-refresh {{ display: inline-flex; }}
+  /* Documentation overlay — covers the output pane; a chart reference from each
+     chart's spec.md. z-index clears the dashboard content (sticky tab bar z:10,
+     up to z:20) and the refresh overlay, but stays under modals (z:50). */
+  #ff-docs-btn {{ display: inline-flex; align-items: center; padding: 5px 9px; }}
+  #ff-docs-btn svg {{ width: 16px; height: 16px; display: block; }}
+  .ff-docs {{ position: absolute; inset: 0; z-index: 40; background: var(--panel);
+    display: flex; flex-direction: column; }}
+  .ff-docs[hidden] {{ display: none; }}
+  .ff-docs-head {{ display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; }}
+  .ff-docs-title {{ font-weight: 600; font-size: 14px; }}
+  .ff-docs-close {{ background: none; border: 0; color: var(--muted); cursor: pointer;
+    font-size: 15px; line-height: 1; padding: 3px 7px; border-radius: 4px; }}
+  .ff-docs-close:hover {{ color: var(--text); background: var(--bg); }}
+  .ff-docs-body {{ flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 24px; }}
+  .ff-docs-chart {{ border-bottom: 1px solid var(--border); }}
+  .ff-docs-chart > summary {{ cursor: pointer; font-weight: 600; font-size: 14px;
+    padding: 10px 2px; text-transform: capitalize; list-style: none; }}
+  .ff-docs-chart > summary::-webkit-details-marker {{ display: none; }}
+  .ff-docs-chart > summary::before {{ content: "\\25B8"; color: var(--muted);
+    margin-right: 8px; display: inline-block; transition: transform 0.1s; }}
+  .ff-docs-chart[open] > summary::before {{ transform: rotate(90deg); }}
+  .ff-docs-md {{ font-size: 13px; line-height: 1.55; color: var(--text);
+    padding: 0 4px 14px 22px; }}
+  .ff-docs-md h4 {{ font-size: 14px; margin: 14px 0 4px; }}
+  .ff-docs-md h5 {{ font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); margin: 14px 0 4px; }}
+  .ff-docs-md p {{ margin: 6px 0; }}
+  .ff-docs-md ul {{ margin: 4px 0; padding-left: 20px; }}
+  .ff-docs-md li {{ margin: 3px 0; }}
+  .ff-docs-md code {{ background: var(--bg); padding: 1px 5px; border-radius: 3px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 12px; }}
   /* Transient error toast (bottom-centre). */
   .ff-toast {{ position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
     background: var(--error); color: #fff; padding: 9px 16px; border-radius: 6px;
@@ -486,6 +518,7 @@ INDEX = f"""<!DOCTYPE html>
   <div class="topbar-right">
     __FF_PATHDD__
     __FF_SAVE__
+    <button type="button" class="toggle" id="ff-docs-btn" title="Chart documentation" aria-label="Chart documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></button>
     <button class="toggle" id="toggle">Preview</button>
     __FF_THEME__
     __FF_USER_MENU__
@@ -508,6 +541,14 @@ INDEX = f"""<!DOCTYPE html>
     <div class="pane-body"><div id="output"></div></div>
     <!-- Shown (over a greyed-out, stale preview) only after a manual YAML edit. -->
     <button type="button" class="ff-refresh" id="refresh" title="Refresh preview (⌘/Ctrl+Enter)">↻ Refresh</button>
+    <!-- Chart reference: overlaps the output pane; lists each chart's spec.md. -->
+    <aside class="ff-docs" id="ff-docs" hidden>
+      <div class="ff-docs-head">
+        <span class="ff-docs-title">Chart reference</span>
+        <button type="button" class="ff-docs-close" id="ff-docs-close" title="Close (Esc)" aria-label="Close">✕</button>
+      </div>
+      <div class="ff-docs-body">__FF_DOCS__</div>
+    </aside>
   </section>
 </div>
 <div class="ff-modal-overlay" id="ff-modal-overlay">
@@ -687,6 +728,19 @@ window.addEventListener('DOMContentLoaded', run);
 refreshBtn.addEventListener('click', run);
 codeEl.addEventListener('keydown', e => {{
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {{ e.preventDefault(); run(); }}
+}});
+
+// Documentation overlay: toggles a chart reference (each chart's spec.md) over
+// the output pane.
+const docsPanel = document.getElementById('ff-docs');
+document.getElementById('ff-docs-btn').addEventListener('click', () => {{
+  docsPanel.hidden = !docsPanel.hidden;
+}});
+document.getElementById('ff-docs-close').addEventListener('click', () => {{
+  docsPanel.hidden = true;
+}});
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape' && !docsPanel.hidden) docsPanel.hidden = true;
 }});
 
 const layoutEl = document.getElementById('layout');
@@ -1702,6 +1756,78 @@ def _theme_switch() -> str:
     return f'<div class="ff-theme" id="theme-switch" role="group" aria-label="Theme">{buttons}</div>'
 
 
+# --- chart documentation (editor-only) --------------------------------------
+# The docs overlay lists each chart type and renders its spec.md, so the chart
+# reference is one click away from the editor. Read once at import.
+_CHART_DOC_ORDER = ("table", "pie", "bar", "map", "number")
+
+
+def _render_spec_md(text: str) -> str:
+    """Tiny markdown → HTML for the chart spec docs — handles the constructs the
+    spec.md files use: #/## headings, `- ` bullets (one nesting level), **bold**,
+    `code`, and paragraphs. Not a general markdown parser."""
+    def inline(s: str) -> str:
+        s = escape(s)
+        s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+        return re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+
+    out: list[str] = []
+    para: list[str] = []
+    depth = 0
+
+    def flush_para() -> None:
+        if para:
+            out.append(f"<p>{inline(' '.join(para))}</p>")
+            para.clear()
+
+    def set_depth(d: int) -> None:
+        nonlocal depth
+        while depth < d:
+            out.append("<ul>"); depth += 1
+        while depth > d:
+            out.append("</ul>"); depth -= 1
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        head = re.match(r"(#{1,6})\s+(.*)", stripped)
+        bullet = re.match(r"(\s*)-\s+(.*)", line)
+        if not stripped:
+            flush_para(); set_depth(0)
+        elif head:
+            flush_para(); set_depth(0)
+            tag = {1: "h4", 2: "h5"}.get(len(head.group(1)), "h6")
+            out.append(f"<{tag}>{inline(head.group(2))}</{tag}>")
+        elif bullet:
+            flush_para()
+            set_depth(2 if len(bullet.group(1)) >= 2 else 1)
+            out.append(f"<li>{inline(bullet.group(2))}</li>")
+        else:
+            set_depth(0); para.append(stripped)
+    flush_para(); set_depth(0)
+    return "".join(out)
+
+
+def _build_chart_docs() -> str:
+    """Render every chart's spec.md into the docs overlay (a `<details>` each)."""
+    import pathlib
+
+    base = pathlib.Path(__file__).resolve().parent.parent / "chart"
+    parts = []
+    for name in _CHART_DOC_ORDER:
+        spec = base / name / "spec.md"
+        if spec.exists():
+            parts.append(
+                '<details class="ff-docs-chart">'
+                f"<summary>{escape(name)}</summary>"
+                f'<div class="ff-docs-md">{_render_spec_md(spec.read_text())}</div>'
+                "</details>"
+            )
+    return "".join(parts)
+
+
+_CHART_DOCS_HTML = _build_chart_docs()
+
+
 def render_editor_page(
     yaml_text: str,
     *,
@@ -1724,6 +1850,7 @@ def render_editor_page(
         .replace("__FF_SAVE__", save)
         .replace("__FF_THEME__", theme)
         .replace("__FF_USER_MENU__", user_menu)
+        .replace("__FF_DOCS__", _CHART_DOCS_HTML)
     )
 
 
