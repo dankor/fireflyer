@@ -64,26 +64,29 @@ def test_build_form_has_type_dropdown_with_all_types(orders_parquet):
 
 
 def test_build_form_type_override_switches_fields(orders_parquet):
-    """Overriding the type re-renders the fields for that type: a pie has a
-    column but no aggregation."""
+    """Overriding the type re-renders the fields for that type: switching to pie
+    shows pie's column + aggregation and drops number-only fields (format)."""
     html = ce.build_form(_doc(orders_parquet), "revenue", type_override="pie")
     assert 'value="pie" selected' in html
     assert 'name="column"' in html
-    assert 'name="agg"' not in html            # agg is number-only
+    assert 'name="agg"' in html                # pie aggregates too now
+    assert 'name="format"' not in html         # number-only, dropped
 
 
 def test_apply_edit_swaps_chart_type(orders_parquet):
     """Submitting a different `type` rewrites the block with the new type's
     params and drops the old ones."""
     form = FakeForm(
-        single={"type": "pie", "dataset": "orders", "title": "Revenue", "column": "status"},
+        single={"type": "pie", "dataset": "orders", "title": "Revenue",
+                "column": "status", "agg": "count"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
     new_text = ce.apply_edit(_doc(orders_parquet), "revenue", form)
     block = yaml.safe_load(new_text)["charts"]["revenue"]
     assert block["type"] == "pie"
     assert block["column"] == "status"
-    assert "agg" not in block                  # number-only key gone
+    assert block["agg"] == "count"             # pie's own aggregation
+    assert "format" not in block               # number-only key gone
     # Sibling untouched; whole doc still valid.
     assert "title: By status" in new_text
     ff.Dashboard.from_yaml(new_text)
@@ -152,7 +155,7 @@ def test_build_add_form_defaults_and_placement(orders_parquet):
 def test_add_chart_new_row_at_end(orders_parquet):
     form = FakeForm(
         single={"type": "pie", "dataset": "orders", "title": "By status",
-                "column": "status", "add_mode": "row", "add_index": "end"},
+                "column": "status", "agg": "count", "add_mode": "row", "add_index": "end"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
     new_text = ce.add_chart(_doc(orders_parquet), form)
@@ -182,7 +185,7 @@ def test_add_chart_generates_unique_id(orders_parquet):
     """Adding a second chart of a type that already exists gets a suffixed id."""
     form = FakeForm(
         single={"type": "pie", "dataset": "orders", "title": "P", "column": "status",
-                "add_mode": "row", "add_index": "end"},
+                "agg": "count", "add_mode": "row", "add_index": "end"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
     once = ce.add_chart(_doc(orders_parquet), form)

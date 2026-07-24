@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-24
+
+### Added
+
+- **Pie aggregation + centre total.** A pie can now size its slices by an
+  aggregation of a value column, not just row count: `agg: count | sum | dcount`
+  with a `value` column (only additive measures — a donut's angles are
+  proportions, so no max/min/avg). The donut **centre shows the grand total** of
+  the shown slices by default (compact, filter/crossfilter aware); `total: false`
+  hides it. Backward compatible — existing pies (no `agg`) still count rows.
+
 ## [0.6.0] - 2026-07-24
 
 ### Added
@@ -159,7 +170,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/dankor/fireflyer/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/dankor/fireflyer/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/dankor/fireflyer/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dankor/fireflyer/compare/v0.3.1...v0.4.0

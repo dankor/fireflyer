@@ -11,17 +11,20 @@
       <svg viewBox="0 0 220 220" width="220" height="220" xmlns="http://www.w3.org/2000/svg">
         {%- for s in segments %}
         {%- if s.path %}
-        <path d="{{ s.path }}" fill="{{ s.color }}" stroke-width="1.5" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.count }} ({{ s.percent }}%)" />
+        <path d="{{ s.path }}" fill="{{ s.color }}" stroke-width="1.5" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.display }} ({{ s.percent }}%)" />
         {%- else %}
-        <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_out }}" fill="{{ s.color }}" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.count }} ({{ s.percent }}%)" />
+        <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_out }}" fill="{{ s.color }}" data-i="{{ loop.index0 }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ s.label }}: {{ s.display }} ({{ s.percent }}%)" />
         <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_in }}" class="fireflyer-pie-hole" />
         {%- endif %}
         {%- endfor %}
+        {%- if show_total %}
+        <text x="{{ cx }}" y="{{ cy }}" class="fireflyer-pie-total" text-anchor="middle" dominant-baseline="central"><title>Total: {{ total_exact }}</title>{{ total_display }}</text>
+        {%- endif %}
       </svg>
       {%- for s in segments %}
       <div class="fireflyer-pie-tooltip" data-i="{{ loop.index0 }}" role="tooltip">
         <span class="fireflyer-pie-tooltip-label">{{ s.label }}</span>
-        <span class="fireflyer-pie-tooltip-meta">{{ s.count }} · {{ s.percent }}%</span>
+        <span class="fireflyer-pie-tooltip-meta">{{ s.display }} · {{ s.percent }}%</span>
       </div>
       {%- endfor %}
     </div>
@@ -30,7 +33,7 @@
       <li{% if s.is_active %} class="active"{% endif %}>
         <span class="swatch" style="background:{{ s.color }};"></span>
         <span class="label">{{ s.label }}</span>
-        <span class="meta">{{ s.count }} · {{ s.percent }}%</span>
+        <span class="meta">{{ s.display }} · {{ s.percent }}%</span>
       </li>
       {%- endfor %}
     </ul>

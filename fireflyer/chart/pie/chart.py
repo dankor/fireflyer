@@ -6,8 +6,21 @@ import jinja2
 import polars as pl
 
 from fireflyer import filters as filters_mod
-from fireflyer.params import ColumnParam, DatasetParam, FilterListParam, TextParam
+from fireflyer.params import (
+    BoolParam,
+    ChoiceParam,
+    ColumnParam,
+    DatasetParam,
+    FilterListParam,
+    TextParam,
+)
 from fireflyer.scan import scan
+
+# Slice size aggregations. A donut's angles are proportions of a total, so only
+# **additive, non-negative** measures make sense — hence count/sum/dcount, not
+# max/min/avg (those would make the proportions meaningless). `count` needs no
+# value column; `sum`/`dcount` aggregate `value`.
+AGGREGATIONS = ("count", "sum", "dcount")
 
 # Fixed categorical palette for slices — theme-independent, so a value keeps
 # its color across light and dark.
@@ -56,10 +69,26 @@ def _wedge_path(start: float, end: float) -> str:
     )
 
 
+def _fmt_value(value) -> str:
+    """A slice value for the legend/tooltip — thousands-separated, whole numbers
+    without a decimal (`1200 → 1,200`, `1234.5 → 1,234.5`)."""
+    return f"{int(value):,}" if float(value).is_integer() else f"{value:,.2f}".rstrip("0")
+
+
+def _compact(value) -> str:
+    """A short total for the donut centre: `1,420 → 1.4k`, `3,000,000 → 3m`.
+    Lowercase business suffixes; ~2 significant figures so it fits the hole."""
+    n = float(value)
+    for step, suffix in ((1e12, "t"), (1e9, "b"), (1e6, "m"), (1e3, "k")):
+        if abs(n) >= step:
+            return f"{n / step:.1f}".rstrip("0").rstrip(".") + suffix
+    return f"{int(n):,}" if n.is_integer() else f"{n:g}"
+
+
 def _build_segments(
     labels: list[str],
-    values: list[int],
-    total: int,
+    values: list[float],
+    total: float,
     column: str,
     active: set[str],
     emitter: str | None,
@@ -87,7 +116,7 @@ def _build_segments(
             "color": COLORS[i % len(COLORS)],
             "path": path,
             "label": label,
-            "count": value,
+            "display": _fmt_value(value),
             "percent": f"{value / total * 100:.1f}",
             "is_active": label in active,
             "click_token": f"{emitter}|{column}={label}" if emitter else "",
@@ -99,7 +128,10 @@ def _build_segments(
 class Pie:
     dataset: str
     title: str
-    column: str
+    column: str  # category to group by
+    value: str = ""  # column to aggregate for slice size (blank when agg=count)
+    agg: str = "count"  # count | sum | dcount — see AGGREGATIONS
+    total: bool = True  # show the grand total in the donut centre
     filters: list = field(default_factory=list)
 
     _resolve = None  # name -> (uri, storage_options); not a dataclass field
@@ -109,11 +141,20 @@ class Pie:
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
         ColumnParam("column", "Column"),
+        ColumnParam("value", "Value column"),
+        ChoiceParam("agg", "Aggregation", AGGREGATIONS),
+        BoolParam("total", "Show total in centre"),
         FilterListParam("filters", "Filters"),
     ]
 
     def __post_init__(self) -> None:
         self.filters = filters_mod.normalize(self.filters)
+        if self.agg not in AGGREGATIONS:
+            raise ValueError(
+                f"pie agg must be one of {AGGREGATIONS}, got {self.agg!r}"
+            )
+        if self.agg != "count" and not self.value:
+            raise ValueError(f"pie agg {self.agg!r} needs a `value` column")
 
     def to_html(
         self, *, crossfilter: dict | None = None, theme: str | None = None
@@ -144,16 +185,24 @@ class Pie:
         preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
         if preds:
             lf = lf.filter(*preds)
-        counts = (
+        # Slice size: row count, or an additive reduction of `value` per category.
+        col = pl.col(self.value)
+        measure = {
+            "count": pl.len(),
+            "sum": col.sum(),
+            "dcount": col.drop_nulls().n_unique(),
+        }[self.agg].alias("measure")
+        grouped = (
             lf.group_by(self.column)
-            .agg(pl.len().alias("count"))
-            .sort("count", descending=True)
+            .agg(measure)
+            .sort("measure", descending=True)
             .collect()
         )
-        labels = [str(v) if v is not None else "" for v in counts[self.column].to_list()]
-        values = [int(v) for v in counts["count"].to_list()]
-        # `or 1` keeps percentage math defined when the CSV is empty.
-        total = sum(values) or 1
+        labels = [str(v) if v is not None else "" for v in grouped[self.column].to_list()]
+        values = [float(v or 0) for v in grouped["measure"].to_list()]
+        grand_total = sum(values)
+        # `or 1` keeps percentage/angle math defined when the data is empty.
+        total = grand_total or 1
 
         ctx = crossfilter or {}
         active = set(ctx.get("active") or ())
@@ -170,6 +219,9 @@ class Pie:
             r_in=R_IN,
             has_selection=bool(active),
             crossfilter=crossfilter,
+            show_total=self.total,
+            total_display=_compact(grand_total),
+            total_exact=_fmt_value(grand_total),
             ff_theme=theme if theme in ("dark", "light") else "",
         )
 

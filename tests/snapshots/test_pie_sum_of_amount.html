@@ -1,4 +1,4 @@
-/* ── Theme tokens ───────────────────────────────────────────────────────────
+<style>/* ── Theme tokens ───────────────────────────────────────────────────────────
    Light + dark palettes as CSS custom properties. Selection is automatic
    (prefers-color-scheme) unless a `data-ff-theme="light|dark"` attribute on this
    chart, its `.fireflyer-chart-root` wrapper, or any ancestor (e.g. the
@@ -175,3 +175,51 @@
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
 }
+</style>
+<style>
+.fireflyer-pie-canvas:has(svg [data-i="0"]:hover) .fireflyer-pie-tooltip[data-i="0"] { opacity: 1; }
+.fireflyer-pie-canvas:has(svg [data-i="1"]:hover) .fireflyer-pie-tooltip[data-i="1"] { opacity: 1; }
+.fireflyer-pie-canvas:has(svg [data-i="2"]:hover) .fireflyer-pie-tooltip[data-i="2"] { opacity: 1; }
+</style>
+<article class="fireflyer-chart fireflyer-pie">
+  <div class="fireflyer-title">Revenue by Status</div>
+  <div class="fireflyer-pie-layout">
+    <div class="fireflyer-pie-canvas">
+      <svg viewBox="0 0 220 220" width="220" height="220" xmlns="http://www.w3.org/2000/svg">
+        <path d="M 110.00 20.00 A 90 90 0 1 1 30.82 67.22 L 62.49 84.33 A 54 54 0 1 0 110.00 56.00 Z" fill="#1FA8C9" stroke-width="1.5" data-i="0" aria-label="paid: 276 (82.9%)" />
+        <path d="M 30.82 67.22 A 90 90 0 0 1 66.11 31.43 L 83.66 62.86 A 54 54 0 0 0 62.49 84.33 Z" fill="#454E7C" stroke-width="1.5" data-i="1" aria-label="cancelled: 30 (9.0%)" />
+        <path d="M 66.11 31.43 A 90 90 0 0 1 110.00 20.00 L 110.00 56.00 A 54 54 0 0 0 83.66 62.86 Z" fill="#5AC189" stroke-width="1.5" data-i="2" aria-label="pending: 27 (8.1%)" />
+        <text x="110" y="110" class="fireflyer-pie-total" text-anchor="middle" dominant-baseline="central"><title>Total: 333</title>333</text>
+      </svg>
+      <div class="fireflyer-pie-tooltip" data-i="0" role="tooltip">
+        <span class="fireflyer-pie-tooltip-label">paid</span>
+        <span class="fireflyer-pie-tooltip-meta">276 · 82.9%</span>
+      </div>
+      <div class="fireflyer-pie-tooltip" data-i="1" role="tooltip">
+        <span class="fireflyer-pie-tooltip-label">cancelled</span>
+        <span class="fireflyer-pie-tooltip-meta">30 · 9.0%</span>
+      </div>
+      <div class="fireflyer-pie-tooltip" data-i="2" role="tooltip">
+        <span class="fireflyer-pie-tooltip-label">pending</span>
+        <span class="fireflyer-pie-tooltip-meta">27 · 8.1%</span>
+      </div>
+    </div>
+    <ul class="fireflyer-legend">
+      <li>
+        <span class="swatch" style="background:#1FA8C9;"></span>
+        <span class="label">paid</span>
+        <span class="meta">276 · 82.9%</span>
+      </li>
+      <li>
+        <span class="swatch" style="background:#454E7C;"></span>
+        <span class="label">cancelled</span>
+        <span class="meta">30 · 9.0%</span>
+      </li>
+      <li>
+        <span class="swatch" style="background:#5AC189;"></span>
+        <span class="label">pending</span>
+        <span class="meta">27 · 8.1%</span>
+      </li>
+    </ul>
+  </div>
+</article>
