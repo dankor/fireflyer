@@ -220,14 +220,14 @@ dashboard:
 # notice. Built as a plain string so its contents drop into INDEX verbatim.
 if CHAT_ENABLED:
     CHAT_PANEL = """
-      <div class="chat-log" id="chat-log"></div>
+      <div class="ff-docs-body chat-log" id="chat-log"></div>
       <form class="chat-input" id="chat-form">
-        <textarea id="chat-text" spellcheck="false" placeholder="Ask to add or change charts, resize rows, add filters…"></textarea>
+        <textarea id="chat-text" spellcheck="false" placeholder="Ask to add or change charts, add measures, resize rows…"></textarea>
         <button type="submit" class="chat-send" id="chat-send">Send</button>
       </form>"""
 else:
     CHAT_PANEL = """
-      <div class="chat-notice">Set <code>ANTHROPIC_API_KEY</code> in <code>.env</code> and restart to enable the AI assistant.</div>"""
+      <div class="ff-docs-body"><div class="chat-notice">Set <code>ANTHROPIC_API_KEY</code> in <code>.env</code> and restart to enable the AI assistant.</div></div>"""
 
 INDEX = f"""<!DOCTYPE html>
 <html lang="en">
@@ -341,8 +341,8 @@ INDEX = f"""<!DOCTYPE html>
   /* Documentation overlay — covers the output pane; a chart reference from each
      chart's spec.md. z-index clears the dashboard content (sticky tab bar z:10,
      up to z:20) and the refresh overlay, but stays under modals (z:50). */
-  #ff-docs-btn, #ff-measures-btn {{ display: inline-flex; align-items: center; padding: 5px 9px; }}
-  #ff-docs-btn svg, #ff-measures-btn svg {{ width: 16px; height: 16px; display: block; }}
+  #ff-docs-btn, #ff-measures-btn, #ff-chat-btn {{ display: inline-flex; align-items: center; padding: 5px 9px; }}
+  #ff-docs-btn svg, #ff-measures-btn svg, #ff-chat-btn svg {{ width: 16px; height: 16px; display: block; }}
   .ff-docs {{ position: absolute; inset: 0; z-index: 40; background: var(--panel);
     display: flex; flex-direction: column; }}
   .ff-docs[hidden] {{ display: none; }}
@@ -431,28 +431,11 @@ INDEX = f"""<!DOCTYPE html>
      rule, so tall dashboards still scroll. */
   .pane-body:has(#output) {{ overflow-x: hidden; }}
   pre.error {{ color: var(--error); white-space: pre-wrap; font-size: 12px; }}
-  /* AI assistant — stacked under the YAML editor in the left pane. */
-  .chat {{
-    display: flex; flex-direction: column; height: 300px; flex: none;
-    border-top: 1px solid var(--border); background: var(--panel);
-  }}
-  .chat.collapsed {{ height: 33px; }}
-  .chat.collapsed .chat-log,
-  .chat.collapsed .chat-input,
-  .chat.collapsed .chat-notice {{ display: none; }}
-  .chat-header {{
-    height: 33px; flex: none; display: flex; align-items: center;
-    padding: 0 14px; font-size: 11px; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: 0.04em;
-    border-bottom: 1px solid var(--border);
-  }}
-  .chat-collapse {{
-    margin-left: auto; background: transparent; border: 0; color: var(--muted);
-    cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px;
-  }}
-  .chat-log {{
-    flex: 1; overflow: auto; min-height: 0; padding: 12px 14px;
-    display: flex; flex-direction: column; gap: 10px;
+  /* AI assistant — a left-pane overlay (reuses the .ff-docs shell), toggled
+     from the topbar like the docs/measures overlays on the right. */
+  .pane.editor {{ position: relative; }}
+  #ff-chat .chat-log {{
+    display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
   }}
   .chat-msg {{
     font-size: 13px; line-height: 1.45; white-space: pre-wrap;
@@ -462,11 +445,12 @@ INDEX = f"""<!DOCTYPE html>
   .chat-msg.assistant {{ background: rgba(32,167,201,0.12); align-self: flex-start; }}
   .chat-msg.error {{ background: rgba(224,67,85,0.12); color: var(--error); align-self: flex-start; }}
   .chat-input {{
-    flex: none; display: flex; gap: 8px; padding: 10px 14px;
-    border-top: 1px solid var(--border);
+    flex: none; display: flex; gap: 8px; padding: 10px 14px; align-items: flex-end;
+    border-top: 1px solid var(--border); background: var(--panel);
   }}
   #chat-text {{
-    flex: 1; resize: none; height: 46px; border: 1px solid var(--border);
+    flex: 1; resize: vertical; height: 96px; min-height: 46px; max-height: 320px;
+    border: 1px solid var(--border);
     border-radius: 4px; padding: 8px; font-family: inherit; font-size: 13px;
     outline: 0; background: var(--bg); color: var(--text);
   }}
@@ -572,6 +556,7 @@ INDEX = f"""<!DOCTYPE html>
   <div class="topbar-right">
     __FF_PATHDD__
     __FF_SAVE__
+    <button type="button" class="toggle" id="ff-chat-btn" title="AI assistant" aria-label="AI assistant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg></button>
     <button type="button" class="toggle" id="ff-measures-btn" title="Measures" aria-label="Measures"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5H6l6 7-6 7h12"/></svg></button>
     <button type="button" class="toggle" id="ff-docs-btn" title="Chart documentation" aria-label="Chart documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></button>
     <button class="toggle" id="toggle">Preview</button>
@@ -585,11 +570,14 @@ INDEX = f"""<!DOCTYPE html>
     <div class="pane-body">
       <textarea id="code" spellcheck="false" autocomplete="off">__FF_YAML_CONTENT__</textarea>
     </div>
-    <div class="chat collapsed" id="chat">
-      <div class="chat-header">AI editor
-        <button class="chat-collapse" id="chat-collapse" title="Expand" aria-label="Expand chat">+</button>
+    <!-- AI assistant: a left-pane overlay toggled from the topbar, like the
+         docs/measures overlays on the right. Knows the YAML + dataset schemas. -->
+    <aside class="ff-docs ff-chat" id="ff-chat" hidden>
+      <div class="ff-docs-head">
+        <span class="ff-docs-title">AI assistant</span>
+        <button type="button" class="ff-docs-close" id="ff-chat-close" title="Close (Esc)" aria-label="Close">✕</button>
       </div>{CHAT_PANEL}
-    </div>
+    </aside>
   </section>
   <div class="pane-resizer" id="pane-resizer" title="Drag to resize"></div>
   <section class="pane output" id="output-pane">
@@ -1065,12 +1053,22 @@ async function commitColumnResize(ordinals, widths) {{
 // Sends the message + current YAML + prior turns to /chat. The reply is shown
 // in the log; if the assistant returns new YAML, it replaces the editor and
 // re-renders through the same run() path as a manual edit.
-const chatEl = document.getElementById('chat');
-const chatCollapse = document.getElementById('chat-collapse');
-chatCollapse.addEventListener('click', () => {{
-  const collapsed = chatEl.classList.toggle('collapsed');
-  chatCollapse.textContent = collapsed ? '+' : '–';
-  chatCollapse.title = collapsed ? 'Expand' : 'Collapse';
+// The assistant lives in a left-pane overlay toggled from the topbar, mirroring
+// the docs/measures overlays on the right. It stays available whether or not a
+// key is configured (a disabled build shows a setup notice inside).
+const chatPanel = document.getElementById('ff-chat');
+function openChat() {{
+  chatPanel.hidden = false;
+  const t = document.getElementById('chat-text');
+  if (t) t.focus();
+}}
+function closeChat() {{ chatPanel.hidden = true; }}
+document.getElementById('ff-chat-btn').addEventListener('click', () => {{
+  if (chatPanel.hidden) openChat(); else closeChat();
+}});
+document.getElementById('ff-chat-close').addEventListener('click', closeChat);
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape' && !chatPanel.hidden) closeChat();
 }});
 
 const chatForm = document.getElementById('chat-form');
@@ -2392,20 +2390,40 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest) -> dict:
+async def chat(request: Request, req: ChatRequest) -> dict:
     """One AI-assistant turn. Returns {ok, reply, yaml?}. `yaml` is present only
     when the assistant proposed a change that parsed cleanly; the browser then
-    swaps it into the editor and re-renders."""
+    swaps it into the editor and re-renders. The available datasets' schemas
+    (columns + types, no data) are handed to the model so it builds charts and
+    measures from real columns."""
     if not CHAT_ENABLED:
         return {
             "ok": False,
             "reply": "AI assistant is disabled. Set ANTHROPIC_API_KEY in .env and restart.",
         }
     try:
-        result = chat_mod.run_chat(req.message, req.yaml, req.history)
+        result = chat_mod.run_chat(
+            req.message, req.yaml, req.history, datasets=_dataset_schemas(request)
+        )
         return {"ok": True, **result}
     except Exception as exc:  # surface SDK/auth/network errors as a chat reply
         return {"ok": False, "reply": f"Assistant error: {exc}"}
+
+
+def _dataset_schemas(request: Request) -> list[dict]:
+    """Schema-only view of the available datasets for the AI assistant: each
+    dataset's name + columns (name/type), never any row data. Best-effort — an
+    unreadable store yields an empty list rather than failing the chat turn."""
+    try:
+        return [
+            {
+                "name": d.name,
+                "columns": [{"name": c.name, "dtype": c.dtype} for c in d.columns],
+            }
+            for d in _dataset_store(request).list()
+        ]
+    except Exception:
+        return []
 
 
 @app.get("/chart/map", response_class=HTMLResponse)
