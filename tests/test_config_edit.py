@@ -21,6 +21,7 @@ class FakeForm:
 
 def _doc(orders_parquet: str) -> str:
     # Includes comments + two charts so we can prove non-target content survives.
+    # The number chart uses a default (count) measure — no measure key needed.
     return f"""name: Test dashboard
 
 charts:
@@ -28,8 +29,6 @@ charts:
     type: number
     dataset: {orders_parquet}
     title: Revenue        # a comment inside the block
-    column: amount
-    agg: sum
 
   by_status:              # sibling — must stay byte-for-byte
     type: pie
@@ -44,10 +43,27 @@ dashboard:
 
 def test_build_form_lists_params(orders_parquet):
     html = ce.build_form(_doc(orders_parquet), "revenue")
-    assert 'name="agg"' in html          # choice widget
-    assert 'name="column"' in html       # column widget
+    assert 'name="measure"' in html      # measure widget
     assert "ff-filter-add" in html       # filter builder
     assert 'data-cid="revenue"' in html
+
+
+def test_build_form_lists_dataset_measures(orders_parquet):
+    """The measure dropdown lists the keys defined for the chart's dataset in
+    the top-level `measures:` block."""
+    doc = f"""name: Test dashboard
+measures:
+  {orders_parquet}:
+    revenue_m: {{agg: sum, formula: amount}}
+    orders_m: {{agg: count}}
+charts:
+  kpi: {{type: number, dataset: {orders_parquet}, title: KPI, measure: revenue_m}}
+dashboard:
+  - ["@20", "kpi:1"]
+"""
+    html = ce.build_form(doc, "kpi")
+    assert 'value="revenue_m" selected' in html
+    assert 'value="orders_m"' in html
 
 
 def test_build_form_unknown_chart_raises(orders_parquet):
@@ -64,26 +80,28 @@ def test_build_form_has_type_dropdown_with_all_types(orders_parquet):
 
 
 def test_build_form_type_override_switches_fields(orders_parquet):
-    """Overriding the type re-renders the fields for that type: a pie has a
-    column but no aggregation."""
+    """Overriding the type re-renders the fields for that type: switching to pie
+    shows pie's own fields (column + centre-total toggle) that number lacks."""
     html = ce.build_form(_doc(orders_parquet), "revenue", type_override="pie")
     assert 'value="pie" selected' in html
-    assert 'name="column"' in html
-    assert 'name="agg"' not in html            # agg is number-only
+    assert 'name="column"' in html             # pie-only grouping column
+    assert 'name="total"' in html              # pie-only centre-total toggle
+    assert 'name="measure"' in html            # shared measure widget
 
 
 def test_apply_edit_swaps_chart_type(orders_parquet):
     """Submitting a different `type` rewrites the block with the new type's
     params and drops the old ones."""
     form = FakeForm(
-        single={"type": "pie", "dataset": "orders", "title": "Revenue", "column": "status"},
+        single={"type": "pie", "dataset": orders_parquet, "title": "Revenue",
+                "column": "status", "measure": "", "total": "true"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
     new_text = ce.apply_edit(_doc(orders_parquet), "revenue", form)
     block = yaml.safe_load(new_text)["charts"]["revenue"]
     assert block["type"] == "pie"
-    assert block["column"] == "status"
-    assert "agg" not in block                  # number-only key gone
+    assert block["column"] == "status"         # pie's grouping column
+    assert "agg" not in block                  # no legacy aggregation key
     # Sibling untouched; whole doc still valid.
     assert "title: By status" in new_text
     ff.Dashboard.from_yaml(new_text)
@@ -92,8 +110,7 @@ def test_apply_edit_swaps_chart_type(orders_parquet):
 def test_replace_chart_block_preserves_siblings_and_reparses(orders_parquet):
     text = _doc(orders_parquet)
     form = FakeForm(
-        single={"dataset": "orders", "title": "Revenue", "column": "amount",
-                "agg": "max", "format": "compact"},
+        single={"dataset": orders_parquet, "title": "Revenue", "measure": ""},
         multi={"filter_column": ["status"], "filter_op": ["in"],
                "filter_values": ["paid, pending"]},
     )
@@ -101,7 +118,6 @@ def test_replace_chart_block_preserves_siblings_and_reparses(orders_parquet):
 
     # Target block changed.
     cfg = yaml.safe_load(new_text)["charts"]["revenue"]
-    assert cfg["agg"] == "max"
     assert cfg["filters"] == [{"column": "status", "op": "in", "values": ["paid", "pending"]}]
 
     # Sibling block untouched, verbatim (comment included).
@@ -152,7 +168,7 @@ def test_build_add_form_defaults_and_placement(orders_parquet):
 def test_add_chart_new_row_at_end(orders_parquet):
     form = FakeForm(
         single={"type": "pie", "dataset": "orders", "title": "By status",
-                "column": "status", "add_mode": "row", "add_index": "end"},
+                "column": "status", "agg": "count", "add_mode": "row", "add_index": "end"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
     new_text = ce.add_chart(_doc(orders_parquet), form)
@@ -182,7 +198,7 @@ def test_add_chart_generates_unique_id(orders_parquet):
     """Adding a second chart of a type that already exists gets a suffixed id."""
     form = FakeForm(
         single={"type": "pie", "dataset": "orders", "title": "P", "column": "status",
-                "add_mode": "row", "add_index": "end"},
+                "agg": "count", "add_mode": "row", "add_index": "end"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
     once = ce.add_chart(_doc(orders_parquet), form)
@@ -343,7 +359,7 @@ def _move_doc(orders_parquet: str) -> str:
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
-  c: {{type: number, dataset: {orders_parquet}, title: C, column: amount, agg: sum}}
+  c: {{type: number, dataset: {orders_parquet}, title: C}}
 dashboard:
   - ["@20", "a:3", "b:2"]
   - ["@20", "c:1"]
@@ -400,7 +416,7 @@ charts:
   orders: {{type: table, dataset: {orders_parquet}, title: O}}
   by_day: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
   status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
-  kpi: {{type: number, dataset: {orders_parquet}, title: K, column: amount, agg: sum}}
+  kpi: {{type: number, dataset: {orders_parquet}, title: K}}
 dashboard:
   - ["@40", "orders:3", "status:2"]
   - ["@30", "by_day", "status"]
@@ -471,7 +487,7 @@ charts:
   by_day: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
   status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
   density: {{type: table, dataset: {orders_parquet}, title: De}}
-  kpi: {{type: number, dataset: {orders_parquet}, title: K, column: amount, agg: sum}}
+  kpi: {{type: number, dataset: {orders_parquet}, title: K}}
 dashboard:
   - ["@20", "orders", "status"]
   - ["@20", "by_day", "status"]
@@ -586,12 +602,12 @@ dashboard:
 
 
 def test_apply_edit_invalid_value_raises(orders_parquet):
-    """A bad enum value surfaces as a DashboardError (the whole doc is validated)."""
+    """A dangling measure reference surfaces as a DashboardError (the whole doc
+    is validated after the surgical edit)."""
     text = _doc(orders_parquet)
     form = FakeForm(
-        single={"dataset": "orders", "title": "Revenue", "column": "amount",
-                "agg": "median", "format": "compact"},  # median is not a valid agg
+        single={"dataset": orders_parquet, "title": "Revenue", "measure": "missing"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
-    with pytest.raises(ff.DashboardError, match="unknown agg"):
+    with pytest.raises(ff.DashboardError, match="unknown measure"):
         ce.apply_edit(text, "revenue", form)

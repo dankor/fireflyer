@@ -2,10 +2,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import jinja2
-import polars as pl
 
 from fireflyer import filters as filters_mod
-from fireflyer.params import ColumnParam, DatasetParam, FilterListParam, TextParam
+from fireflyer import measures as measures_mod
+from fireflyer.params import (
+    ColumnParam,
+    DatasetParam,
+    FilterListParam,
+    MeasureParam,
+    TextParam,
+)
 from fireflyer.scan import scan
 
 # Categorical palette mirroring the pie chart's so the same `y` value gets the
@@ -44,13 +50,15 @@ _TEMPLATE = jinja2.Template(
 def _build_stacks(
     x_vals: list[str],
     y_vals: list[str],
-    data: dict[str, dict[str, int]],
-    max_total: int,
+    data: dict[str, dict[str, float]],
+    max_total: float,
     active: set[str],
     y_column: str,
     emitter: str | None,
+    fmt,
 ) -> list[dict]:
-    """Geometry for each stacked bar.
+    """Geometry for each stacked bar. Segment heights are the measure value per
+    (x, y); `fmt` renders the value strings.
 
     Each segment carries a `click_token` (when an emitter is set) so the
     template can wire htmx hx-vals without knowing about the dashboard layer.
@@ -85,7 +93,7 @@ def _build_stacks(
                 "color": COLORS[j % len(COLORS)],
                 "label": yv,
                 "x_label": xv,
-                "count": count,
+                "count": fmt(count),
                 "is_active": yv in active,
                 "click_token": (
                     f"{emitter}|{y_column}={yv}" if emitter else ""
@@ -95,7 +103,7 @@ def _build_stacks(
         total_h = (total / max_total) * PLOT_H if max_total else 0
         bars.append({
             "label": xv,
-            "total": total,
+            "total": fmt(total),
             "center_x": x + bar_w / 2,
             "value_y": baseline - total_h - 4,
             "label_y": baseline + 14,
@@ -110,9 +118,15 @@ class Bar:
     title: str
     x: str
     y: str
+    # A measure key resolved against the dashboard's `measures:` block, or — for
+    # standalone use — an inline measure definition dict (None means row count).
+    # Each (x, y) segment is sized by the measure; a stack's total sums them, so
+    # an additive measure (count/sum) is what makes a stacked bar meaningful.
+    measure: object = None
     filters: list = field(default_factory=list)
 
-    _resolve = None  # name -> (uri, storage_options); not a dataclass field
+    _resolve = None   # name -> (uri, storage_options); not a dataclass field
+    _measures = None  # MeasureSet for this chart's dataset; set by the dashboard
 
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
@@ -120,11 +134,25 @@ class Bar:
         TextParam("title", "Title"),
         ColumnParam("x", "X (bar groups)"),
         ColumnParam("y", "Y (stack / breakdown)"),
+        MeasureParam("measure", "Measure"),
         FilterListParam("filters", "Filters"),
     ]
 
     def __post_init__(self) -> None:
         self.filters = filters_mod.normalize(self.filters)
+
+    def _resolve_measure(self):
+        """(MeasureSet, key). Inline dict / None builds a one-off set; a string
+        key resolves against the dashboard-supplied set."""
+        if isinstance(self.measure, dict):
+            return measures_mod.single(self.measure)
+        if self.measure in (None, ""):
+            return measures_mod.single(None)
+        if self._measures is None:
+            raise ValueError(
+                f"measure {self.measure!r} needs a dashboard `measures:` block"
+            )
+        return self._measures, self.measure
 
     def to_html(
         self, *, crossfilter: dict | None = None, theme: str | None = None
@@ -139,36 +167,32 @@ class Bar:
         Outside a dashboard the argument is omitted and segments render with
         no click attrs and no fade — identical to the standalone form.
         """
-        # Lazy scan with predicate + projection pushdown: only x, y (+ filter
-        # columns) are read from the Parquet.
+        # Lazy scan with predicate + projection pushdown: only x, y (+ measure /
+        # filter columns) are read from the Parquet. Each (x, y) segment is
+        # sized by the measure; drop empty/undefined groups.
         lf = scan(self.dataset, self._resolve)
         preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
         if preds:
             lf = lf.filter(*preds)
-        counts = lf.group_by([self.x, self.y]).agg(pl.len().alias("count")).collect()
-
-        # Stable tie-breaker (lexicographic value) keeps the rendered HTML
-        # deterministic — polars' group_by has no order guarantee otherwise.
-        x_totals = (
-            counts.group_by(self.x)
-            .agg(pl.col("count").sum().alias("total"))
-            .sort(["total", self.x], descending=[True, False])
+        measures, key = self._resolve_measure()
+        counts = measures.aggregate(lf, [self.x, self.y], key).drop_nulls(
+            measures_mod.VALUE
         )
-        x_vals = [str(v) if v is not None else "" for v in x_totals[self.x].to_list()]
 
-        y_totals = (
-            counts.group_by(self.y)
-            .agg(pl.col("count").sum().alias("total"))
-            .sort(["total", self.y], descending=[True, False])
-        )
-        y_vals = [str(v) if v is not None else "" for v in y_totals[self.y].to_list()]
-        y_total_counts = [int(v) for v in y_totals["total"].to_list()]
-
-        data: dict[str, dict[str, int]] = {}
+        data: dict[str, dict[str, float]] = {}
         for row in counts.iter_rows(named=True):
             xv = str(row[self.x]) if row[self.x] is not None else ""
             yv = str(row[self.y]) if row[self.y] is not None else ""
-            data.setdefault(xv, {})[yv] = int(row["count"])
+            data.setdefault(xv, {})[yv] = float(row[measures_mod.VALUE])
+
+        # Stable ordering by total then label keeps the rendered HTML
+        # deterministic — polars' group_by has no order guarantee otherwise.
+        x_vals = sorted(data, key=lambda xv: (-sum(data[xv].values()), xv))
+        y_totals: dict[str, float] = {}
+        for cells in data.values():
+            for yv, v in cells.items():
+                y_totals[yv] = y_totals.get(yv, 0.0) + v
+        y_vals = sorted(y_totals, key=lambda yv: (-y_totals[yv], yv))
 
         max_total = max(
             (sum(data.get(xv, {}).values()) for xv in x_vals), default=1
@@ -178,17 +202,20 @@ class Bar:
         active = set(ctx.get("active") or ())
         emitter = ctx.get("emitter")
 
-        bars = _build_stacks(x_vals, y_vals, data, max_total, active, self.y, emitter)
+        fmt = lambda v: measures.fmt(key, v)
+        bars = _build_stacks(
+            x_vals, y_vals, data, max_total, active, self.y, emitter, fmt
+        )
         # Flat list of all segments — drives per-segment hover tooltip CSS.
         all_segments = [s for b in bars for s in b["segments"]]
         legend = [
             {
                 "label": yv,
                 "color": COLORS[i % len(COLORS)],
-                "total": tot,
+                "total": fmt(y_totals[yv]),
                 "is_active": yv in active,
             }
-            for i, (yv, tot) in enumerate(zip(y_vals, y_total_counts))
+            for i, yv in enumerate(y_vals)
         ]
 
         return _TEMPLATE.render(

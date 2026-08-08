@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-07
+
+### Added
+
+- **Dashboard measures.** Aggregation moves out of charts into a top-level
+  `measures:` block, **keyed by dataset**. A measure is an **aggregate** (`agg`
+  ∈ `count`/`sum`/`dcount`/`min`/`max`/`avg` over a row-level `formula` such as
+  `amount` or `price * qty`, with optional `filters` for conditional
+  aggregation) or a **derived** ratio (`formula` over other measure keys, e.g.
+  `revenue / orders_count`). Measures carry `name`, `description`, and a
+  `<prefix><0,.pattern>[a]<suffix>` `format` token (`0.00$`, `0.0%`; an `a`
+  after the pattern abbreviates big numbers → `0.0a $` = `23.4k $`; no
+  percentage auto-scaling). Empty/undefined results are dropped. New engine in
+  `fireflyer/measures.py` (tiny `+ - * /` expression parser, Polars translator,
+  format renderer).
+- **Measures manager** in the editor: a topbar overlay (styled like the docs
+  reference) lists measures per dataset with add / edit / delete, backed by
+  `fireflyer/measures_edit.py` (surgical `measures:` block edits, re-validated
+  through `Dashboard.from_yaml`). Charts pick a measure via a new `MeasureParam`
+  dropdown in the edit modal.
+
+### Changed
+
+- **Charts reference a measure instead of aggregating themselves.** `number`,
+  `pie`, `bar`, and `map` drop `agg`/`value`/`column`(number)/`format`(number)
+  in favour of a single `measure:` key (default: row count). `pie`'s centre
+  total is now the measure re-aggregated over the whole dataset (so a `dcount`
+  total is distinct-over-all, not summed slices); `map` accepts a `count`/`sum`
+  measure as the per-hex weight; `number` keeps its own `title` and inherits the
+  measure's format.
+
+### Removed
+
+- The per-chart `agg` / `value` / number `format` fields. **Breaking** — update
+  existing dashboards to define measures and reference them by key (no
+  auto-migration).
+
+## [0.7.0] - 2026-07-24
+
+### Added
+
+- **Pie aggregation + centre total.** A pie can now size its slices by an
+  aggregation of a value column, not just row count: `agg: count | sum | dcount`
+  with a `value` column (only additive measures — a donut's angles are
+  proportions, so no max/min/avg). The donut **centre shows the grand total** of
+  the shown slices by default (compact, filter/crossfilter aware); `total: false`
+  hides it. Backward compatible — existing pies (no `agg`) still count rows.
+
 ## [0.6.0] - 2026-07-24
 
 ### Added
@@ -159,7 +207,9 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/dankor/fireflyer/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/dankor/fireflyer/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/dankor/fireflyer/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/dankor/fireflyer/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dankor/fireflyer/compare/v0.3.1...v0.4.0

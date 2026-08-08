@@ -1134,6 +1134,10 @@ dashboard:
    multi-slice paths get a separator stroke; a lone full-circle slice has none. */
 .fireflyer-pie svg path { stroke: var(--ff-panel); }
 .fireflyer-pie-hole { fill: var(--ff-panel); }
+/* Grand total in the donut centre. Not a pointer target — the click surface is
+   the slices, so it never eats slice hovers/clicks. */
+.fireflyer-pie-total { fill: var(--ff-ink); font-size: 24px; font-weight: 700;
+  pointer-events: none; }
 .fireflyer-pie svg path,
 .fireflyer-pie svg circle[data-i] { cursor: pointer; transition: filter 0.15s ease; }
 .fireflyer-pie svg path:hover,
@@ -1204,6 +1208,7 @@ dashboard:
         <path d="M 110.00 20.00 A 90 90 0 1 1 70.95 191.09 L 86.57 158.65 A 54 54 0 1 0 110.00 56.00 Z" fill="#1FA8C9" stroke-width="1.5" data-i="0" data-active="0" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"toggle": "b|status=paid"}' aria-label="paid: 4 (57.1%)" />
         <path d="M 70.95 191.09 A 90 90 0 0 1 39.64 53.89 L 67.78 76.33 A 54 54 0 0 0 86.57 158.65 Z" fill="#454E7C" stroke-width="1.5" data-i="1" data-active="0" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"toggle": "b|status=pending"}' aria-label="pending: 2 (28.6%)" />
         <path d="M 39.64 53.89 A 90 90 0 0 1 110.00 20.00 L 110.00 56.00 A 54 54 0 0 0 67.78 76.33 Z" fill="#5AC189" stroke-width="1.5" data-i="2" data-active="0" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"toggle": "b|status=cancelled"}' aria-label="cancelled: 1 (14.3%)" />
+        <text x="110" y="110" class="fireflyer-pie-total" text-anchor="middle" dominant-baseline="central"><title>Total: 7</title>7</text>
       </svg>
       <div class="fireflyer-pie-tooltip" data-i="0" role="tooltip">
         <span class="fireflyer-pie-tooltip-label">paid</span>

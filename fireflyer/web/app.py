@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from fireflyer import config_edit
 from fireflyer import filters as filters_mod
+from fireflyer import measures_edit
 from fireflyer.datasets import DatasetError, DatasetStore
 from fireflyer.storage import make_object_store
 from fireflyer.chart.map.chart import Map
@@ -114,31 +115,62 @@ HTMX_SRC = "https://unpkg.com/htmx.org@1.9.12"
 # single-chart row. Small enough to read at a glance.
 DEFAULT_YAML = """name: Orders overview
 
+measures:
+  orders:
+    order_count:
+      name: Orders
+      agg: count
+    revenue:
+      name: Revenue
+      agg: sum
+      formula: amount
+      format: 0.0a $
+    paid_revenue:
+      name: Paid revenue
+      agg: sum
+      formula: amount
+      format: 0.0a $
+      filters:
+        - {column: status, op: in, values: [paid]}
+    avg_order_value:
+      name: Avg order value
+      formula: revenue / order_count
+      format: 0.00$
+    paid_count:
+      name: Paid orders
+      agg: count
+      filters:
+        - {column: status, op: in, values: [paid]}
+    paid_rate:
+      name: Paid share
+      # `%` is a literal suffix (no auto-scaling), so scale to a percentage here.
+      formula: paid_count / order_count * 100
+      format: 0.0%
+
 charts:
   total_orders:
     type: number
     dataset: orders
     title: Total orders
-    column: id
-    agg: count
+    measure: order_count
 
   revenue:
     type: number
     dataset: orders
     title: Revenue (paid)
-    column: amount
-    agg: sum
-    filters:
-      - column: status
-        op: in
-        values: [paid]
+    measure: paid_revenue
 
-  biggest_order:
+  avg_order:
     type: number
     dataset: orders
-    title: Biggest order
-    column: amount
-    agg: max
+    title: Avg order amount
+    measure: avg_order_value
+
+  paid_share:
+    type: number
+    dataset: orders
+    title: Paid share
+    measure: paid_rate
 
   orders:
     type: table
@@ -148,8 +180,9 @@ charts:
   status:
     type: pie
     dataset: orders
-    title: Orders by Status
+    title: Revenue by Status
     column: status
+    measure: revenue
 
   by_day:
     type: bar
@@ -174,7 +207,7 @@ charts:
 
 dashboard:
   Overview:
-    - ["@22", "total_orders", "revenue", "biggest_order"]
+    - ["@22", "total_orders", "revenue", "avg_order", "paid_share"]
     - ["@40", "orders:3", "status:2"]
     - ["@30", "by_day", "status"]
     - "-"
@@ -308,8 +341,8 @@ INDEX = f"""<!DOCTYPE html>
   /* Documentation overlay — covers the output pane; a chart reference from each
      chart's spec.md. z-index clears the dashboard content (sticky tab bar z:10,
      up to z:20) and the refresh overlay, but stays under modals (z:50). */
-  #ff-docs-btn {{ display: inline-flex; align-items: center; padding: 5px 9px; }}
-  #ff-docs-btn svg {{ width: 16px; height: 16px; display: block; }}
+  #ff-docs-btn, #ff-measures-btn {{ display: inline-flex; align-items: center; padding: 5px 9px; }}
+  #ff-docs-btn svg, #ff-measures-btn svg {{ width: 16px; height: 16px; display: block; }}
   .ff-docs {{ position: absolute; inset: 0; z-index: 40; background: var(--panel);
     display: flex; flex-direction: column; }}
   .ff-docs[hidden] {{ display: none; }}
@@ -337,6 +370,27 @@ INDEX = f"""<!DOCTYPE html>
   .ff-docs-md li {{ margin: 3px 0; }}
   .ff-docs-md code {{ background: var(--bg); padding: 1px 5px; border-radius: 3px;
     font-family: ui-monospace, Menlo, monospace; font-size: 12px; }}
+  /* Measures manager (reuses the .ff-docs overlay shell). */
+  .ff-measures-empty {{ color: var(--muted); font-size: 13px; padding: 8px 4px; }}
+  .ff-measures-ds {{ margin: 0 0 14px; }}
+  .ff-measures-ds-head {{ display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border); padding: 6px 2px; }}
+  .ff-measures-ds-name {{ font-weight: 600; font-size: 13px; }}
+  .ff-measures-add, .ff-measures-edit, .ff-measures-del, .ff-measures-cancel {{
+    background: none; border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 2px 8px; font-size: 12px; cursor: pointer; }}
+  .ff-measures-add:hover, .ff-measures-edit:hover, .ff-measures-cancel:hover {{ background: var(--bg); }}
+  .ff-measures-del:hover {{ color: var(--error); border-color: var(--error); }}
+  .ff-measures-row {{ display: flex; align-items: center; gap: 10px; padding: 6px 2px;
+    border-bottom: 1px solid var(--border); }}
+  .ff-measures-key {{ font-weight: 600; font-size: 13px; min-width: 120px; }}
+  .ff-measures-sum {{ flex: 1; color: var(--muted); font-size: 12px;
+    font-family: ui-monospace, Menlo, monospace; }}
+  .ff-measures-acts {{ display: flex; gap: 6px; }}
+  .ff-measures-form {{ max-width: 520px; }}
+  .ff-measures-form-head {{ font-weight: 600; font-size: 14px; margin: 4px 0 12px; }}
+  .ff-measures-form-foot {{ display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }}
+  .ff-measures-form[data-kind="derived"] [data-param-hide] {{ display: none; }}
   /* Transient error toast (bottom-centre). */
   .ff-toast {{ position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
     background: var(--error); color: #fff; padding: 9px 16px; border-radius: 6px;
@@ -518,6 +572,7 @@ INDEX = f"""<!DOCTYPE html>
   <div class="topbar-right">
     __FF_PATHDD__
     __FF_SAVE__
+    <button type="button" class="toggle" id="ff-measures-btn" title="Measures" aria-label="Measures"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5H6l6 7-6 7h12"/></svg></button>
     <button type="button" class="toggle" id="ff-docs-btn" title="Chart documentation" aria-label="Chart documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></button>
     <button class="toggle" id="toggle">Preview</button>
     __FF_THEME__
@@ -548,6 +603,14 @@ INDEX = f"""<!DOCTYPE html>
         <button type="button" class="ff-docs-close" id="ff-docs-close" title="Close (Esc)" aria-label="Close">✕</button>
       </div>
       <div class="ff-docs-body">__FF_DOCS__</div>
+    </aside>
+    <!-- Measures manager: overlaps the output pane; add/edit/delete measures. -->
+    <aside class="ff-docs" id="ff-measures" hidden>
+      <div class="ff-docs-head">
+        <span class="ff-docs-title">Measures</span>
+        <button type="button" class="ff-docs-close" id="ff-measures-close" title="Close (Esc)" aria-label="Close">✕</button>
+      </div>
+      <div class="ff-docs-body" id="ff-measures-body"></div>
     </aside>
   </section>
 </div>
@@ -741,6 +804,91 @@ document.getElementById('ff-docs-close').addEventListener('click', () => {{
 }});
 document.addEventListener('keydown', e => {{
   if (e.key === 'Escape' && !docsPanel.hidden) docsPanel.hidden = true;
+}});
+
+// Measures manager overlay: lists a dashboard's measures per dataset and
+// add/edit/deletes them. Server-rendered (like docs); each mutation swaps the
+// editor YAML and re-runs, then reloads the list.
+const measuresPanel = document.getElementById('ff-measures');
+const measuresBody = document.getElementById('ff-measures-body');
+
+async function loadMeasures() {{
+  const fd = new FormData();
+  fd.append('yaml_text', codeEl.value);
+  const res = await fetch('/measures/manager', {{ method: 'POST', body: fd }});
+  measuresBody.innerHTML = await res.text();
+}}
+function openMeasures() {{ measuresPanel.hidden = false; loadMeasures(); }}
+function closeMeasures() {{ measuresPanel.hidden = true; }}
+
+document.getElementById('ff-measures-btn').addEventListener('click', () => {{
+  if (measuresPanel.hidden) openMeasures(); else closeMeasures();
+}});
+document.getElementById('ff-measures-close').addEventListener('click', closeMeasures);
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape' && !measuresPanel.hidden) closeMeasures();
+}});
+
+async function openMeasureForm(dataset, key) {{
+  const fd = new FormData();
+  fd.append('yaml_text', codeEl.value);
+  fd.append('dataset', dataset);
+  fd.append('key', key || '');
+  const res = await fetch('/measures/form', {{ method: 'POST', body: fd }});
+  measuresBody.innerHTML = await res.text();
+}}
+
+// Overlay clicks: add / edit / delete, plus the filter builder rows.
+measuresBody.addEventListener('click', async e => {{
+  const add = e.target.closest('.ff-measures-add');
+  if (add) {{ openMeasureForm(add.dataset.dataset, ''); return; }}
+  const edit = e.target.closest('.ff-measures-edit');
+  if (edit) {{ openMeasureForm(edit.dataset.dataset, edit.dataset.key); return; }}
+  const del = e.target.closest('.ff-measures-del');
+  if (del) {{
+    const fd = new FormData();
+    fd.append('yaml_text', codeEl.value);
+    fd.append('dataset', del.dataset.dataset);
+    fd.append('key', del.dataset.key);
+    const res = await fetch('/measures/delete', {{ method: 'POST', body: fd }});
+    const data = await res.json();
+    if (!data.ok) {{ flash(data.error || 'Could not delete.'); return; }}
+    codeEl.value = data.yaml; run(); loadMeasures();
+    return;
+  }}
+  if (e.target.closest('.ff-measures-cancel')) {{ loadMeasures(); return; }}
+  const fadd = e.target.closest('.ff-filter-add');
+  if (fadd) {{
+    const wrap = fadd.closest('.ff-filters');
+    wrap.querySelector('.ff-filter-rows').appendChild(
+      wrap.querySelector('.ff-filter-tpl').content.cloneNode(true));
+    return;
+  }}
+  const fdel = e.target.closest('.ff-filter-del');
+  if (fdel) fdel.closest('.ff-filter-row').remove();
+}});
+
+// Kind dropdown flips the form between aggregate (agg + filters shown) and
+// derived (formula over other measures only).
+measuresBody.addEventListener('change', e => {{
+  if (e.target.name !== 'kind') return;
+  e.target.closest('.ff-measures-form').dataset.kind = e.target.value;
+}});
+
+// Save the add/edit form: swap the YAML, re-run, and return to the list.
+measuresBody.addEventListener('submit', async e => {{
+  e.preventDefault();
+  const form = e.target;
+  const fd = new FormData(form);
+  fd.append('yaml_text', codeEl.value);
+  const res = await fetch('/measures/save', {{ method: 'POST', body: fd }});
+  const data = await res.json();
+  if (!data.ok) {{
+    const err = form.querySelector('.ff-modal-error');
+    err.textContent = data.error || 'Could not save.'; err.hidden = false;
+    return;
+  }}
+  codeEl.value = data.yaml; run(); loadMeasures();
 }});
 
 const layoutEl = document.getElementById('layout');
@@ -2591,4 +2739,62 @@ async def chart_config_save(request: Request) -> dict:
         new_yaml = config_edit.apply_edit(yaml_text, cid, form)
         return {"ok": True, "yaml": new_yaml}
     except (config_edit.ConfigEditError, DashboardError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+# --- Measures manager ---------------------------------------------------------
+#
+# A modal-like overlay (toggled from the topbar, styled like the docs overlay)
+# lists a dashboard's measures per dataset and adds / edits / deletes them.
+# Pure logic lives in `measures_edit`; these routes just thread the current YAML
+# and the dataset's columns (for the filter builder) through it.
+
+
+@app.post("/measures/manager", response_class=HTMLResponse)
+async def measures_manager(yaml_text: str = Form("")) -> str:
+    """The overlay body: measures grouped by dataset with edit/delete controls."""
+    return measures_edit.render_manager(yaml_text)
+
+
+@app.post("/measures/form", response_class=HTMLResponse)
+async def measures_form(
+    request: Request,
+    yaml_text: str = Form(""),
+    dataset: str = Form(""),
+    key: str = Form(""),
+) -> str:
+    """The add/edit measure form (prefilled when `key` names an existing one)."""
+    columns = config_edit._columns(dataset, _dataset_store(request).source)
+    return measures_edit.render_form(yaml_text, dataset, key, columns=columns)
+
+
+@app.post("/measures/save")
+async def measures_save(request: Request) -> dict:
+    """Add or replace a measure. Returns {ok, yaml} for the browser to swap into
+    the editor, else {ok:false, error}."""
+    form = await request.form()
+    yaml_text = form.get("yaml_text", "")
+    dataset = form.get("dataset", "")
+    key = form.get("key", "")
+    original_key = form.get("original_key", "")
+    try:
+        definition = measures_edit.definition_from_form(form)
+        new_yaml = measures_edit.upsert_measure(
+            yaml_text, dataset, key, definition, original_key=original_key
+        )
+        return {"ok": True, "yaml": new_yaml}
+    except measures_edit.MeasuresEditError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/measures/delete")
+async def measures_delete(request: Request) -> dict:
+    """Delete a measure (guarded if a chart still references it)."""
+    form = await request.form()
+    try:
+        new_yaml = measures_edit.delete_measure(
+            form.get("yaml_text", ""), form.get("dataset", ""), form.get("key", "")
+        )
+        return {"ok": True, "yaml": new_yaml}
+    except measures_edit.MeasuresEditError as exc:
         return {"ok": False, "error": str(exc)}

@@ -42,7 +42,8 @@ class MyParam(Param):
   key** (e.g. an unset nullable `IntParam` like the map's `zoom`).
 
 Existing widgets to reuse before writing a new one: `TextParam`, `DatasetParam`,
-`ColumnParam`, `ChoiceParam(choices)`, `IntParam(minimum, maximum, step, nullable)`,
+`ColumnParam`, `MeasureParam` (dropdown of the dataset's measure keys),
+`ChoiceParam(choices)`, `IntParam(minimum, maximum, step, nullable)`,
 `BoolParam`, `FilterListParam`. Add a new subclass **only** when none fit.
 
 Note: form controls are styled by the editor page (`app.py`) via the `.ff-input`
@@ -57,23 +58,19 @@ Param — the modal renders a chart-type dropdown itself, from `CHART_TYPES`, an
 `config_edit.py` handles swapping the type on save.)
 
 ```python
-from fireflyer.params import DatasetParam, TextParam, ColumnParam, ChoiceParam, FilterListParam
+from fireflyer.params import DatasetParam, TextParam, MeasureParam, FilterListParam
 
 @dataclass
 class Number:
     dataset: str
     title: str
-    column: str
-    agg: str = "count"
-    format: str = "compact"
+    measure: object = None   # measure key (dashboard) or inline def dict (standalone)
     filters: list = field(default_factory=list)
 
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
-        ColumnParam("column", "Column"),
-        ChoiceParam("agg", "Aggregation", AGGREGATIONS),
-        ChoiceParam("format", "Format", FORMATS),
+        MeasureParam("measure", "Measure"),   # dropdown of the dataset's measure keys
         FilterListParam("filters", "Filters"),
     ]
 ```

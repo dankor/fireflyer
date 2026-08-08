@@ -28,7 +28,8 @@ When the user asks for a change to the datasets, charts, or layout, call the `up
 
 # Dashboard YAML format
 
-A dashboard has four top-level keys: `name`, `datasets`, `charts`, `dashboard`.
+A dashboard has these top-level keys: `name`, `datasets`, `charts`, `dashboard`,
+and an OPTIONAL `measures` block (see Measures below).
 `name` is required — a short human-readable title for the whole dashboard.
 Always include it and preserve the existing one unless asked to rename.
 
@@ -53,11 +54,33 @@ dashboard:
 
 ## Chart types and their keys
 
-- table: `search` (bool, default true), `pagination` (rows per page, int; 0 = show all). Shows the first 1000 rows.
-- pie: `column` (the column to group & count). Count aggregation only.
-- bar: `x` (column for bar groups), `y` (column to stack/break down by). Stacked count bars.
-- map: `lat`, `lng` (column names), `grid_size` (hex size, int, default 20), `zoom` (int or omit for auto-fit). Plots points as a hex heatmap.
-- number: `column` (the column to aggregate), `agg` (one of `count`, `sum`, `dcount`, `max`, `min`; default `count`), `format` (`compact` big-number abbreviation like `1.42k` — the default — or `full` for all digits). Shows one big scalar KPI. `count` = non-null values, `dcount` = distinct values.
+Charts no longer carry an aggregation — they reference a named **measure** (see Measures below). A chart with no `measure` defaults to a row count.
+
+- table: `search` (bool, default true), `pagination` (rows per page, int; 0 = show all). Shows the first 1000 rows. No measure — it lists raw rows.
+- pie: `column` (the category column to group by), `measure` (measure key; the slice size per category). The centre total is the measure re-aggregated over the whole dataset.
+- bar: `x` (column for bar groups), `y` (column to stack/break down by), `measure` (segment size per x,y). Use an additive measure (count/sum) so stacking is meaningful.
+- map: `lat`, `lng` (column names), `grid_size` (hex size, int, default 20), `zoom` (int or omit for auto-fit), `measure` (per-hex weight — must be a `count` or `sum` measure). Plots points as a hex heatmap.
+- number: `measure` (the scalar KPI to show), `title`. The value is formatted by the measure's own `format`.
+
+## Measures
+
+`measures` is an OPTIONAL top-level block, **keyed by dataset name**, then by a measure key unique within that dataset. A chart's `measure:` resolves within its own `dataset:`; a measure may only reference other measures in the same dataset.
+
+A measure is one of two kinds, told apart by whether `agg` is present:
+- Aggregate: `agg` (one of `count`, `sum`, `dcount`, `min`, `max`, `avg`) + a row-level `formula` (an expression over COLUMNS, e.g. `amount` or `price * qty`). `count` needs no formula. Optional `filters` (same shape as chart filters) pre-narrow the rows — this is how you express conditional aggregation like "count of won deals".
+- Derived: a `formula` over other MEASURE keys (no `agg`), e.g. `revenue / orders_count`. Computed per group, so it's a true per-group ratio. Its leaves must be aggregate measures (no derived-of-derived).
+
+Both formula kinds allow `+ - * /`, parentheses and numeric literals only.
+
+Optional per-measure metadata: `name` (display label), `description`, `format`. A `format` token is `<prefix><0,.pattern>[a]<suffix>` — the `0 , .` run is the number pattern (decimals from digits after `.`, thousands if a `,` is in the integer part), text around it is literal, and an optional `a` after the pattern abbreviates big numbers with a `k`/`m`/`b`/`t` unit. Examples: `0.00$` → `1234.50$`, `$0,0` → `$1,234`, `0.0a $` → `23.4k $`, `0.0%` → `25.0%`. There is NO percentage auto-scaling — for a `0.25` ratio shown as `25%`, multiply in the formula (`* 100`) and use `0.0%`.
+
+```
+measures:
+  orders:                              # dataset name
+    revenue: {name: Revenue, agg: sum, formula: amount, format: '0.00$'}
+    orders_count: {agg: count}
+    avg_order_value: {formula: revenue / orders_count, format: '0.00$'}
+```
 
 Every chart also accepts an optional `filters` list. Each filter is `{column, op, values}` where `op` is `in` or `ni` (not-in), e.g.
 ```

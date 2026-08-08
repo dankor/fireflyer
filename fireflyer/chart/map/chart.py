@@ -9,7 +9,15 @@ import jinja2
 import polars as pl
 
 from fireflyer import filters as filters_mod
-from fireflyer.params import ColumnParam, DatasetParam, FilterListParam, IntParam, TextParam
+from fireflyer import measures as measures_mod
+from fireflyer.params import (
+    ColumnParam,
+    DatasetParam,
+    FilterListParam,
+    IntParam,
+    MeasureParam,
+    TextParam,
+)
 from fireflyer.scan import scan
 
 # OpenStreetMap raster tiles. The tile.openstreetmap.org server is okay for
@@ -146,9 +154,15 @@ class Map:
     # overrides (clamped to [ZOOM_MIN, ZOOM_MAX]). The +/- buttons round-trip
     # this value to step zoom up/down.
     zoom: int | None = None
+    # A measure key resolved against the dashboard's `measures:` block, or — for
+    # standalone use — an inline definition dict (None means row count). A hex
+    # is a density bin, so the measure must be additive: only `count` (rows per
+    # hex) or `sum` (a per-hex weight) are supported here.
+    measure: object = None
     filters: list = field(default_factory=list)
 
-    _resolve = None  # name -> (uri, storage_options); not a dataclass field
+    _resolve = None   # name -> (uri, storage_options); not a dataclass field
+    _measures = None  # MeasureSet for this chart's dataset; set by the dashboard
 
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
@@ -158,6 +172,7 @@ class Map:
         ColumnParam("lng", "Longitude column"),
         IntParam("grid_size", "Hex size", minimum=GRID_MIN, maximum=GRID_MAX),
         IntParam("zoom", "Tile zoom", minimum=ZOOM_MIN, maximum=ZOOM_MAX, nullable=True),
+        MeasureParam("measure", "Measure"),
         FilterListParam("filters", "Filters"),
     ]
 
@@ -167,20 +182,52 @@ class Map:
         if self.zoom is not None:
             self.zoom = max(ZOOM_MIN, min(ZOOM_MAX, int(self.zoom)))
 
+    def _weight(self):
+        """(weight_expr, measure_filters, formatter) for the per-hex bin. A hex
+        can only show an additive density, so the measure must be `count` (one
+        per row) or `sum` (a per-row weight expression)."""
+        if isinstance(self.measure, dict):
+            measures, key = measures_mod.single(self.measure)
+        elif self.measure in (None, ""):
+            measures, key = measures_mod.single(None)
+        elif self._measures is None:
+            raise ValueError(
+                f"measure {self.measure!r} needs a dashboard `measures:` block"
+            )
+        else:
+            measures, key = self._measures, self.measure
+        m = measures.get(key)
+        if not m.is_aggregate or m.agg not in ("count", "sum"):
+            raise ValueError("map supports only `count` or `sum` measures")
+        if m.agg == "count":
+            weight = pl.lit(1.0)
+        else:
+            weight, _ = measures_mod.compile_formula(m.formula, pl.col)
+        return weight, m.filters, (lambda v: measures.fmt(key, v))
+
     def to_html(self, *, theme: str | None = None) -> str:
         """`theme` forces a palette (`"dark"`/`"light"`); omitted, the chart
         follows the viewer's OS preference (inherited from the dashboard root
         when nested). Only the card chrome is themed — the tile basemap and its
         hex overlay stay fixed."""
         ff_theme = theme if theme in ("dark", "light") else ""
-        # Lazy scan: only lat/lng (+ filter columns) are read from the Parquet.
+        weight, measure_filters, fmt = self._weight()
+        # Lazy scan: only lat/lng (+ measure / filter columns) are read from the
+        # Parquet. Chart filters and the measure's own filters both narrow rows.
         lf = scan(self.dataset, self._resolve)
-        preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
+        schema = lf.collect_schema().names()
+        preds = filters_mod.predicates(self.filters, schema) + filters_mod.predicates(
+            measure_filters, schema
+        )
         if preds:
             lf = lf.filter(*preds)
         df = (
-            lf.select(self.lat, self.lng)
-            .filter(pl.col(self.lat).is_not_null() & pl.col(self.lng).is_not_null())
+            lf.select(
+                pl.col(self.lat).alias("_lat"),
+                pl.col(self.lng).alias("_lng"),
+                weight.alias("_w"),
+            )
+            .filter(pl.col("_lat").is_not_null() & pl.col("_lng").is_not_null())
             .collect()
         )
 
@@ -190,7 +237,8 @@ class Map:
         if df.height == 0:
             return _TEMPLATE.render(
                 css=_CSS, title=self.title, vb_w=TARGET_W, vb_h=TARGET_H,
-                tiles=[], hexes=[], max_count=0, hex_color=HEX_COLOR,
+                tiles=[], hexes=[], max_count=0, max_count_label="0",
+                hex_color=HEX_COLOR,
                 chart_id=chart_id, endpoint=ENDPOINT, base_params=base_params,
                 grid_size=self.grid_size, zoom=ZOOM_MIN,
                 zoom_in=ZOOM_MIN + 1, zoom_out=ZOOM_MIN,
@@ -199,10 +247,10 @@ class Map:
                 tile_size=TILE_SIZE, bounds=None, empty=True, ff_theme=ff_theme,
             )
 
-        lng_min = float(df[self.lng].min())
-        lng_max = float(df[self.lng].max())
-        lat_min = float(df[self.lat].min())
-        lat_max = float(df[self.lat].max())
+        lng_min = float(df["_lng"].min())
+        lng_max = float(df["_lng"].max())
+        lat_min = float(df["_lat"].min())
+        lat_max = float(df["_lat"].max())
 
         # Tile zoom: user-controlled when set, otherwise the largest level at
         # which the data still fits the canvas. The +/- buttons round-trip
@@ -254,12 +302,14 @@ class Map:
         # the same, so more hexes fit the data extent.
         hex_size = float(self.grid_size)
 
-        bins: dict[tuple[int, int], int] = {}
-        for lng_v, lat_v in zip(df[self.lng].to_list(), df[self.lat].to_list()):
+        bins: dict[tuple[int, int], float] = {}
+        for lng_v, lat_v, w in zip(
+            df["_lng"].to_list(), df["_lat"].to_list(), df["_w"].to_list()
+        ):
             wx = _lng_to_world_x(float(lng_v), z) - offset_x
             wy = _lat_to_world_y(float(lat_v), z) - offset_y
             qr = _pixel_to_axial(wx, wy, hex_size)
-            bins[qr] = bins.get(qr, 0) + 1
+            bins[qr] = bins.get(qr, 0.0) + (float(w) if w is not None else 0.0)
 
         max_count = max(bins.values()) if bins else 0
 
@@ -276,7 +326,8 @@ class Map:
             hexes.append({
                 "points": points,
                 "opacity": f"{opacity:.3f}",
-                "count": count,
+                "count": fmt(count),  # measure-formatted display value
+                "n": count,           # numeric — drives label pluralization
                 # Center coords drive the hover label; pre-rounded so the
                 # template doesn't need formatting logic.
                 "cx": f"{cx:.1f}",
@@ -299,6 +350,7 @@ class Map:
             vb_w=vb_w, vb_h=vb_h,
             tiles=tiles, hexes=hexes,
             hex_color=HEX_COLOR, max_count=max_count,
+            max_count_label=fmt(max_count),
             chart_id=chart_id, endpoint=ENDPOINT, base_params=base_params,
             grid_size=self.grid_size, zoom=z,
             zoom_in=zoom_in, zoom_out=zoom_out,
