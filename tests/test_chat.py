@@ -77,6 +77,31 @@ def test_applies_valid_tool_yaml(fake_client, orders_csv):
     assert len(client.messages.calls) == 1
 
 
+def test_dataset_schemas_are_sent_to_the_model(fake_client):
+    """The available datasets' column schemas (no data) ride in the user turn so
+    the assistant builds charts/measures from real columns."""
+    client = fake_client([[_text("Sure.")]])
+    schemas = [
+        {"name": "orders", "columns": [
+            {"name": "amount", "dtype": "Int64"},
+            {"name": "status", "dtype": "String"},
+        ]},
+    ]
+
+    chat_mod.run_chat("what columns exist?", "name: X", datasets=schemas)
+
+    sent = client.messages.calls[0]["messages"][-1]["content"]
+    assert "Available datasets" in sent
+    assert "orders: amount:Int64, status:String" in sent
+
+
+def test_no_datasets_notes_absence(fake_client):
+    client = fake_client([[_text("Add a dataset first.")]])
+    chat_mod.run_chat("add a chart", "name: X", datasets=[])
+    sent = client.messages.calls[0]["messages"][-1]["content"]
+    assert "none yet" in sent
+
+
 def test_plain_reply_has_no_yaml(fake_client):
     fake_client([[_text("Pie charts show category share by count.")]])
 

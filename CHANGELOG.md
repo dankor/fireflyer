@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-09
+
+### Changed
+
+- **AI assistant is a left-pane overlay** toggled from the topbar (`#ff-chat-btn`),
+  mirroring the docs/measures overlays — it replaces the old bottom collapsible
+  panel. The input is taller and vertically resizable.
+- **The assistant now gets the datasets' schemas** (each column's name + type,
+  **no data**) alongside the YAML, so it builds charts and measures from real
+  columns and won't invent datasets/columns. The DSL system prompt is corrected
+  to the current model — there is no `datasets:` block; datasets are managed
+  separately and referenced by name.
+
 ## [0.8.0] - 2026-08-07
 
 ### Added
@@ -207,7 +220,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/dankor/fireflyer/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/dankor/fireflyer/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/dankor/fireflyer/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/dankor/fireflyer/compare/v0.5.0...v0.6.0

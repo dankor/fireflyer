@@ -1,10 +1,11 @@
 """AI assistant for the dashboard editor.
 
 A thin wrapper over the Anthropic Messages API: given the current dashboard
-YAML and a user request, Claude replies in plain text and — when a change is
-warranted — calls the `update_dashboard` tool with the complete new YAML. The
-proposed YAML is validated against the real parser before we hand it back, with
-a bounded self-repair loop if it doesn't parse.
+YAML, the available datasets' column schemas (name + type, no data), and a user
+request, Claude replies in plain text and — when a change is warranted — calls
+the `update_dashboard` tool with the complete new YAML. The proposed YAML is
+validated against the real parser before we hand it back, with a bounded
+self-repair loop if it doesn't parse.
 
 This lives in `web/` because it's part of the editor (a dev tool), not the
 library core. Keep the DSL spec below in sync with `architecture.md` and the
@@ -28,22 +29,19 @@ When the user asks for a change to the datasets, charts, or layout, call the `up
 
 # Dashboard YAML format
 
-A dashboard has these top-level keys: `name`, `datasets`, `charts`, `dashboard`,
-and an OPTIONAL `measures` block (see Measures below).
+A dashboard has these top-level keys: `name`, `charts`, `dashboard`, and an
+OPTIONAL `measures` block (see Measures below). There is NO `datasets:` block —
+datasets are managed separately and referenced by name (see Datasets below).
 `name` is required — a short human-readable title for the whole dashboard.
 Always include it and preserve the existing one unless asked to rename.
 
 ```
 name: <string>                    # required: the dashboard's display name
 
-datasets:
-  <id>:
-    path: files/orders.csv      # path to a CSV; `path` is the only key
-
 charts:
   <id>:
     type: table | pie | bar | map | number
-    dataset: <dataset id>       # must exist under datasets
+    dataset: <dataset name>     # one of the available datasets (see Datasets)
     title: <string>
     # ...type-specific keys below...
 
@@ -51,6 +49,16 @@ dashboard:
   - <layout item>
   - <layout item>
 ```
+
+# Datasets
+
+Datasets are managed outside the dashboard file — you do NOT declare them. The
+available datasets and their column schemas (each column's name and type, no
+data) are listed in every message. Reference one from a chart with
+`dataset: <name>`, and build measures/filters from that dataset's columns. Only
+use datasets and columns that appear in the provided list — never invent a
+dataset, file path, or column name. If the user asks for something that needs a
+column or dataset that isn't listed, say so instead of guessing.
 
 ## Chart types and their keys
 
@@ -101,7 +109,7 @@ Rules (these are validated; broken layouts are rejected):
 - Widths are proportions and OPTIONAL — a bare `orders` means `orders:1`. `a:1 b:4` is the same 20/80 split as `a:20 b:80`; `a b c` makes three equal columns. Any positive numbers work — there is no sum-to-100 requirement.
 - Vertical merge (a chart spanning rows) = repeat the chart's id **bare** (no width) in the row(s) directly below where it's sized. e.g. `["@40","orders:3","status:2"]` then `["@30","by_day","status"]` — `status` spans both rows, `by_day` fills the left column. The first row sets the sizes; a lower row's other cells fill the leftover width, splitting it by their own widths.
 - A chart id may appear more than once ONLY as such a contiguous bare-repeat span. Repeating it WITH a width, across a header/separator, or skipping a row is an error.
-- All heights and any given widths MUST be > 0. Every chart id used MUST exist in `charts`; every dataset referenced MUST exist in `datasets`.
+- All heights and any given widths MUST be > 0. Every chart id used MUST exist in `charts`; every dataset referenced MUST be one of the available datasets.
 
 # Editing rules
 
@@ -148,9 +156,25 @@ def _get_client() -> anthropic.Anthropic:
     return _client
 
 
-def _user_turn(message: str, yaml_text: str) -> str:
+def _datasets_block(datasets) -> str:
+    """A schema-only listing (column name:type, no data) of the datasets the
+    dashboard can reference — so the model builds charts/measures from real
+    columns instead of guessing. `datasets` is a list of
+    `{"name": str, "columns": [{"name": str, "dtype": str}, ...]}`."""
+    if not datasets:
+        return "Available datasets: (none yet — the user must add a dataset first)."
+    lines = ["Available datasets (each column shown as name:type; no data):"]
+    for d in datasets:
+        cols = ", ".join(f"{c['name']}:{c['dtype']}" for c in d.get("columns", []))
+        lines.append(f"- {d['name']}: {cols or '(no columns)'}")
+    return "\n".join(lines)
+
+
+def _user_turn(message: str, yaml_text: str, datasets) -> str:
     return (
-        f"{message}\n\nThe current dashboard YAML is:\n```yaml\n{yaml_text}\n```"
+        f"{message}\n\n"
+        f"{_datasets_block(datasets)}\n\n"
+        f"The current dashboard YAML is:\n```yaml\n{yaml_text}\n```"
     )
 
 
@@ -158,11 +182,18 @@ def _text_of(content) -> str:
     return "".join(b.text for b in content if b.type == "text").strip()
 
 
-def run_chat(message: str, yaml_text: str, history: list | None = None) -> dict:
+def run_chat(
+    message: str,
+    yaml_text: str,
+    history: list | None = None,
+    datasets: list | None = None,
+) -> dict:
     """Run one assistant turn.
 
-    Returns `{"reply": str, "yaml": str | None}`. `yaml` is the validated new
-    document when the model proposed a (parseable) change, else None.
+    `datasets` is the schema-only listing of available datasets (see
+    `_datasets_block`) so the model can build charts and measures from real
+    columns. Returns `{"reply": str, "yaml": str | None}`; `yaml` is the
+    validated new document when the model proposed a (parseable) change.
     """
     messages: list = []
     for turn in history or []:
@@ -170,7 +201,9 @@ def run_chat(message: str, yaml_text: str, history: list | None = None) -> dict:
         content = turn.get("content", "")
         if role in ("user", "assistant") and content:
             messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": _user_turn(message, yaml_text)})
+    messages.append(
+        {"role": "user", "content": _user_turn(message, yaml_text, datasets)}
+    )
 
     client = _get_client()
     reply_parts: list[str] = []
