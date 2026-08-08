@@ -4,24 +4,27 @@
 Display category distribution as a donut.
 
 ## Behavior
-- Reads the CSV.
+- Reads the dataset.
 - Applies the chart's `filters` (see architecture.md "Filters") before grouping.
-- Groups by `column` and sizes each slice by `agg`:
-  - `count` (default) — number of rows per category.
-  - `sum` — sum of `value` per category.
-  - `dcount` — distinct (non-null) values of `value` per category.
-- Only **additive, non-negative** aggregations are offered: a donut's angles are
-  proportions of a total, so `max`/`min`/`avg` (which the number chart supports)
-  would make the slices and percentages meaningless, and are deliberately absent.
-- Renders an SVG donut, one slice per category, sorted by the aggregated value
-  descending.
+- Groups by `column` and sizes each slice by its **measure** (see architecture.md
+  "Measures"). With no `measure` the slices count rows. Slice values are formatted
+  by the measure's own `format` token.
+- Slice proportions/percentages are of the shown slices' total. The measure can
+  be any measure — a ratio slice is sized by its per-category value, though only
+  an **additive** measure (count/sum) makes the proportions meaningful. Use a
+  single additive measure to get a true "share of total" breakdown.
+- Renders an SVG donut, one slice per category, sorted by the measure value
+  descending; empty/undefined groups are dropped.
 - Each slice has a hover tooltip showing label, value, and percent.
 - Each slice brightens slightly on hover.
 - A single category renders as a full ring.
 - Categories beyond the palette length recycle colors.
-- When `total` is on (the default), the **grand total of the shown slices** is
-  displayed in the donut centre — a short/compact figure (`1.4k`, `3m`); the
-  exact number is the hover title. It reflects the current filters/crossfilter.
+- When `total` is on (the default), the donut centre shows the **measure
+  re-aggregated over the whole (ungrouped) dataset** — *not* the sum of the
+  shown slices. So a `dcount` total is distinct-over-all (not the sum of
+  per-slice dcounts), and a derived/ratio measure is recomputed at the grand
+  level. It's a short/compact figure (`1.4k`, `3m`) with the measure-formatted
+  exact number as the hover title, and reflects the current filters/crossfilter.
   `total: false` hides it.
 
 ## Theming
@@ -29,12 +32,12 @@ Display category distribution as a donut.
 - Slice **fills** are the fixed categorical palette — theme-independent, so a value keeps its color in either mode. Slice separators and the donut hole take the card color (`--ff-panel`) so slices stay distinct on any background.
 
 ## Parameters
-- `dataset: str` — path to the CSV.
+- `dataset: str` — dataset name (or Parquet path standalone).
 - `title: str` — chart title.
 - `column: str` — the category column to group by.
-- `value: str = ""` — the column to aggregate for slice size. Required when `agg`
-  is `sum`/`dcount`; ignored for `count`.
-- `agg: str = "count"` — `count` | `sum` | `dcount` (see Behavior).
+- `measure` — a measure **key** resolved against the dashboard's `measures:`
+  block, or — for standalone use — an inline measure definition dict. `None`
+  (the default) means a per-category row count.
 - `total: bool = True` — show the grand total in the donut centre.
 - `filters: list = []` — declarative pre-filter applied before grouping. Each entry is `{column, op (in|ni), values}`.
 
@@ -45,5 +48,5 @@ Display category distribution as a donut.
 
 ## Editor params
 Edit-modal schema (`Pie.PARAMS`): dataset (dropdown), title (text), column (column
-dropdown), value (column dropdown), agg (choice: count/sum/dcount), total
-(checkbox), filters (filter builder). Widgets live in `fireflyer/params.py`.
+dropdown), measure (measure dropdown), total (checkbox), filters (filter builder).
+Widgets live in `fireflyer/params.py`.

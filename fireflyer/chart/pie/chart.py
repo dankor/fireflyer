@@ -3,24 +3,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import jinja2
-import polars as pl
 
 from fireflyer import filters as filters_mod
+from fireflyer import measures as measures_mod
 from fireflyer.params import (
     BoolParam,
-    ChoiceParam,
     ColumnParam,
     DatasetParam,
     FilterListParam,
+    MeasureParam,
     TextParam,
 )
 from fireflyer.scan import scan
-
-# Slice size aggregations. A donut's angles are proportions of a total, so only
-# **additive, non-negative** measures make sense — hence count/sum/dcount, not
-# max/min/avg (those would make the proportions meaningless). `count` needs no
-# value column; `sum`/`dcount` aggregate `value`.
-AGGREGATIONS = ("count", "sum", "dcount")
 
 # Fixed categorical palette for slices — theme-independent, so a value keeps
 # its color across light and dark.
@@ -69,12 +63,6 @@ def _wedge_path(start: float, end: float) -> str:
     )
 
 
-def _fmt_value(value) -> str:
-    """A slice value for the legend/tooltip — thousands-separated, whole numbers
-    without a decimal (`1200 → 1,200`, `1234.5 → 1,234.5`)."""
-    return f"{int(value):,}" if float(value).is_integer() else f"{value:,.2f}".rstrip("0")
-
-
 def _compact(value) -> str:
     """A short total for the donut centre: `1,420 → 1.4k`, `3,000,000 → 3m`.
     Lowercase business suffixes; ~2 significant figures so it fits the hole."""
@@ -92,6 +80,7 @@ def _build_segments(
     column: str,
     active: set[str],
     emitter: str | None,
+    fmt,
 ) -> list[dict]:
     """One segment per category, used for both the SVG and the legend.
 
@@ -116,7 +105,7 @@ def _build_segments(
             "color": COLORS[i % len(COLORS)],
             "path": path,
             "label": label,
-            "display": _fmt_value(value),
+            "display": fmt(value),
             "percent": f"{value / total * 100:.1f}",
             "is_active": label in active,
             "click_token": f"{emitter}|{column}={label}" if emitter else "",
@@ -129,32 +118,42 @@ class Pie:
     dataset: str
     title: str
     column: str  # category to group by
-    value: str = ""  # column to aggregate for slice size (blank when agg=count)
-    agg: str = "count"  # count | sum | dcount — see AGGREGATIONS
+    # A measure key resolved against the dashboard's `measures:` block, or — for
+    # standalone use — an inline measure definition dict (None means row count).
+    # Slices are sized by the measure per category; the centre total is the
+    # measure re-aggregated over the whole dataset (so a dcount isn't summed).
+    measure: object = None
     total: bool = True  # show the grand total in the donut centre
     filters: list = field(default_factory=list)
 
-    _resolve = None  # name -> (uri, storage_options); not a dataclass field
+    _resolve = None   # name -> (uri, storage_options); not a dataclass field
+    _measures = None  # MeasureSet for this chart's dataset; set by the dashboard
 
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
         ColumnParam("column", "Column"),
-        ColumnParam("value", "Value column"),
-        ChoiceParam("agg", "Aggregation", AGGREGATIONS),
+        MeasureParam("measure", "Measure"),
         BoolParam("total", "Show total in centre"),
         FilterListParam("filters", "Filters"),
     ]
 
     def __post_init__(self) -> None:
         self.filters = filters_mod.normalize(self.filters)
-        if self.agg not in AGGREGATIONS:
+
+    def _resolve_measure(self):
+        """(MeasureSet, key). Inline dict / None builds a one-off set; a string
+        key resolves against the dashboard-supplied set."""
+        if isinstance(self.measure, dict):
+            return measures_mod.single(self.measure)
+        if self.measure in (None, ""):
+            return measures_mod.single(None)
+        if self._measures is None:
             raise ValueError(
-                f"pie agg must be one of {AGGREGATIONS}, got {self.agg!r}"
+                f"measure {self.measure!r} needs a dashboard `measures:` block"
             )
-        if self.agg != "count" and not self.value:
-            raise ValueError(f"pie agg {self.agg!r} needs a `value` column")
+        return self._measures, self.measure
 
     def to_html(
         self, *, crossfilter: dict | None = None, theme: str | None = None
@@ -179,35 +178,35 @@ class Pie:
         argument is omitted and slices render exactly as before.
         """
         # Lazy scan: Polars pushes the filter predicates and the column
-        # projection into the Parquet read, so only `column` (+ filter columns)
-        # is scanned, not the whole file.
+        # projection into the Parquet read, so only what the measure and the
+        # category column need is scanned, not the whole file.
         lf = scan(self.dataset, self._resolve)
         preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
         if preds:
             lf = lf.filter(*preds)
-        # Slice size: row count, or an additive reduction of `value` per category.
-        col = pl.col(self.value)
-        measure = {
-            "count": pl.len(),
-            "sum": col.sum(),
-            "dcount": col.drop_nulls().n_unique(),
-        }[self.agg].alias("measure")
+
+        measures, key = self._resolve_measure()
+        # Slice size = the measure per category; drop empty/undefined groups.
         grouped = (
-            lf.group_by(self.column)
-            .agg(measure)
-            .sort("measure", descending=True)
-            .collect()
+            measures.aggregate(lf, [self.column], key)
+            .drop_nulls(measures_mod.VALUE)
+            .sort(measures_mod.VALUE, descending=True)
         )
         labels = [str(v) if v is not None else "" for v in grouped[self.column].to_list()]
-        values = [float(v or 0) for v in grouped["measure"].to_list()]
-        grand_total = sum(values)
-        # `or 1` keeps percentage/angle math defined when the data is empty.
-        total = grand_total or 1
+        values = [float(v) for v in grouped[measures_mod.VALUE].to_list()]
+        # Proportions are of the shown slices; the centre total is the measure
+        # re-aggregated over the whole dataset (additive-independent — a dcount
+        # total is distinct-over-all, not the sum of per-slice dcounts).
+        shown_total = sum(values) or 1
+        grand_total = measures.scalar(lf, key)
 
         ctx = crossfilter or {}
         active = set(ctx.get("active") or ())
         emitter = ctx.get("emitter")
-        segments = _build_segments(labels, values, total, self.column, active, emitter)
+        segments = _build_segments(
+            labels, values, shown_total, self.column, active, emitter,
+            lambda v: measures.fmt(key, v),
+        )
 
         return _TEMPLATE.render(
             css=_CSS,
@@ -220,8 +219,8 @@ class Pie:
             has_selection=bool(active),
             crossfilter=crossfilter,
             show_total=self.total,
-            total_display=_compact(grand_total),
-            total_exact=_fmt_value(grand_total),
+            total_display=_compact(grand_total or 0),
+            total_exact=measures.fmt(key, grand_total),
             ff_theme=theme if theme in ("dark", "light") else "",
         )
 

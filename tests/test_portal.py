@@ -13,7 +13,7 @@ from fireflyer.web.portal import SqliteStore, render_gallery
 def _yaml(name: str = "Sales", title: str = "KPI") -> str:
     return f"""name: {name}
 charts:
-  kpi: {{type: number, dataset: orders, title: {title}, column: amount, agg: sum}}
+  kpi: {{type: number, dataset: orders, title: {title}}}
 dashboard:
   Main:
     - ["@100", "kpi"]

@@ -65,8 +65,20 @@ def _context(config: dict, cfg: dict, resolve=None) -> ParamContext:
     # `dataset` is a name (resolved via `resolve`) or a Parquet path directly.
     dataset = cfg.get("dataset")
     return ParamContext(
-        datasets={}, dataset_id=dataset, columns=_columns(dataset, resolve)
+        datasets={},
+        dataset_id=dataset,
+        columns=_columns(dataset, resolve),
+        measures=_measure_keys(config, dataset),
     )
+
+
+def _measure_keys(config: dict, dataset) -> list[str]:
+    """Measure keys defined for `dataset` in the top-level `measures:` block —
+    the options the chart's measure dropdown lists."""
+    measures = config.get("measures")
+    if isinstance(measures, dict) and isinstance(measures.get(dataset), dict):
+        return list(measures[dataset].keys())
+    return []
 
 
 def _type_select(current: str) -> str:

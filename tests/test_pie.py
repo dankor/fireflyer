@@ -14,8 +14,7 @@ def test_pie_sum_of_amount(orders_parquet, snapshot):
         dataset=orders_parquet,
         title="Revenue by Status",
         column="status",
-        agg="sum",
-        value="amount",
+        measure={"agg": "sum", "formula": "amount"},
     )
     snapshot(chart.to_html())
 
@@ -28,16 +27,29 @@ def test_pie_total_hidden(orders_parquet, snapshot):
     snapshot(chart.to_html())
 
 
-def test_pie_sum_requires_value_column(orders_parquet):
-    with pytest.raises(ValueError, match="value"):
-        ff.chart.pie(dataset=orders_parquet, title="x", column="status", agg="sum")
-
-
 def test_pie_rejects_unknown_agg(orders_parquet):
     with pytest.raises(ValueError, match="agg"):
         ff.chart.pie(
-            dataset=orders_parquet, title="x", column="status", agg="avg", value="amount"
-        )
+            dataset=orders_parquet,
+            title="x",
+            column="status",
+            measure={"agg": "bogus", "formula": "amount"},
+        ).to_html()
+
+
+def test_pie_dcount_total_is_distinct_over_all(orders_parquet):
+    """The centre total is the measure re-aggregated over the whole dataset — a
+    dcount total is distinct-over-all, not the sum of per-slice dcounts."""
+    chart = ff.chart.pie(
+        dataset=orders_parquet,
+        title="Distinct days by status",
+        column="status",
+        measure={"agg": "dcount", "formula": "day"},
+    )
+    html = chart.to_html()
+    # 4 distinct days overall; summing per-status dcounts (2+2+1) would over-count,
+    # so this asserts the grand-total re-aggregation.
+    assert "Total: 4" in html
 
 
 def test_pie_orders_declared_filter(orders_parquet, snapshot):
@@ -61,5 +73,3 @@ def test_pie_orders_crossfilter_active(orders_parquet, snapshot):
         "active": {"paid"},
     }
     snapshot(chart.to_html(crossfilter=crossfilter))
-
-

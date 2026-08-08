@@ -8,6 +8,7 @@ import polars as pl
 import yaml
 
 from fireflyer import filters as filters_mod
+from fireflyer import measures as measures_mod
 from fireflyer.scan import scan
 from fireflyer.chart.bar.chart import Bar
 from fireflyer.chart.map.chart import Map
@@ -130,6 +131,9 @@ class _RowGroup:
 @dataclass
 class Dashboard:
     chart_configs: dict[str, _ChartConfig]
+    # Measures, keyed by dataset name -> MeasureSet. Parsed from the top-level
+    # `measures:` block; a chart resolves its `measure:` within its dataset's set.
+    measure_sets: dict[str, Any] = field(default_factory=dict)
     items: list[Any] = field(default_factory=list)
     # None for a flat (list-form) dashboard; a list of `_Tab` when the
     # `dashboard:` section is a mapping of tab name -> layout list.
@@ -170,6 +174,11 @@ class Dashboard:
 
         resolve = _resolver_from(datasets)
         chart_configs = _parse_charts(config["charts"])
+        try:
+            measure_sets = measures_mod.parse_block(config.get("measures"))
+        except measures_mod.MeasureError as exc:
+            raise DashboardError(str(exc)) from exc
+        _validate_measure_refs(chart_configs, measure_sets)
 
         raw_dashboard = config["dashboard"]
         if isinstance(raw_dashboard, dict):
@@ -178,12 +187,14 @@ class Dashboard:
             # dashboard (span-aware), so the move machinery — which pulls a
             # chart from every row it's in — stays sound across tabs.
             _validate_unique_placements([g for t in tabs for g in t.items])
-            dash = cls(chart_configs=chart_configs, tabs=tabs, yaml_source=text, name=name)
+            dash = cls(chart_configs=chart_configs, measure_sets=measure_sets,
+                       tabs=tabs, yaml_source=text, name=name)
         else:
             items = _parse_layout(raw_dashboard, chart_configs)
             items = _group_layout(items)
             _validate_unique_placements(items)
-            dash = cls(chart_configs=chart_configs, items=items, yaml_source=text, name=name)
+            dash = cls(chart_configs=chart_configs, measure_sets=measure_sets,
+                       items=items, yaml_source=text, name=name)
         dash._resolve = resolve
         return dash
 
@@ -401,6 +412,8 @@ class Dashboard:
         kwargs["filters"] = [f.as_dict() for f in merged]
         chart = cfg.cls(**kwargs)
         chart._resolve = self._resolve  # name -> Parquet source at read time
+        # Measures for this chart's dataset, so a `measure:` key resolves.
+        chart._measures = self.measure_sets.get(kwargs["dataset"])
 
         if isinstance(chart, Pie):
             active = filters_mod.active_values_for(cf_tokens, cid, chart.column)
@@ -638,6 +651,25 @@ def _parse_charts(raw) -> dict[str, _ChartConfig]:
             raise DashboardError(f"chart {cid!r}: {exc}") from exc
         out[cid] = _ChartConfig(cls=CHART_TYPES[ctype], kwargs=kwargs)
     return out
+
+
+def _validate_measure_refs(
+    chart_configs: dict[str, _ChartConfig], measure_sets: dict
+) -> None:
+    """Every chart `measure:` key must exist in its dataset's measure set. A
+    chart with no `measure` (or an inline dict) needs no lookup — it defaults to
+    a row count. Caught here so a typo'd key fails at parse time, not render."""
+    for cid, cfg in chart_configs.items():
+        measure = cfg.kwargs.get("measure")
+        if not isinstance(measure, str) or not measure:
+            continue
+        dataset = cfg.kwargs["dataset"]
+        mset = measure_sets.get(dataset)
+        if mset is None or measure not in mset:
+            raise DashboardError(
+                f"chart {cid!r}: unknown measure {measure!r} for dataset "
+                f"{dataset!r} — define it under `measures: {dataset}:`"
+            )
 
 
 def _parse_tabs(raw: dict, chart_configs: dict[str, _ChartConfig]) -> list[_Tab]:

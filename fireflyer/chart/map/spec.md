@@ -1,7 +1,7 @@
 # Map chart
 
 ## Purpose
-Plot a point dataset (lat/lng) as a pointy-top hex grid heatmap over an OpenStreetMap tile background. Hex shading scales with per-bin record count.
+Plot a point dataset (lat/lng) as a pointy-top hex grid heatmap over an OpenStreetMap tile background. Hex shading scales with the per-bin measure value (record count by default, or a `sum` weight).
 
 ## Behavior
 - Reads the CSV.
@@ -30,8 +30,15 @@ Plot a point dataset (lat/lng) as a pointy-top hex grid heatmap over an OpenStre
 - `lng: str` — column with longitude values.
 - `grid_size: int = 20` — hex side length in world-pixel (Mercator) units. Smaller = finer hexes at any given zoom. Clamped to `[4, 200]`.
 - `zoom: int | None = None` — explicit tile zoom level. `None` = auto-fit to the data bbox. Clamped to `[1, 18]` when set.
-- `filters: list = []` — declarative pre-filter applied before binning.
+- `measure` — a measure **key** resolved against the dashboard's `measures:`
+  block, or an inline measure definition dict standalone. `None` (the default)
+  means one per row (a density count). A hex is a density bin, so the measure
+  must be additive: only `count` (rows per hex) or `sum` (a per-hex weight
+  expression) are accepted — any other agg or a derived measure raises.
+- `filters: list = []` — declarative pre-filter applied before binning,
+  intersected with the measure's own filters.
 
 ## Editor params
 Edit-modal schema (`Map.PARAMS`): dataset (dropdown), title (text), lat/lng (column dropdowns),
-grid_size (number), zoom (nullable number), filters (filter builder). Widgets live in `fireflyer/params.py`.
+grid_size (number), zoom (nullable number), measure (measure dropdown), filters
+(filter builder). Widgets live in `fireflyer/params.py`.

@@ -85,12 +85,15 @@ Not supported:
 * Large dataset optimization
 * Realtime updates
 
-Two **owner-approved exceptions** to this list: **Portal mode** (below) adds
-persistence + a multi-dashboard listing, scoped to `web/`; and **datasets** are
+Three **owner-approved exceptions** to this list: **Portal mode** (below) adds
+persistence + a multi-dashboard listing, scoped to `web/`; **datasets** are
 Parquet in object storage with efficient (pushdown) scans — so "only CSV" and
-"large-dataset optimization" no longer hold for the dataset layer. Neither
-relaxes the rest: no auth beyond the portal's simple login, no multi-user, no
-caching, no SQL/joins/calculated columns.
+"large-dataset optimization" no longer hold for the dataset layer; and
+**measures** (see **Measures**) add named aggregations with a tiny arithmetic
+formula language — including per-measure row-level calculated expressions and
+derived ratios. None relaxes the rest: no auth beyond the portal's simple login,
+no multi-user, no caching, no SQL/joins, and measures stay an expression
+language — no `case`/string ops, no row-level output columns on charts.
 
 ---
 
@@ -248,10 +251,14 @@ The Python API (`ff.chart.table(...)`, `ff.chart.pie(...)`) stays for ad-hoc ren
 
 ## File shape
 
-A dashboard YAML has three top-level sections:
+A dashboard YAML has three top-level sections, plus an optional `measures` block:
 
 ```yaml
 name: <string>
+
+measures:              # optional; keyed by dataset name (see Measures)
+  <dataset>:
+    <key>: <measure config>
 
 charts:
   <id>: <chart config>
@@ -264,6 +271,8 @@ dashboard:
 * `name` — required. A short human-readable title for the whole dashboard,
   part of the definition. `Dashboard.from_yaml` rejects a missing or empty
   `name`; **Portal mode** lists dashboards by it.
+* `measures` — optional. Named aggregations a chart references by key (see
+  **Measures**).
 * `charts` — mapping of chart id → chart config.
 * `dashboard` — the page layout (the layout DSL, below). Either a flat list of
   layout items, or a mapping of tab name → layout list (see **Tabs**).
@@ -290,9 +299,78 @@ dev/tests, S3-compatible **Garage** for portal runtime. Managed in the portal's
 guarded-delete). See **Portal mode** and `fireflyer/datasets.py` /
 `fireflyer/storage.py`.
 
+## Measures
+
+A chart does not define its own aggregation. Instead the dashboard declares
+**measures** — named aggregations over a dataset — and a chart references one by
+key. The `measures:` block is **keyed by dataset name**; measure keys are unique
+within a dataset. A chart's `measure:` resolves within its own `dataset:`, and a
+measure may only reference other measures in the same dataset (no cross-dataset
+math). A chart with no `measure` defaults to a plain row count.
+
+```yaml
+measures:
+  orders:                                      # dataset name
+    order_count: {agg: count}                  # count needs no formula
+    revenue:
+      name: Revenue                            # display label (falls back to the key)
+      agg: sum
+      formula: amount                          # row-level expr; a bare column is trivial
+      format: 0.00$
+      filters:                                 # same shape as chart filters
+        - {column: status, op: in, values: [paid]}
+    line_total: {agg: sum, formula: price * qty}   # pre-aggregate ("calculated column")
+    avg_order_value:
+      name: Avg order value
+      formula: revenue / order_count           # no agg ⇒ combine measures
+      format: 0.00$
+```
+
+A measure is one of two kinds, told apart by whether `agg` is present:
+
+* **Aggregate** — `agg` (one of `count`, `sum`, `dcount`, `min`, `max`, `avg`)
+  over a row-level `formula` (an expression over **columns**; a bare column name
+  is the trivial case, `price * qty` the pre-aggregate case). `count` needs no
+  formula. Optional `filters` (the chart filter model) pre-narrow the rows the
+  measure sees — this is how conditional aggregation (e.g. count of won deals) is
+  expressed.
+* **Derived** — a `formula` over **other measure keys** (no `agg`). Computed per
+  group after the aggregates, so `revenue / order_count` is a true per-group
+  ratio. Its leaves must be aggregate measures (no derived-of-derived), and it
+  takes no `filters` of its own.
+
+Both formula kinds allow `+ - * /`, parentheses and numeric literals only — the
+grammar is identical; only the leaf meaning differs (column vs measure).
+
+Shared metadata (both kinds): `name` (display label), `description`, and
+`format` — a `<prefix><number-pattern>[a]<suffix>` token where the number-pattern
+is the contiguous `0 , .` run (decimals from digits after `.`, thousands if `,`
+is in the integer part) and text around it is literal. An optional `a` right
+after the pattern **abbreviates** large numbers with a lowercase `k`/`m`/`b`/`t`
+unit (`0a $` → `23k $`, `0.0a` → `1.4k`; under 1000 stays plain). There is **no
+auto-scaling** of percentages: `%` is a plain suffix, so a `0.25` ratio shown as
+`25%` multiplies in the formula (`* 100`) with format `0.0%`.
+
+Empty groups and undefined results (e.g. divide-by-zero) are **dropped**, not
+shown as `0`. A measure's `filters` intersect with the chart's own `filters` and
+any active crossfilter.
+
+Charts consume a measure by key: number (the scalar KPI, inheriting the measure's
+format — but keeping its own `title`), pie (slice size; the centre total is the
+measure re-aggregated over the whole dataset), bar (segment size per `x,y`), map
+(per-hex weight; `count`/`sum` only). One measure per chart today; a future
+aggregated table may take a list. Standalone (no dashboard), a chart's `measure`
+may instead be an inline definition dict (`None` = count). See
+`fireflyer/measures.py`.
+
+This is an **owner-approved extension** to the count-only MVP aggregation — it
+unlocks ratios and conditional aggregates, but stays a tiny expression language,
+not SQL: no joins, no row-level output columns on charts, no `case`/string ops.
+
 ## Charts section
 
-A chart references a dataset by id and carries chart-specific parameters:
+A chart references a dataset by id, names a measure (where it aggregates), and
+carries chart-specific parameters:
 
 ```yaml
 charts:
@@ -306,12 +384,14 @@ charts:
   status_pie:
     type: pie
     dataset: orders
-    title: "Orders by Status"
+    title: "Revenue by Status"
     column: status
+    measure: revenue
 ```
 
 * `type` selects the chart implementation (e.g. `table`, `pie`).
 * `dataset` is a dataset **name** (resolved to its stored Parquet at render time; see **Datasets**).
+* `measure` (on aggregating charts) is a key into the `measures:` block for this chart's dataset; omit it for a row count. See **Measures**.
 * Remaining keys map directly to that chart's Python constructor arguments. A chart's YAML schema is its constructor — no extra translation layer.
 
 ## Chart params & editor modal

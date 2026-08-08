@@ -177,7 +177,7 @@ charts:
   by_day: {{type: bar, dataset: {orders_parquet}, title: ByDay, x: day, y: status}}
   status: {{type: pie, dataset: {orders_parquet}, title: Status, column: status}}
   new: {{type: table, dataset: {orders_parquet}, title: New}}
-  kpi: {{type: number, dataset: {orders_parquet}, title: KPI, column: amount, agg: sum}}
+  kpi: {{type: number, dataset: {orders_parquet}, title: KPI}}
 dashboard:
 {dashboard_block}
 """

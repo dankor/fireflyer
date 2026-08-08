@@ -26,6 +26,7 @@ class ParamContext:
     datasets: dict[str, str] = field(default_factory=dict)  # dataset id -> path
     dataset_id: str | None = None                           # this chart's dataset
     columns: list[str] = field(default_factory=list)        # its dataset's columns
+    measures: list[str] = field(default_factory=list)       # measure keys for its dataset
 
 
 class Param:
@@ -117,6 +118,25 @@ class ColumnParam(Param):
 
     def render(self, value, ctx: ParamContext) -> str:
         choices = list(ctx.columns)
+        if value not in choices and value not in (None, ""):
+            choices = [str(value), *choices]
+        return self._wrap(
+            f'<select class="ff-input" name="{escape(self.name, quote=True)}">'
+            f'{_options(choices, value)}</select>'
+        )
+
+    def parse(self, form):
+        return (form.get(self.name) or "").strip()
+
+
+class MeasureParam(Param):
+    """Dropdown of the chart dataset's measure keys (defined in the dashboard's
+    `measures:` block, managed in the measures modal). Keeps the current value
+    even when the measure list can't be read, so nothing is silently dropped."""
+    kind = "measure"
+
+    def render(self, value, ctx: ParamContext) -> str:
+        choices = list(ctx.measures)
         if value not in choices and value not in (None, ""):
             choices = [str(value), *choices]
         return self._wrap(

@@ -123,7 +123,8 @@ chart — don't invent colors:
    "Chart types and their keys" describing its params. Keep this DSL spec in sync with
    `architecture.md` and the chart `spec.md`.
 4. `fireflyer/web/app.py` — add at least one example (ideally showing each variation,
-   e.g. different `agg` values) to `DEFAULT_YAML` under `charts:` and place it in the
+   e.g. different `measure` references) to `DEFAULT_YAML` under `charts:`, define any
+   measures it needs under the top-level `measures:` block, and place it in the
    `dashboard:` layout. Row widths are proportions, not percentages.
 5. Declare **`PARAMS`** on the chart class — a `list[Param]`, one per constructor field
    in display order — so the editor's edit modal can build a form for it. Reuse the
