@@ -137,12 +137,49 @@
   color: var(--ff-ink);
   background: var(--ff-canvas);
   position: relative;   /* positioning context for the move-mode drop-zone overlay */
+  /* A section header's left offset. Just enough that it doesn't sit flush
+     against the edge — deliberately *not* the card's text inset (21px), which
+     pushed the title visibly out of line with the cards it heads. */
+  --ff-header-indent: 4px;
+}
+/* A chart that failed to render. Styled here, not in a chart.css, because no
+   chart stylesheet is injected when the chart never got that far. */
+.fireflyer-chart-error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 16px 20px;
+  overflow: auto;
+  background: var(--ff-panel);
+  border: 1px solid var(--ff-danger);
+  border-radius: 4px;
+  color: var(--ff-ink);
+}
+.fireflyer-chart-error-head {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ff-danger);
+  letter-spacing: -0.01em;
+}
+.fireflyer-chart-error-msg {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ff-muted);
+  /* The message is a machine one — column names, quotes, brackets. */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
 }
 .fireflyer-dashboard-header {
   font-size: 18px;
   font-weight: 600;
   color: var(--ff-ink);
-  margin: 16px 0 8px 0;
+  /* Nudged off the edge rather than aligned to anything: level with the card
+     borders it looked flush, and at the card's text inset it looked detached
+     from the cards it heads. */
+  margin: 16px 0 8px var(--ff-header-indent);
   letter-spacing: -0.01em;
 }
 .fireflyer-dashboard-header:first-child { margin-top: 0; }
@@ -160,7 +197,7 @@
   border-top: 1px solid var(--ff-border);
   margin: 18px 0;
 }
-/* Tab bar — shown only when `dashboard:` is a mapping of tabs. Sticky so it
+/* Tab bar — shown only when `layout:` is a mapping of tabs. Sticky so it
    stays visible while the panel scrolls. Only the active tab's charts render
    (htmx lazy-loads the rest on switch), so switching re-fetches the dashboard. */
 .fireflyer-tabs {
@@ -334,6 +371,16 @@
      height — the chart itself decides what scrolls inside (e.g. table body). */
   overflow: hidden;
 }
+/* Exception: number KPI and pie have no inner scroll wrapper, and their hover
+   tooltips must escape the card (a short cell clips them otherwise). Visible
+   overflow is safe here — their content is fixed-size (a centered figure / a
+   sized donut + legend) and never spills the cell. */
+.fireflyer-dashboard-cell > .fireflyer-chart.fireflyer-number,
+.fireflyer-dashboard-cell > .fireflyer-chart-root > .fireflyer-chart.fireflyer-number,
+.fireflyer-dashboard-cell > .fireflyer-chart.fireflyer-pie,
+.fireflyer-dashboard-cell > .fireflyer-chart-root > .fireflyer-chart.fireflyer-pie {
+  overflow: visible;
+}
 
 /* Skeleton placeholder shown while each cell fetches itself via htmx. The
    spinner is CSS-only; htmx swaps the placeholder for the real cell when
@@ -479,8 +526,17 @@ body.fireflyer-resizing-col * {
   border-radius: 4px;
   transform: translate(-50%, -4px);
 }
+/* `pointer-events: auto` matters as much as the opacity: the badge reuses
+   `.fireflyer-chart-tools`, which parks itself `pointer-events: none` while
+   hidden (opacity:0 alone does not stop clicks). The cell's reveal rule restores
+   it; this one didn't, so a header's move/edit/delete badge appeared on hover
+   and then ignored every click. */
 .fireflyer-dashboard-item:hover .fireflyer-item-tools,
-.fireflyer-item-tools:focus-within { opacity: 1; transform: translate(-50%, 0); }
+.fireflyer-item-tools:focus-within {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
 .fireflyer-item-tools .fireflyer-move-btn,
 .fireflyer-item-tools .fireflyer-edit-btn,
 .fireflyer-item-tools .fireflyer-delete-btn { flex: 0 0 30px; }
@@ -633,6 +689,14 @@ body.fireflyer-resizing-col * {
 .fireflyer-filter-indicator:focus-visible {
   box-shadow: 0 0 0 2px rgba(32,167,201,0.35);
 }
+/* Lift the whole badge while its tooltip is open. The tooltip lives inside the
+   badge's stacking context, so its own z-index can only order it against its
+   siblings — against *another cell's* badge at the same z-index, later-in-DOM
+   won and drew over the tooltip. Raising the badge takes the tooltip with it. */
+.fireflyer-filter-indicator:hover,
+.fireflyer-filter-indicator:focus-within {
+  z-index: 20;
+}
 .fireflyer-filter-indicator .fireflyer-filter-tooltip {
   position: absolute;
   top: calc(100% + 6px);
@@ -646,7 +710,8 @@ body.fireflyer-resizing-col * {
   width: max-content;
   max-width: 260px;
   padding: 8px 10px;
-  background: var(--ff-tooltip-bg);
+  background: color-mix(in srgb, var(--ff-tooltip-bg) 85%, transparent);
+  backdrop-filter: blur(3px);
   color: var(--ff-tooltip-ink);
   font-size: 12px;
   font-weight: 400;
@@ -675,7 +740,10 @@ body.fireflyer-resizing-col * {
   display: flex;
   gap: 6px;
   padding: 2px 0;
-  white-space: nowrap;
+  /* `wrap`, not `nowrap`: a `between` row carries two full timestamps, which a
+     single nowrap line truncated to `2026-03-01 00:00:...` — unreadable, and
+     the half that got cut was the half that says what the range ends at. */
+  flex-wrap: wrap;
   line-height: 1.4;
 }
 .fireflyer-filter-row .col { font-weight: 600; color: var(--ff-green); }

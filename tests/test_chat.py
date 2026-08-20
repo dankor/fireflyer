@@ -61,7 +61,7 @@ charts:
     type: table
     dataset: orders
     title: Orders
-dashboard:
+layout:
   - ["@40", "t:100"]
 """
 
@@ -70,7 +70,7 @@ def test_applies_valid_tool_yaml(fake_client, orders_csv):
     yaml = _valid_yaml(orders_csv)
     client = fake_client([[_text("Added a table."), _tool(yaml, "Added a table.")]])
 
-    result = chat_mod.run_chat("add a table", "datasets: {}\ncharts: {}\ndashboard: []")
+    result = chat_mod.run_chat("add a table", "datasets: {}\ncharts: {}\nlayout: []")
 
     assert result["yaml"] == yaml
     assert "Added a table." in result["reply"]
@@ -79,7 +79,7 @@ def test_applies_valid_tool_yaml(fake_client, orders_csv):
 
 def test_dataset_schemas_are_sent_to_the_model(fake_client):
     """The available datasets' column schemas (no data) ride in the user turn so
-    the assistant builds charts/measures from real columns."""
+    the assistant builds charts/calcs from real columns."""
     client = fake_client([[_text("Sure.")]])
     schemas = [
         {"name": "orders", "columns": [

@@ -1,6 +1,11 @@
 <style>{{ css|safe }}</style>
 <div id="fireflyer-dashboard" class="fireflyer-dashboard"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <input type="hidden" name="yaml_text" value="{{ yaml_source }}">
+  <span id="ff-grain-state">
+    {%- for tok in grain_tokens %}
+    <input type="hidden" name="grain" value="{{ tok }}">
+    {%- endfor %}
+  </span>
   {%- for tok in cf_tokens %}
   <input type="hidden" name="cf" value="{{ tok }}">
   {%- endfor %}
@@ -21,23 +26,30 @@
   <div class="fireflyer-dashboard-row" style="grid-template-columns: {{ item.columns_css }}; grid-template-rows: {{ item.rows_css }};">
     {%- for cell in item.cells %}
     {%- set state = 'is-emitter' if cell.emitted else ('has-filters' if cell.filters else '') %}
-    {%- set shown = cell.emitted if cell.emitted else cell.filters %}
+    {#- The badge counts every filter in play for this chart: the ones narrowing
+        it plus the ones it emits. A chart is exempt from its own crossfilter, so
+        an emitter's applied list is short by exactly what it emits — counting
+        one or the other made the red badges read lower than their blue
+        neighbours for the same dashboard state. The lists are disjoint. -#}
+    {%- set total = cell.filters|length + cell.emitted|length %}
     <div class="fireflyer-dashboard-cell" style="grid-column: {{ cell.grid_column }}; grid-row: {{ cell.grid_row }};">
-      <div class="fireflyer-filter-indicator{% if state %} {{ state }}{% endif %}" tabindex="0" aria-label="{{ shown|length }} active filter{% if shown|length != 1 %}s{% endif %}{% if state == 'is-emitter' %} emitted by this chart{% endif %}">
+      <div class="fireflyer-filter-indicator{% if state %} {{ state }}{% endif %}" tabindex="0" aria-label="{{ total }} active filter{% if total != 1 %}s{% endif %}{% if cell.emitted %}, {{ cell.emitted|length }} emitted by this chart{% endif %}">
         <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M1 3h14l-5 6.5V14l-4-1.5V9.5L1 3z" fill="currentColor"/></svg>
-        <span class="count">{{ shown|length }}</span>
+        <span class="count">{{ total }}</span>
         <div class="fireflyer-filter-tooltip" role="tooltip">
           {%- if cell.emitted %}
           <div class="fireflyer-filter-tooltip-title">Filtering others by</div>
           {%- for f in cell.emitted %}
-          <div class="fireflyer-filter-row"><span class="col">{{ f.column }}</span> <span class="op">{{ 'in' if f.op == 'in' else 'not in' }}</span> <span class="vals">{{ f.values|join(', ') }}</span></div>
+          <div class="fireflyer-filter-row"><span class="col">{{ cell.col_labels.get(f.column, f.column) }}</span> <span class="op">{{ {'in': 'in', 'ni': 'not in', 'between': 'between'}[f.op] }}</span> <span class="vals">{{ f.values_text }}</span></div>
           {%- endfor %}
-          {%- elif cell.filters %}
+          {%- endif %}
+          {%- if cell.filters %}
           <div class="fireflyer-filter-tooltip-title">Active filters</div>
           {%- for f in cell.filters %}
-          <div class="fireflyer-filter-row"><span class="col">{{ f.column }}</span> <span class="op">{{ 'in' if f.op == 'in' else 'not in' }}</span> <span class="vals">{{ f.values|join(', ') }}</span></div>
+          <div class="fireflyer-filter-row"><span class="col">{{ cell.col_labels.get(f.column, f.column) }}</span> <span class="op">{{ {'in': 'in', 'ni': 'not in', 'between': 'between'}[f.op] }}</span> <span class="vals">{{ f.values_text }}</span></div>
           {%- endfor %}
-          {%- else %}
+          {%- endif %}
+          {%- if not cell.emitted and not cell.filters %}
           <div class="fireflyer-filter-tooltip-empty">No active filters</div>
           {%- endif %}
         </div>

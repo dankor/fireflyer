@@ -6,6 +6,9 @@
 path/URI directly (standalone use and tests). Scanning is lazy so Polars can
 push projection + predicates down and read only the columns/row-groups a chart
 needs — never the whole file.
+
+`calcs` (the dataset's `CalcSet`, set on the chart by the dashboard) adds its
+**column calcs** to the frame here, so a chart sees them as ordinary columns.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from __future__ import annotations
 import polars as pl
 
 
-def scan(dataset: str, resolve=None) -> pl.LazyFrame:
+def scan(dataset: str, resolve=None, calcs=None) -> pl.LazyFrame:
     uri, storage_options = resolve(dataset) if resolve else (dataset, None)
-    return pl.scan_parquet(uri, storage_options=storage_options)
+    lf = pl.scan_parquet(uri, storage_options=storage_options)
+    return calcs.attach(lf) if calcs is not None else lf

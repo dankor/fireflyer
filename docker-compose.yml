@@ -32,6 +32,12 @@ services:
       #   - /Users/me/personal:/paths/personal
       - ${FIREFLYER_PATHS_HOST:-./paths}:/paths
       # Per-path dataset blobs (isolated), kept out of your dashboard folders.
+      # The bundled `orders` sample is seeded here only when it is MISSING, so
+      # your own uploads are never clobbered — which also means a changed
+      # files/orders.csv is not picked up on its own. To take a new one:
+      #   docker compose exec fireflyer rm -f /data/datasets/demo/orders.parquet \
+      #                                       /data/datasets/demo/orders.yaml
+      #   docker compose restart fireflyer
       - fireflyer-data:/data
     command: >
       uvicorn fireflyer.web.app:app

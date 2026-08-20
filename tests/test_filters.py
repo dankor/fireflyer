@@ -119,3 +119,89 @@ def test_toggle_token_adds_then_removes():
     assert tokens == ["pie|status=paid", "pie|status=pending"]
     tokens = filters_mod.toggle_token(tokens, "pie|status=paid")
     assert tokens == ["pie|status=pending"]
+
+
+# --- between ------------------------------------------------------------------
+
+
+def test_between_is_half_open():
+    """`lo <= v < hi`, so adjacent buckets tile without double-counting a row."""
+    import datetime
+
+    import polars as pl
+
+    df = pl.DataFrame({"d": [
+        datetime.date(2026, 5, 31), datetime.date(2026, 6, 1),
+        datetime.date(2026, 6, 30), datetime.date(2026, 7, 1),
+    ]})
+    june = filters_mod.normalize(
+        [{"column": "d", "op": "between", "values": ["2026-06-01", "2026-07-01"]}]
+    )
+    kept = df.filter(*filters_mod.predicates(june, df.columns))["d"].to_list()
+    assert kept == [datetime.date(2026, 6, 1), datetime.date(2026, 6, 30)]
+
+
+def test_between_compares_numbers_numerically():
+    """Numeric bounds opt out of the stringify-both-sides rule the other ops
+    use — lexicographically "10" < "9", which would silently mis-filter."""
+    import polars as pl
+
+    df = pl.DataFrame({"n": [8, 9, 10, 11]})
+    f = filters_mod.normalize([{"column": "n", "op": "between", "values": [9, 11]}])
+    assert df.filter(*filters_mod.predicates(f, df.columns))["n"].to_list() == [9, 10]
+
+
+def test_between_requires_exactly_two_values():
+    with pytest.raises(filters_mod.FilterError, match="exactly two values"):
+        filters_mod.normalize([{"column": "d", "op": "between", "values": ["a"]}])
+
+
+def test_compound_token_is_one_selection():
+    """A bar segment's token carries both dimensions and toggles as a unit."""
+    token = (
+        "b|"
+        + filters_mod.range_part("day", "2026-06-01", "2026-07-01")
+        + "|"
+        + filters_mod.value_part("status", "paid")
+    )
+    by_col = {f.column: f for f in filters_mod.decode_tokens([token])}
+    assert by_col["day"].op == "between"
+    assert by_col["status"].values == ("paid",)
+    assert filters_mod.toggle_token([token], token) == []      # clears both halves
+    # The emitter is still exempt from its own selection.
+    assert filters_mod.decode_tokens([token], exclude_emitter="b") == []
+
+
+def test_value_containing_a_range_separator_still_parses():
+    """`=` is tested before `~`, so a value with a tilde isn't mistaken for a
+    range."""
+    assert filters_mod.decode_tokens(["p|status=a~b"])[0].values == ("a~b",)
+
+
+@pytest.mark.parametrize(
+    "low, high, expected",
+    [
+        # Midnight on a bucket edge says nothing the date doesn't.
+        ("2026-02-01 00:00:00+00:00", "2026-03-01 00:00:00+00:00",
+         "2026-02-01–2026-03-01"),
+        ("2026-02-01 00:00:00", "2026-03-01 00:00:00", "2026-02-01–2026-03-01"),
+        ("2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z", "2026-02-01–2026-03-01"),
+        ("2026-02-01", "2026-03-01", "2026-02-01–2026-03-01"),
+        # A real time is information — keep it.
+        ("2026-02-01 10:30:00+00:00", "2026-03-01 10:30:00+00:00",
+         "2026-02-01 10:30:00+00:00–2026-03-01 10:30:00+00:00"),
+        # A non-UTC midnight is a different instant from the bare date, so
+        # trimming it would change what the filter says.
+        ("2026-02-01 00:00:00+03:00", "2026-03-01 00:00:00+03:00",
+         "2026-02-01 00:00:00+03:00–2026-03-01 00:00:00+03:00"),
+    ],
+)
+def test_between_values_text_trims_midnight(low, high, expected):
+    assert filters_mod.Filter("d", "between", (low, high)).values_text == expected
+
+
+def test_values_text_leaves_other_ops_alone():
+    assert filters_mod.Filter("s", "in", ("a", "b")).values_text == "a, b"
+    # Trimming is display only — the stored values still round-trip exactly.
+    f = filters_mod.Filter("d", "between", ("2026-02-01 00:00:00+00:00", "x"))
+    assert f.values == ("2026-02-01 00:00:00+00:00", "x")

@@ -40,6 +40,11 @@
   {%- if editing %}
   <input type="hidden" name="editing" value="1">
   {%- endif %}
+  <span id="ff-grain-state">
+    {%- for tok in grain_tokens %}
+    <input type="hidden" name="grain" value="{{ tok }}">
+    {%- endfor %}
+  </span>
   {%- for tok in cf_tokens %}
   <input type="hidden" name="cf" value="{{ tok }}">
   {%- endfor %}

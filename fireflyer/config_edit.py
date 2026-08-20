@@ -18,6 +18,7 @@ from html import escape
 
 import yaml
 
+from fireflyer import calcs as calcs_mod
 from fireflyer.dashboard import CHART_TYPES, DashboardError
 from fireflyer.params import ParamContext
 from fireflyer.scan import scan
@@ -63,22 +64,32 @@ def _chart_config(config: dict, cid: str) -> dict:
 
 def _context(config: dict, cfg: dict, resolve=None) -> ParamContext:
     # `dataset` is a name (resolved via `resolve`) or a Parquet path directly.
+    # Column calcs are dimensions, so they join the column dropdowns; the rest
+    # are values, so they're what the calc dropdown offers.
     dataset = cfg.get("dataset")
+    column_keys, value_keys = _calc_keys(config, dataset)
     return ParamContext(
         datasets={},
         dataset_id=dataset,
-        columns=_columns(dataset, resolve),
-        measures=_measure_keys(config, dataset),
+        columns=_columns(dataset, resolve) + column_keys,
+        calcs=value_keys,
     )
 
 
-def _measure_keys(config: dict, dataset) -> list[str]:
-    """Measure keys defined for `dataset` in the top-level `measures:` block —
-    the options the chart's measure dropdown lists."""
-    measures = config.get("measures")
-    if isinstance(measures, dict) and isinstance(measures.get(dataset), dict):
-        return list(measures[dataset].keys())
-    return []
+def _calc_keys(config: dict, dataset) -> tuple[list[str], list[str]]:
+    """`(column_keys, value_keys)` for `dataset` — column calcs are dimensions,
+    so they join the column dropdowns; the rest are what the calc dropdown
+    offers. Empty pair when the block is missing or doesn't parse (the form
+    still renders; the current value is kept by the widget)."""
+    calcs = config.get("calcs")
+    if not isinstance(calcs, dict) or not isinstance(calcs.get(dataset), dict):
+        return [], []
+    try:
+        cset = calcs_mod.CalcSet.from_defs(calcs[dataset])
+    except calcs_mod.CalcError:
+        return [], list(calcs[dataset])
+    columns = cset.column_keys()
+    return columns, [key for key in cset.calcs if key not in columns]
 
 
 def _type_select(current: str) -> str:
@@ -347,7 +358,7 @@ _ROW_LINE = re.compile(r"^\s*-\s*\[")
 
 
 def _row_line_indices(lines: list[str], dash_i: int) -> list[int]:
-    """Line indices of flow-style row items under `dashboard:`, in ordinal order."""
+    """Line indices of flow-style row items under `layout:`, in ordinal order."""
     out = []
     for i in range(dash_i + 1, len(lines)):
         ln = lines[i]
@@ -362,7 +373,7 @@ def _row_line_indices(lines: list[str], dash_i: int) -> list[int]:
 
 def _item_line_indices(lines: list[str], dash_i: int) -> list[int]:
     """Line indices of ALL layout items (rows, headers, separators) under
-    `dashboard:`, in document order. `before` positions index into this list, so
+    `layout:`, in document order. `before` positions index into this list, so
     a chart can be dropped into a new row in any gap — including around a header
     or separator, not just between rows."""
     out = []
@@ -393,7 +404,7 @@ def _insert_layout_row(text: str, cid: str, before) -> str:
     """Insert a new single-chart row. `before` is a layout-item index to insert
     above, or "end" to append after the last item."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     rows = _row_line_indices(lines, di)
     indent = "  "
     if rows:
@@ -415,7 +426,7 @@ def _yaml_inline_str(s: str) -> str:
 
 
 def _header_line_indices(lines: list[str], dash_i: int) -> list[int]:
-    """Line indices of header items (plain-string list items) under `dashboard:`,
+    """Line indices of header items (plain-string list items) under `layout:`,
     in document order — i.e. not rows (`- [`) and not separators (`- "-"`)."""
     out = []
     for i in range(dash_i + 1, len(lines)):
@@ -440,7 +451,7 @@ def set_header_text(text: str, index: int, new_text: str) -> str:
     if not new_text:
         raise ConfigEditError("header text cannot be empty")
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     headers = _header_line_indices(lines, di)
     if not (0 <= index < len(headers)):
         raise ConfigEditError(f"header {index} not found")
@@ -460,7 +471,7 @@ def insert_layout_item(text: str, kind: str, before) -> str:
     string item, defaulting to "New header") or 'separator' (the `"-"` item).
     `before` is a layout-item index to insert above, or "end" to append."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     rows = _row_line_indices(lines, di)
     indent = "  "
     if rows:
@@ -498,7 +509,7 @@ def move_layout_item(text: str, index: int, before) -> str:
     `before` (or "end"). Only between-item gaps are valid targets — a header or
     separator never lives inside a row."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     src = _item_line(lines, di, index)
     insert_at = _insert_at(lines, di, before)
     line = lines.pop(src)
@@ -516,7 +527,7 @@ def move_layout_item(text: str, index: int, before) -> str:
 def delete_layout_item(text: str, index: int) -> str:
     """Remove the header/separator at layout-item `index`."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     del lines[_item_line(lines, di, index)]
     result = "\n".join(lines)
 
@@ -528,7 +539,7 @@ def delete_layout_item(text: str, index: int) -> str:
 
 # --- tabs ---------------------------------------------------------------------
 #
-# `dashboard:` is either a flat list of layout items or a **mapping** of tab
+# `layout:` is either a flat list of layout items or a **mapping** of tab
 # name -> layout list. A tab acts as a section delimiter: it owns every row from
 # its key line down to the next tab key. All the ops below are line-surgery on
 # that structure, re-validated through `Dashboard.from_yaml`. Because tab keys
@@ -538,7 +549,7 @@ def delete_layout_item(text: str, index: int) -> str:
 
 
 def _section_end(lines: list[str], dash_i: int) -> int:
-    """Index one past the last line of the `dashboard:` section (the next
+    """Index one past the last line of the `layout:` section (the next
     top-level key, or EOF)."""
     for i in range(dash_i + 1, len(lines)):
         ln = lines[i]
@@ -550,7 +561,7 @@ def _section_end(lines: list[str], dash_i: int) -> int:
 
 
 def _dashboard_indent(lines: list[str], dash_i: int) -> int:
-    """Indent of the shallowest content under `dashboard:` — the tab-key indent
+    """Indent of the shallowest content under `layout:` — the tab-key indent
     when tabbed, or the item indent when flat. Defaults to 2."""
     for i in range(dash_i + 1, _section_end(lines, dash_i)):
         ln = lines[i]
@@ -562,7 +573,7 @@ def _dashboard_indent(lines: list[str], dash_i: int) -> int:
 
 def _tab_key_line_indices(lines: list[str], dash_i: int) -> list[int]:
     """Line indices of tab keys (mapping keys at the base indent that aren't
-    list items) under `dashboard:`, in document order. Empty when the dashboard
+    list items) under `layout:`, in document order. Empty when the dashboard
     is flat — so it doubles as the tabbed/flat test."""
     base = _dashboard_indent(lines, dash_i)
     out = []
@@ -588,7 +599,7 @@ def add_first_tab(text: str, name: str = "New tab") -> str:
     `<name>:` key (rows indent one level deeper). The editor renames it in place
     afterwards."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     if _tab_key_line_indices(lines, di):
         raise ConfigEditError("dashboard already has tabs")
     end = _section_end(lines, di)
@@ -610,7 +621,7 @@ def insert_tab(text: str, before, name: str = "New tab") -> str:
     index). Splits the current tab there: rows below become the new tab, rows
     above stay in the previous one (indentation already nests them)."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     if not _tab_key_line_indices(lines, di):
         raise ConfigEditError("dashboard is not tabbed yet; add the first tab first")
     base = _dashboard_indent(lines, di)
@@ -630,7 +641,7 @@ def set_tab_text(text: str, index: int, new_name: str) -> str:
     if not new_name:
         raise ConfigEditError("tab name cannot be empty")
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     keys = _tab_key_line_indices(lines, di)
     if not (0 <= index < len(keys)):
         raise ConfigEditError(f"tab {index} not found")
@@ -651,7 +662,7 @@ def move_tab(text: str, index: int, before) -> str:
     so the move both reorders and repositions the tab boundary. An invalid result
     (orphaned rows, an emptied tab) is rejected by re-validation."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     keys = _tab_key_line_indices(lines, di)
     if not (0 <= index < len(keys)):
         raise ConfigEditError(f"tab {index} not found")
@@ -678,7 +689,7 @@ def delete_tab(text: str, index: int) -> str:
     (rows dedent one level); any other tab merges its rows into the previous tab
     (just drop its key line)."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     keys = _tab_key_line_indices(lines, di)
     if not (0 <= index < len(keys)):
         raise ConfigEditError(f"tab {index} not found")
@@ -717,7 +728,7 @@ def delete_tab(text: str, index: int) -> str:
 def _add_to_layout_row(text: str, cid: str, ordinal: int) -> str:
     """Append a cell to an existing row (weight 1, since widths are proportions)."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     rows = _row_line_indices(lines, di)
     if not (0 <= ordinal < len(rows)):
         raise ConfigEditError(f"row {ordinal} not found")
@@ -730,7 +741,7 @@ def _add_to_layout_row(text: str, cid: str, ordinal: int) -> str:
 def _remove_from_layout(text: str, cid: str) -> str:
     """Drop `cid`'s cell from every row it appears in; delete rows left empty."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     row_idx = set(_row_line_indices(lines, di))
     out = []
     for i, ln in enumerate(lines):
@@ -806,7 +817,7 @@ def _col_span(spec: str) -> tuple[int, int]:
 def _dashboard_rows(text: str):
     """(lines, metas) where each row meta is {i, height, tokens, indent}."""
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     metas = []
     for i in _row_line_indices(lines, di):
         toks = _row_tokens(lines[i])
@@ -853,7 +864,7 @@ def _drop_empty_tabs(text: str) -> str:
     dissolves it (its key line goes). No-op on a flat dashboard."""
     lines = text.split("\n")
     try:
-        di = _section_i(lines, "dashboard")
+        di = _section_i(lines, "layout")
     except ConfigEditError:
         return text
     keys = _tab_key_line_indices(lines, di)
@@ -937,7 +948,7 @@ def move_to_new_row(text: str, cid: str, before) -> str:
     if not cid:
         return text
     lines = text.split("\n")
-    di = _section_i(lines, "dashboard")
+    di = _section_i(lines, "layout")
     start = di + 1
     end = len(lines)
     for i in range(start, len(lines)):

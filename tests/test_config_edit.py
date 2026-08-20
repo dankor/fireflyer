@@ -21,7 +21,7 @@ class FakeForm:
 
 def _doc(orders_parquet: str) -> str:
     # Includes comments + two charts so we can prove non-target content survives.
-    # The number chart uses a default (count) measure — no measure key needed.
+    # The number chart uses a default (count) calc — no calc key needed.
     return f"""name: Test dashboard
 
 charts:
@@ -36,34 +36,56 @@ charts:
     title: By status
     column: status
 
-dashboard:
+layout:
   - ["@20", "revenue:1", "by_status:1"]
 """
 
 
 def test_build_form_lists_params(orders_parquet):
     html = ce.build_form(_doc(orders_parquet), "revenue")
-    assert 'name="measure"' in html      # measure widget
+    assert 'name="calc"' in html      # calc widget
     assert "ff-filter-add" in html       # filter builder
     assert 'data-cid="revenue"' in html
 
 
-def test_build_form_lists_dataset_measures(orders_parquet):
-    """The measure dropdown lists the keys defined for the chart's dataset in
-    the top-level `measures:` block."""
+def test_build_form_lists_dataset_calcs(orders_parquet):
+    """The calc dropdown lists the keys defined for the chart's dataset in
+    the top-level `calcs:` block."""
     doc = f"""name: Test dashboard
-measures:
+calcs:
   {orders_parquet}:
     revenue_m: {{agg: sum, formula: amount}}
     orders_m: {{agg: count}}
 charts:
-  kpi: {{type: number, dataset: {orders_parquet}, title: KPI, measure: revenue_m}}
-dashboard:
+  kpi: {{type: number, dataset: {orders_parquet}, title: KPI, calc: revenue_m}}
+layout:
   - ["@20", "kpi:1"]
 """
     html = ce.build_form(doc, "kpi")
     assert 'value="revenue_m" selected' in html
     assert 'value="orders_m"' in html
+
+
+def test_build_form_splits_column_calcs_into_the_column_dropdowns(orders_parquet):
+    """A column calc is a dimension, so it joins the dataset's real columns in
+    the `x`/`y` dropdowns and stays out of the calc dropdown."""
+    doc = f"""name: Test dashboard
+calcs:
+  {orders_parquet}:
+    revenue_m: {{agg: sum, formula: amount}}
+    order_day: {{formula: 'str2dt(day, YYYY-MM-DD)'}}
+charts:
+  b: {{type: bar, dataset: {orders_parquet}, title: B, x: order_day, y: status,
+      calc: revenue_m}}
+layout:
+  - ["@20", "b:1"]
+"""
+    html = ce.build_form(doc, "b")
+    x_field = html.split('data-param="x"')[1].split("</div>")[0]
+    calc_field = html.split('data-param="calc"')[1].split("</div>")[0]
+    assert 'value="order_day" selected' in x_field
+    assert "order_day" not in calc_field
+    assert 'value="revenue_m" selected' in calc_field
 
 
 def test_build_form_unknown_chart_raises(orders_parquet):
@@ -86,7 +108,7 @@ def test_build_form_type_override_switches_fields(orders_parquet):
     assert 'value="pie" selected' in html
     assert 'name="column"' in html             # pie-only grouping column
     assert 'name="total"' in html              # pie-only centre-total toggle
-    assert 'name="measure"' in html            # shared measure widget
+    assert 'name="calc"' in html            # shared calc widget
 
 
 def test_apply_edit_swaps_chart_type(orders_parquet):
@@ -94,7 +116,7 @@ def test_apply_edit_swaps_chart_type(orders_parquet):
     params and drops the old ones."""
     form = FakeForm(
         single={"type": "pie", "dataset": orders_parquet, "title": "Revenue",
-                "column": "status", "measure": "", "total": "true"},
+                "column": "status", "calc": "", "total": "true"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
     new_text = ce.apply_edit(_doc(orders_parquet), "revenue", form)
@@ -110,7 +132,7 @@ def test_apply_edit_swaps_chart_type(orders_parquet):
 def test_replace_chart_block_preserves_siblings_and_reparses(orders_parquet):
     text = _doc(orders_parquet)
     form = FakeForm(
-        single={"dataset": orders_parquet, "title": "Revenue", "measure": ""},
+        single={"dataset": orders_parquet, "title": "Revenue", "calc": ""},
         multi={"filter_column": ["status"], "filter_op": ["in"],
                "filter_values": ["paid, pending"]},
     )
@@ -141,7 +163,7 @@ charts:
     lat: lat
     lng: lng
     grid_size: 16
-dashboard:
+layout:
   - ["@20", "m:1"]
 """
     form = FakeForm(
@@ -224,7 +246,7 @@ def test_delete_chart_drops_now_empty_row(orders_parquet):
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
-dashboard:
+layout:
   - ["@20", "a:1"]
   - ["@20", "b:1"]
 """
@@ -267,7 +289,7 @@ def _headed_doc(orders_parquet: str) -> str:
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
-dashboard:
+layout:
   - Overview
   - ["@20", "a:1"]
   - Details
@@ -304,7 +326,7 @@ def test_set_header_text_validates(orders_parquet):
 # _headed_doc layout items, by full-list index:
 #   0 Overview (header)  1 [a] (row)  2 Details (header)  3 "-" (sep)  4 [b] (row)
 def _item_lines(text: str) -> list[str]:
-    di = text.splitlines().index("dashboard:")
+    di = text.splitlines().index("layout:")
     return [ln.strip() for ln in text.splitlines()[di + 1:] if ln.strip()]
 
 
@@ -360,7 +382,7 @@ charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
   c: {{type: number, dataset: {orders_parquet}, title: C}}
-dashboard:
+layout:
   - ["@20", "a:3", "b:2"]
   - ["@20", "c:1"]
 """
@@ -417,7 +439,7 @@ charts:
   by_day: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
   status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
   kpi: {{type: number, dataset: {orders_parquet}, title: K}}
-dashboard:
+layout:
   - ["@40", "orders:3", "status:2"]
   - ["@30", "by_day", "status"]
   - ["@20", "kpi:1"]
@@ -466,7 +488,7 @@ charts:
   orders: {{type: table, dataset: {orders_parquet}, title: O}}
   by_day: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
   status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
-dashboard:
+layout:
   - ["@40", "orders"]
   - ["@30", "by_day"]
   - ["@20", "status:3"]
@@ -488,7 +510,7 @@ charts:
   status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
   density: {{type: table, dataset: {orders_parquet}, title: De}}
   kpi: {{type: number, dataset: {orders_parquet}, title: K}}
-dashboard:
+layout:
   - ["@20", "orders", "status"]
   - ["@20", "by_day", "status"]
   - ["@20", "density"]
@@ -512,7 +534,7 @@ charts:
   orders: {{type: table, dataset: {orders_parquet}, title: O}}
   status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
   byday: {{type: bar, dataset: {orders_parquet}, title: D, x: day, y: status}}
-dashboard:
+layout:
   - ["@20", "orders", "status"]
   - ["@20", "byday"]
 """
@@ -526,7 +548,7 @@ def test_merge_down_no_row_below_errors(orders_parquet):
     doc = f"""name: Test dashboard
 charts:
   orders: {{type: table, dataset: {orders_parquet}, title: O}}
-dashboard:
+layout:
   - ["@20", "orders"]
 """
     with pytest.raises(ce.ConfigEditError, match="no row below"):
@@ -539,7 +561,7 @@ def test_move_span_no_row_below_is_single_insert(orders_parquet):
 charts:
   orders: {{type: table, dataset: {orders_parquet}, title: O}}
   status: {{type: pie, dataset: {orders_parquet}, title: S, column: status}}
-dashboard:
+layout:
   - ["@40", "status:1"]
   - ["@30", "orders"]
 """
@@ -568,7 +590,7 @@ charts:
   x: {{type: table, dataset: {orders_parquet}, title: X}}
   y: {{type: table, dataset: {orders_parquet}, title: Y}}
   pie: {{type: pie, dataset: {orders_parquet}, title: P, column: status}}
-dashboard:
+layout:
   - ["@20", "a", "pie"]
   - ["@20", "x", "y", "pie"]
 """
@@ -589,7 +611,7 @@ charts:
   b: {{type: table, dataset: {orders_parquet}, title: B}}
   c: {{type: table, dataset: {orders_parquet}, title: C}}
   d: {{type: table, dataset: {orders_parquet}, title: D}}
-dashboard:
+layout:
   Overview:
     - ["@22", "a", "b", "c"]
   More:
@@ -602,12 +624,12 @@ dashboard:
 
 
 def test_apply_edit_invalid_value_raises(orders_parquet):
-    """A dangling measure reference surfaces as a DashboardError (the whole doc
+    """A dangling calc reference surfaces as a DashboardError (the whole doc
     is validated after the surgical edit)."""
     text = _doc(orders_parquet)
     form = FakeForm(
-        single={"dataset": orders_parquet, "title": "Revenue", "measure": "missing"},
+        single={"dataset": orders_parquet, "title": "Revenue", "calc": "missing"},
         multi={"filter_column": [], "filter_op": [], "filter_values": []},
     )
-    with pytest.raises(ff.DashboardError, match="unknown measure"):
+    with pytest.raises(ff.DashboardError, match="unknown calc"):
         ce.apply_edit(text, "revenue", form)

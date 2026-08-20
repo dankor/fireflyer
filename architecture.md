@@ -78,7 +78,6 @@ Not supported:
 * SQL
 * Data warehouses
 * Joins
-* Calculated columns
 * Caching
 * Plugins
 * Streaming
@@ -89,11 +88,11 @@ Three **owner-approved exceptions** to this list: **Portal mode** (below) adds
 persistence + a multi-dashboard listing, scoped to `web/`; **datasets** are
 Parquet in object storage with efficient (pushdown) scans — so "only CSV" and
 "large-dataset optimization" no longer hold for the dataset layer; and
-**measures** (see **Measures**) add named aggregations with a tiny arithmetic
-formula language — including per-measure row-level calculated expressions and
-derived ratios. None relaxes the rest: no auth beyond the portal's simple login,
-no multi-user, no caching, no SQL/joins, and measures stay an expression
-language — no `case`/string ops, no row-level output columns on charts.
+**calcs** (see **Calcs**) add named aggregations with a tiny arithmetic
+formula language — including per-calc row-level expressions, derived ratios and
+calculated columns. None relaxes the rest: no auth beyond the portal's simple
+login, no multi-user, no caching, no SQL/joins, and calcs stay an expression
+language — no `case`/string ops, and `str2dt()` is the only function.
 
 ---
 
@@ -192,10 +191,12 @@ Every chart accepts an optional `filters` parameter. Filters narrow the chart's 
 A filter is a small declarative shape:
 
 * `column` — the dataset column to filter on.
-* `op` — one of `in`, `ni` (not-in).
-* `values` — a list of values to compare against.
+* `op` — one of `in`, `ni` (not-in), `between`.
+* `values` — a list of values to compare against; exactly two (low, high) for `between`.
 
-`filters` is a list of these; all must match (AND) for a row to pass. There is no `or`, no nesting, no range operators in the MVP.
+`filters` is a list of these; all must match (AND) for a row to pass. There is no `or` and no nesting.
+
+**`between` is half-open** — `low <= v < high` — so adjacent ranges tile without double-counting. It's an **owner-approved addition** to the original in/not-in-only model, added because a bucketed axis is a *range*: a bar labelled `2026-06` covers every date in June, which no list of exact values can express. Half-open is what lets `2026-06` and `2026-07` sit next to each other cleanly. Bounds are compared as numbers when both parse as numbers, as text otherwise — text is correct for the case it exists for, since ISO-8601 dates sort chronologically as strings, but `"10" < "9"` lexicographically, so numeric bounds have to opt out of the stringify-both-sides rule the other ops use.
 
 ## Declared filters
 
@@ -229,6 +230,10 @@ charts:
 
 In a dashboard, clicking a chart element (e.g. a pie slice) emits a filter — `{column, op: in, values: [<clicked value>]}` — that is applied to every other chart on the page. This is the only built-in dashboard interaction in the MVP.
 
+A **bar segment is an (x, y) cell**, so clicking one emits *both* dimensions in a single token, and the pair toggles as a unit: clicking it again clears both halves, never one. A bucketed x contributes a `between` range rather than an exact value. A bar's **legend row** means "this series", so it stays one-dimensional.
+
+A **table row is a combination of its dimension values**, so the same rule scales up: clicking one emits a part per dimension column in a single token, toggling as a unit. Which columns those are follows the table's mode — grouped, the `columns:` it groups by; raw, every column it shows, which makes a row click a drill to that one record. Measures are values, never filter terms. The token's values come from **Polars' string cast**, not Python's `str()`, because that is what `filters.predicates` compares against — the two disagree for temporal columns, where a hand-built token would match nothing at all.
+
 Rules:
 
 * Clicking a slice sets that chart's crossfilter on its column. Clicking the same slice again clears it.
@@ -251,19 +256,19 @@ The Python API (`ff.chart.table(...)`, `ff.chart.pie(...)`) stays for ad-hoc ren
 
 ## File shape
 
-A dashboard YAML has three top-level sections, plus an optional `measures` block:
+A dashboard YAML has three top-level sections, plus an optional `calcs` block:
 
 ```yaml
 name: <string>
 
-measures:              # optional; keyed by dataset name (see Measures)
+calcs:              # optional; keyed by dataset name (see Calcs)
   <dataset>:
-    <key>: <measure config>
+    <key>: <calc config>
 
 charts:
   <id>: <chart config>
 
-dashboard:
+layout:
   - <layout item>
   - <layout item>
 ```
@@ -271,10 +276,10 @@ dashboard:
 * `name` — required. A short human-readable title for the whole dashboard,
   part of the definition. `Dashboard.from_yaml` rejects a missing or empty
   `name`; **Portal mode** lists dashboards by it.
-* `measures` — optional. Named aggregations a chart references by key (see
-  **Measures**).
+* `calcs` — optional. Named aggregations a chart references by key (see
+  **Calcs**).
 * `charts` — mapping of chart id → chart config.
-* `dashboard` — the page layout (the layout DSL, below). Either a flat list of
+* `layout` — the page layout (the layout DSL, below). Either a flat list of
   layout items, or a mapping of tab name → layout list (see **Tabs**).
 
 Chart ids are local to the file. There is no cross-file inclusion in the MVP.
@@ -299,17 +304,17 @@ dev/tests, S3-compatible **Garage** for portal runtime. Managed in the portal's
 guarded-delete). See **Portal mode** and `fireflyer/datasets.py` /
 `fireflyer/storage.py`.
 
-## Measures
+## Calcs
 
 A chart does not define its own aggregation. Instead the dashboard declares
-**measures** — named aggregations over a dataset — and a chart references one by
-key. The `measures:` block is **keyed by dataset name**; measure keys are unique
-within a dataset. A chart's `measure:` resolves within its own `dataset:`, and a
-measure may only reference other measures in the same dataset (no cross-dataset
-math). A chart with no `measure` defaults to a plain row count.
+**calcs** — named aggregations over a dataset — and a chart references one by
+key. The `calcs:` block is **keyed by dataset name**; calc keys are unique
+within a dataset. A chart's `calc:` resolves within its own `dataset:`, and a
+calc may only reference other calcs in the same dataset (no cross-dataset
+math). A chart with no `calc` defaults to a plain row count.
 
 ```yaml
-measures:
+calcs:
   orders:                                      # dataset name
     order_count: {agg: count}                  # count needs no formula
     revenue:
@@ -319,57 +324,142 @@ measures:
       format: 0.00$
       filters:                                 # same shape as chart filters
         - {column: status, op: in, values: [paid]}
-    line_total: {agg: sum, formula: price * qty}   # pre-aggregate ("calculated column")
+    line_total: {agg: sum, formula: price * qty}   # pre-aggregate row expression
     avg_order_value:
       name: Avg order value
-      formula: revenue / order_count           # no agg ⇒ combine measures
+      formula: revenue / order_count           # no agg ⇒ combine calcs
       format: 0.00$
+    order_day:
+      formula: str2dt(day, YYYY-MM-DD)           # names a column ⇒ calculated column
 ```
 
-A measure is one of two kinds, told apart by whether `agg` is present:
+A calc is one of three kinds. **Nothing in the YAML names the kind**: `agg`
+means aggregate, and a bare `formula` is sorted into derived vs column by what
+it references (see `_classify` below):
 
 * **Aggregate** — `agg` (one of `count`, `sum`, `dcount`, `min`, `max`, `avg`)
   over a row-level `formula` (an expression over **columns**; a bare column name
   is the trivial case, `price * qty` the pre-aggregate case). `count` needs no
   formula. Optional `filters` (the chart filter model) pre-narrow the rows the
-  measure sees — this is how conditional aggregation (e.g. count of won deals) is
+  calc sees — this is how conditional aggregation (e.g. count of won deals) is
   expressed.
-* **Derived** — a `formula` over **other measure keys** (no `agg`). Computed per
+* **Derived** — a `formula` over **other calc keys** (no `agg`). Computed per
   group after the aggregates, so `revenue / order_count` is a true per-group
-  ratio. Its leaves must be aggregate measures (no derived-of-derived), and it
+  ratio. Its leaves must be aggregate calcs (no derived-of-derived), and it
   takes no `filters` of its own.
+* **Column** — a row-level `formula` over **dataset columns** (no `agg`, no
+  `filters`). Not a value but a **dimension**: `CalcSet.attach` materializes it
+  onto the scan (in `scan()`, before filters), so its key works anywhere a
+  column name does — a chart's `x`/`y`/`column`, a filter, another calc's
+  formula, a table's columns. Column calcs are attached in **declaration
+  order**, so a later one may build on an earlier one. Polars' projection
+  pushdown prunes the ones a given chart doesn't read. Pointing a chart's
+  `calc:` at a column calc is rejected at parse time — it's a dimension, not a
+  value.
 
-Both formula kinds allow `+ - * /`, parentheses and numeric literals only — the
-grammar is identical; only the leaf meaning differs (column vs measure).
+`_classify` sorts the no-`agg` calcs at `CalcSet` construction: a formula is
+**derived** only when every name it references is another calc that itself
+produces a value. A name that isn't a calc key must be a dataset column, a
+`str2dt()` call is row-level by definition, and a reference to a column calc keeps
+the formula row-level — any of those make it a **column**. One pass in
+declaration order suffices, because column calcs attach in that order, so a
+chain can only build on an earlier link. Two consequences worth knowing: a calc
+key **shadows** a dataset column of the same name inside a no-`agg` formula, and
+a **typo'd calc reference** is indistinguishable from a column name, so it
+surfaces when the data is read rather than when the YAML is parsed.
 
-Shared metadata (both kinds): `name` (display label), `description`, and
+The shadowing stops at a calc's **own** formula, where a self-reference can only
+mean the underlying dataset column — a calc cannot reference itself. That is what
+makes an **overlay** possible: a column calc keyed the same as a real column
+relabels it in place.
+
+```yaml
+status:
+  name: Order status
+  description: Where the order got to
+  formula: status          # the dataset column, not this calc
+```
+
+Nothing is renamed. `status` stays what `columns:`, a chart's `x`, a filter, a
+crossfilter token and every other formula refer to; only what a **viewer** reads
+changes. `CalcSet.column_label` / `describe_column` are that lookup, and take a
+plain column name unchanged so callers needn't check first. An overlay can
+transform as well as relabel (`amount: {formula: amount * 2}` reads the raw
+column and materializes over it).
+
+All three formula kinds allow `+ - * /`, parentheses and numeric literals — the
+grammar is identical; only the leaf meaning differs (column vs calc) — plus
+exactly one function:
+
+**`str2dt(<column>, <pattern>)`** parses a text (or integer) column into a real
+`Date`/`Datetime`, which is what lets a `YYYYMMDD` string column be an axis. The
+pattern is written the way people write dates — `YYYY`, `YY`, `MM` (month),
+`DD`, `HH`, `mm` (minute), `ss`, `Z` (UTC offset) — and every other character is
+a literal separator: `str2dt(order_date, YYYYMMDD)`,
+`str2dt(created_at, YYYY-MM-DD HH:mm:ss)`, `str2dt(d, DD/MM/YYYY)`,
+`str2dt(ts, YYYY-MM-DD HH:mm:ssZ)` for `2024-06-26 17:14:03+03:00` (and
+`YYYY-MM-DDTHH:mm:ssZ` for the ISO form — `T` is just a literal). A pattern with
+a time part — `Z` counts — yields a `Datetime`, otherwise a `Date`.
+
+Two tokens are deliberately forgiving, because the alternative is a pattern that
+silently nulls every row over a detail nobody knows their export has: **`ss`**
+accepts optional fractional seconds (`17:14:03` and `17:14:03.123456` both), and
+**`Z`** accepts `+03:00`, `+0300` and a bare `Z` alike. An offset result is
+**normalized to UTC**, so `17:14:03+03:00` buckets and labels as `14:14:03`. The
+pattern is **not quoted** — the parser slices it out of the raw source, because
+its `-`/`:`/`+`/spaces are not expression syntax. Values that don't match become
+**null** rather than failing the render.
+
+One YAML wrinkle: written **inline** (`{formula: str2dt(day, YYYYMMDD)}`) the
+comma splits the flow mapping, so the formula arrives truncated. Quote it
+(`{formula: 'str2dt(day, YYYYMMDD)'}`) or use block style. The parser's
+"missing ')'" error says so. A bar chart whose `x` is
+temporal is ordered chronologically instead of by size.
+
+Shared metadata (all kinds): `name` (display label), `description`, and
 `format` — a `<prefix><number-pattern>[a]<suffix>` token where the number-pattern
 is the contiguous `0 , .` run (decimals from digits after `.`, thousands if `,`
 is in the integer part) and text around it is literal. An optional `a` right
 after the pattern **abbreviates** large numbers with a lowercase `k`/`m`/`b`/`t`
-unit (`0a $` → `23k $`, `0.0a` → `1.4k`; under 1000 stays plain). There is **no
+unit (`0a $` → `23k $`; under 1000 stays plain). Abbreviated, the pattern's
+decimals are the **maximum** — the value is truncated to them and trailing zeros
+dropped, so `0.0a` shows 1971 as `1.9k` and 2000 as `2k`. There is **no
 auto-scaling** of percentages: `%` is a plain suffix, so a `0.25` ratio shown as
 `25%` multiplies in the formula (`* 100`) with format `0.0%`.
 
 Empty groups and undefined results (e.g. divide-by-zero) are **dropped**, not
-shown as `0`. A measure's `filters` intersect with the chart's own `filters` and
+shown as `0`. A calc's `filters` intersect with the chart's own `filters` and
 any active crossfilter.
 
-Charts consume a measure by key: number (the scalar KPI, inheriting the measure's
+Charts consume a calc by key: number (the scalar KPI, inheriting the calc's
 format — but keeping its own `title`), pie (slice size; the centre total is the
-measure re-aggregated over the whole dataset), bar (segment size per `x,y`), map
-(per-hex weight; `count`/`sum` only). One measure per chart today; a future
-aggregated table may take a list. Standalone (no dashboard), a chart's `measure`
-may instead be an inline definition dict (`None` = count). See
-`fireflyer/measures.py`.
+calc re-aggregated over the whole dataset), bar (segment size per `x,y`), map
+(per-hex weight; `count`/`sum` only). Those take **one** calc, under `calc:`.
+
+The **table takes a list**, under `measures:` — one aggregated column per key,
+grouped by its `columns:`. With no `measures` it stays row-by-row and `columns`
+merely selects which to show; with `measures` and no `columns` it reduces to a
+single grand-total row. Each measure goes through the same `CalcSet.aggregate`
+call the other charts use and the results are joined on the grouping columns, so
+per-calc `filters` and derived ratios behave identically. A measure column is
+headed by the calc's `name` and formatted with its `format` token. The key must
+name a **value**; a column calc is rejected at parse time, exactly as it is for
+`calc:`. The table's `sort:` is a list of keys, most significant first, each
+optionally prefixed `-` (descending) or `+`/bare (ascending), naming either a
+grouping column or a measure.
+
+Standalone (no dashboard), a chart's `calc` may instead be an inline definition
+dict (`None` = count) — but `measures:` cannot, since a key is only resolvable
+against a dashboard's `calcs:` block. See `fireflyer/calcs.py`.
 
 This is an **owner-approved extension** to the count-only MVP aggregation — it
-unlocks ratios and conditional aggregates, but stays a tiny expression language,
-not SQL: no joins, no row-level output columns on charts, no `case`/string ops.
+unlocks ratios, conditional aggregates and calculated columns, but stays a tiny
+expression language, not SQL: no joins, no `case`/string ops, and `str2dt()` is
+the only function.
 
 ## Charts section
 
-A chart references a dataset by id, names a measure (where it aggregates), and
+A chart references a dataset by id, names a calc (where it aggregates), and
 carries chart-specific parameters:
 
 ```yaml
@@ -381,17 +471,27 @@ charts:
     search: true
     pagination: 5
 
+  revenue_by_status:            # a grouped table
+    type: table
+    dataset: orders
+    title: "Revenue by status"
+    columns: [status]           # grouping keys, because `measures` is set
+    measures: [order_count, revenue]
+    sort: ['-revenue']          # `-` descending, `+`/bare ascending
+
   status_pie:
     type: pie
     dataset: orders
     title: "Revenue by Status"
     column: status
-    measure: revenue
+    calc: revenue
 ```
 
 * `type` selects the chart implementation (e.g. `table`, `pie`).
 * `dataset` is a dataset **name** (resolved to its stored Parquet at render time; see **Datasets**).
-* `measure` (on aggregating charts) is a key into the `measures:` block for this chart's dataset; omit it for a row count. See **Measures**.
+* `calc` (on aggregating charts) is a key into the `calcs:` block for this chart's dataset; omit it for a row count. See **Calcs**.
+* Wherever a chart names a **column** (`x`, `y`, `column`, a filter's `column`), a **column calc** key works too — those are materialized onto the scan and are indistinguishable from real dataset columns downstream. See **Calcs**.
+* A **temporal** `x` on a bar chart is bucketed to a time grain the chart picks itself (finest grain whose bucket count fits the readable bar cap) and ordered chronologically. There is no YAML setting for it; a viewer can override the pick with the chart's grain picker (a segmented control under the axis), and a long axis is **windowed** to a bounded number of bars with a scale to move the window. Both live in one `<cid>|<grain>|<offset>` token in the page's hidden inputs beside the crossfilter tokens — per viewer, never persisted — and both move by plain htmx post, so neither needs JavaScript. Unlike crossfilter, they affect only their own chart, so they re-render **that cell alone** via `/dashboard/cell` and write the page-level token back with an out-of-band swap. See `fireflyer/chart/bar/spec.md`.
 * Remaining keys map directly to that chart's Python constructor arguments. A chart's YAML schema is its constructor — no extra translation layer.
 
 ## Chart params & editor modal
@@ -488,7 +588,7 @@ same status as the rest of `web/`.
 
 ## Dashboard layout DSL
 
-The `dashboard:` section is a **flat YAML list**. Each item is one of:
+The `layout:` section is a **flat YAML list**. Each item is one of:
 
 * **Row** — a YAML array. First element is the row height (`"@<units>"`), remaining elements are widget placements (`"<chart_id>:<width>"`, where width is a relative proportion).
 * **Header** — a plain string. Rendered as a full-width section title; not part of the layout grid.
@@ -533,12 +633,12 @@ A chart spans multiple rows by being **sized in one row and repeated bare** (no 
 
 ### Tabs
 
-The `dashboard:` section may be either the **flat list** above or a **mapping of
+The `layout:` section may be either the **flat list** above or a **mapping of
 tab name → layout list**. The mapping form splits the page into tabs; each value
 is exactly the same layout-list DSL (rows, headers, separators, spans):
 
 ```yaml
-dashboard:
+layout:
   Overview:
     - ["@22", "total", "revenue"]
     - ["@40", "orders:3", "status:2"]
@@ -604,7 +704,7 @@ charts:
     title: "Orders by Status"
     column: status
 
-dashboard:
+layout:
   - Overview
   - ["@40", "orders_table:60", "status_pie:40"]
 
@@ -616,7 +716,7 @@ dashboard:
 
 ## Implementation guidance
 
-* Parse the YAML once, then validate in three passes: `datasets` → `charts` (resolving dataset refs) → `dashboard` (resolving chart refs, checking given widths are positive and every repeated id forms one contiguous bare-inherit span). A later pass should never need to look back.
+* Parse the YAML once, then validate in three passes: `datasets` → `charts` (resolving dataset refs) → `layout` (resolving chart refs, checking given widths are positive and every repeated id forms one contiguous bare-inherit span). A later pass should never need to look back.
 * Classify each layout item by shape: array → row, `"-"` → separator, other string → header. Reject anything else with the offending index in the error.
 * Build each chart by passing the YAML chart config straight into the chart's Python constructor. No registry; a small `type` → constructor lookup in the loader is enough.
 * Emit one CSS-grid (or equivalent) block per row; widths become column tracks, height becomes the row track.
@@ -657,6 +757,7 @@ Interactivity that needs to re-read data (search, pagination, change of facet) i
 * The chart embeds a plain `<form>`, `<input>`, or `<a>` with `hx-get` / `hx-target` / `hx-swap` attributes pointing at its endpoint.
 * The endpoint takes the chart's identifying parameters plus display state (e.g. `?q=foo&page=2`) as query params, constructs the chart, and returns an HTML fragment.
 * The fragment replaces the chart's outer container in place. No iframe, no full-page navigation.
+* **Inside a dashboard the control posts to `/dashboard/cell` instead**, which re-parses the YAML and re-renders that one cell. A standalone endpoint rebuilds a chart from URL params alone, and some of what a chart needs isn't in them — the `calcs:` block above all, so a table's `measures` (and its column calcs) simply vanish on the round trip. Re-rendering the cell also keeps the blast radius to one chart: the bar's grain and legend controls use the same route for that reason. The display state rides in `hx-vals` alongside the chart id (`table_page`, `table_q`, `set_grain`, `legend_page`) and is **ephemeral** — a full re-render resets it, which is the intended trade for not threading it through every request.
 
 This is reserved for display state intrinsic to the chart (which page, which filter). Anything that changes the chart's *definition* is still a code edit handled by the web editor's execute button.
 

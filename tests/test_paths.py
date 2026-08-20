@@ -9,7 +9,7 @@ from fireflyer.web.paths import PathDashboardStore, list_paths
 YAML = """name: Sales
 charts:
   a: {type: table, dataset: orders, title: A}
-dashboard:
+layout:
   - ["@20", "a"]
 """
 

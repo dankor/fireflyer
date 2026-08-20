@@ -42,7 +42,7 @@ class MyParam(Param):
   key** (e.g. an unset nullable `IntParam` like the map's `zoom`).
 
 Existing widgets to reuse before writing a new one: `TextParam`, `DatasetParam`,
-`ColumnParam`, `MeasureParam` (dropdown of the dataset's measure keys),
+`ColumnParam`, `CalcParam` (dropdown of the dataset's calc keys),
 `ChoiceParam(choices)`, `IntParam(minimum, maximum, step, nullable)`,
 `BoolParam`, `FilterListParam`. Add a new subclass **only** when none fit.
 
@@ -58,19 +58,19 @@ Param — the modal renders a chart-type dropdown itself, from `CHART_TYPES`, an
 `config_edit.py` handles swapping the type on save.)
 
 ```python
-from fireflyer.params import DatasetParam, TextParam, MeasureParam, FilterListParam
+from fireflyer.params import DatasetParam, TextParam, CalcParam, FilterListParam
 
 @dataclass
 class Number:
     dataset: str
     title: str
-    measure: object = None   # measure key (dashboard) or inline def dict (standalone)
+    calc: object = None   # calc key (dashboard) or inline def dict (standalone)
     filters: list = field(default_factory=list)
 
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
-        MeasureParam("measure", "Measure"),   # dropdown of the dataset's measure keys
+        CalcParam("calc", "Calc"),   # dropdown of the dataset's calc keys
         FilterListParam("filters", "Filters"),
     ]
 ```
@@ -93,7 +93,7 @@ unit-tests without FastAPI/anthropic.
 Adding a chart reuses the same widgets: `build_add_form(text, ctype, add_mode,
 add_index)` renders the create modal (constructor defaults via `_defaults`), and
 `add_chart(text, form)` generates a unique id, appends the block, and splices a
-placement into the `dashboard:` list (flow-style rows only). New param classes
+placement into the `layout:` list (flow-style rows only). New param classes
 work in both paths automatically — no extra wiring.
 
 The thin endpoints in `web/app.py` are `POST /chart/config/form` + `/save` (edit)

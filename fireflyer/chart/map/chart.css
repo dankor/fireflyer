@@ -164,8 +164,8 @@
 }
 .fireflyer-map svg polygon:hover { filter: brightness(0.9); }
 /* Per-hex hover count — single CSS rule covers every hex regardless of how
-   many are rendered. The `<text>` is hidden by default and revealed when
-   the wrapping `<g>` is hovered. Colours are fixed (light basemap), not themed. */
+   many are rendered. The label text is hidden by default and revealed when
+   its wrapping group is hovered. Colours are fixed (light basemap), not themed. */
 .fireflyer-map-hex .fireflyer-map-hex-label {
   opacity: 0;
   pointer-events: none;

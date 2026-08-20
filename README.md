@@ -117,7 +117,7 @@ charts:
     title: Orders by Status
     column: status
 
-dashboard:
+layout:
   - Overview                                    # a header
   - ["@40", "orders_table:60", "status_pie:40"] # a row: @height, then chart:width (proportion)
   - "-"                                         # a separator

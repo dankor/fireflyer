@@ -1,32 +1,76 @@
 <style>{{ css|safe }}</style>
+{#- Inside a dashboard the controls re-render this *cell* rather than calling
+    /chart/table: only the dashboard knows the `calcs:` block, so a chart rebuilt
+    from URL params alone would lose its measures (and its column calcs). Same
+    endpoint the bar's grain buttons use. -#}
+{%- macro control(target_page) %}
+{%- if refresh %}
+         hx-post="{{ refresh.endpoint }}"
+         hx-target="{{ refresh.target }}" hx-swap="outerHTML"
+         hx-include="{{ refresh.include }}"
+         hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "table_page": "{{ target_page }}", "table_q": "{{ query }}"}'
+{%- else %}
+         hx-get="{{ endpoint }}?{{ base_params|safe }}&q={{ query }}&page={{ target_page }}"
+         hx-target="#{{ chart_id }}" hx-swap="outerHTML"
+{%- endif %}
+{%- endmacro %}
 <div id="{{ chart_id }}" class="fireflyer-chart-root"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
-  <article class="fireflyer-chart fireflyer-table">
+  <article class="fireflyer-chart fireflyer-table{% if has_selection %} has-selection{% endif %}">
     <div class="fireflyer-title">{{ title }}</div>
     {%- if search %}
     <div class="fireflyer-table-search">
-      <input type="search" name="q" value="{{ query }}" placeholder="Search…"
+      <input type="search" name="{{ 'table_q' if refresh else 'q' }}" value="{{ query }}" placeholder="Search…"
              autocomplete="off" spellcheck="false"
+             {%- if refresh %}
+             hx-post="{{ refresh.endpoint }}"
+             hx-target="{{ refresh.target }}"
+             hx-swap="outerHTML"
+             hx-trigger="keyup changed delay:300ms, search"
+             hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}"}'
+             hx-include="{{ refresh.include }}, this">
+             {%- else %}
              hx-get="{{ endpoint }}?{{ base_params|safe }}"
              hx-target="#{{ chart_id }}"
              hx-swap="outerHTML"
              hx-trigger="keyup changed delay:300ms, search"
              hx-include="this">
+             {%- endif %}
     </div>
     {%- endif %}
     <div class="fireflyer-table-scroll">
       <table>
         <thead>
           <tr>
-            {%- for name, is_num in columns %}
-            <th class="{{ 'num' if is_num else '' }}">{{ name }}</th>
+            {%- for col in columns %}
+            {#- A header cell is a real CSS box, so it carries `anchor-name`
+                itself — no marker element needed (see fireflyer/chart/SKILL.md,
+                "Tooltips"). Only a described column gets a card; the plain
+                branch is the markup this table has always emitted. -#}
+            {%- if col.tip %}
+            <th class="{{ 'num ' if col.is_num }}has-tip{{ ' has-desc' if col.desc }}" style="anchor-name: --ff-tbl-c{{ loop.index0 }}"><span class="fireflyer-table-th-label">{{ col.header }}</span><span class="fireflyer-table-tip" role="tooltip" style="position-anchor: --ff-tbl-c{{ loop.index0 }}"><span class="fireflyer-table-tip-head">{{ col.header }}</span>{% if col.desc %}<span class="fireflyer-table-tip-desc">{{ col.desc }}</span>{% endif %}</span></th>
+            {%- else %}
+            <th class="{{ 'num' if col.is_num else '' }}"><span class="fireflyer-table-th-label">{{ col.header }}</span></th>
+            {%- endif %}
             {%- endfor %}
           </tr>
         </thead>
         <tbody>
           {%- for row in rows %}
+          {%- set r = loop.index0 %}
+          {#- A row click filters on the whole combination of its dimension
+              values — one token, toggling as a unit. The plain branch is the
+              markup this table has always emitted. -#}
+          {%- if crossfilter and row.token %}
+          <tr{% if row.is_active %} class="active"{% endif %} data-active="{{ '1' if row.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ row.token }}"}' role="button" tabindex="0">
+          {%- else %}
           <tr>
-            {%- for value, is_num in row %}
-            <td class="{{ 'num' if is_num else '' }}">{{ value }}</td>
+          {%- endif %}
+            {%- for cell in row.cells %}
+            {%- if cell.tip %}
+            <td class="{{ 'num ' if cell.is_num }}has-tip" style="anchor-name: --ff-tbl-v{{ r }}x{{ loop.index0 }}">{{ cell.text }}<span class="fireflyer-table-tip" role="tooltip" style="position-anchor: --ff-tbl-v{{ r }}x{{ loop.index0 }}">{% if cell.tip.head %}<span class="fireflyer-table-tip-head">{{ cell.tip.head }}</span>{% endif %}<span class="fireflyer-table-tip-row"><span class="fireflyer-table-tip-name">{{ cell.tip.name }}</span><span class="fireflyer-table-tip-val">{{ cell.tip.exact }}</span></span>{% if cell.tip.desc %}<span class="fireflyer-table-tip-desc">{{ cell.tip.desc }}</span>{% endif %}</span></td>
+            {%- else %}
+            <td class="{{ 'num' if cell.is_num else '' }}">{{ cell.text }}</td>
+            {%- endif %}
             {%- endfor %}
           </tr>
           {%- endfor %}
@@ -40,21 +84,15 @@
     <nav class="fireflyer-table-pagination" aria-label="pagination">
       {%- set prev = page - 1 if page > 1 else 1 %}
       {%- set next = page + 1 if page < total_pages else total_pages %}
-      <a class="page-link {{ 'disabled' if page == 1 else '' }}"
-         hx-get="{{ endpoint }}?{{ base_params|safe }}&q={{ query }}&page={{ prev }}"
-         hx-target="#{{ chart_id }}" hx-swap="outerHTML">‹</a>
+      <a class="page-link {{ 'disabled' if page == 1 else '' }}"{{ control(prev) }}>‹</a>
       {%- for p in page_links %}
       {%- if p is none %}
       <span class="page-ellipsis">…</span>
       {%- else %}
-      <a class="page-link {{ 'active' if p == page else '' }}"
-         hx-get="{{ endpoint }}?{{ base_params|safe }}&q={{ query }}&page={{ p }}"
-         hx-target="#{{ chart_id }}" hx-swap="outerHTML">{{ p }}</a>
+      <a class="page-link {{ 'active' if p == page else '' }}"{{ control(p) }}>{{ p }}</a>
       {%- endif %}
       {%- endfor %}
-      <a class="page-link {{ 'disabled' if page == total_pages else '' }}"
-         hx-get="{{ endpoint }}?{{ base_params|safe }}&q={{ query }}&page={{ next }}"
-         hx-target="#{{ chart_id }}" hx-swap="outerHTML">›</a>
+      <a class="page-link {{ 'disabled' if page == total_pages else '' }}"{{ control(next) }}>›</a>
     </nav>
     {%- endif %}
   </article>

@@ -113,6 +113,213 @@ chart — don't invent colors:
 - **`spec.md`**: add a short `## Theming` section noting which parts follow the token
   set and which (if any) colors are fixed.
 
+## Tooltips
+
+Every chart's hover tooltip is the same card, in the same place, showing the same
+number. They drifted apart once — the pie showed a *formatted* value while the
+bar showed an exact one, and the pie's own two tooltips disagreed with each
+other — so treat what follows as the contract, not as suggestions.
+
+### What goes in the card
+
+```
+┌──────────────────────────────┐
+│ 2026-06                      │  head  — which item this is
+│ paid                  86,400 │  row   — series (or calc) name + the value
+│ Unique crews per sortie      │  desc  — the calc's `description`, when set
+└──────────────────────────────┘
+```
+
+The **value sits at the right of its row** (`margin-left: auto`), not on a line
+of its own — a card that stacks them reads as a different kind of card and
+leaves the row's right-hand side conspicuously empty. A chart with no per-item
+identity (the number KPI) drops the `head` and leads with the row; it doesn't
+invent a heading or move the value elsewhere.
+
+- **The value is `calcs.exact_value(...)`** — unrounded and thousands-separated.
+  Never the chart's formatted value. A `format` token abbreviates (`86.4k`)
+  because the *chart* is short of space; the tooltip is where someone goes to
+  find out what it stood for, so showing the abbreviation there answers nothing.
+  Grouping is part of it: it's shown precisely because the digits get read.
+- **Don't show both.** An exact line next to a formatted one is one number too
+  many; the exact one wins.
+- **`description` only when the calc has one** — no empty row otherwise.
+- **A percent only when the share is that chart's subject.** The pie shows one
+  (share of total is what a pie *means*); the bar doesn't (share of its own bar
+  is a second thing to read past on the way to the number).
+- **When there's no rich card, the native `title` shows the same exact value.**
+  A chart with no `description` falls back to `title="..."`; if that carries the
+  formatted number, the same tooltip reports two different figures depending on
+  whether someone wrote a description.
+
+`tests/test_calcs.py::test_every_chart_tooltip_uses_the_same_exact_value` renders
+all three chart types on one dashboard and pins them together. Extend it when you
+add a chart with a tooltip.
+
+**The table follows the same rules, at two levels.** Its **measure cells** carry
+the full card — the row's dimension values as the head, then the calc's name with
+its exact value, then the description — because a measure cell is formatted by
+the calc's `format` token, so `1.9m $` on screen and `1,943,458` in the card is
+exactly what the exact-value rule is for. Its **column headers** carry a
+description-only card: a header is a label, and a name is an abbreviation like
+any other.
+
+**Give a card only where it adds something.** Dimension and raw-row cells get
+none: their text is already the full value, so a card would repeat what's on
+screen. That's not just tidiness — a table renders up to a thousand rows, and a
+card per cell is page weight you can measure.
+
+**Mark what's hoverable when it isn't obvious.** A chart item under the cursor
+invites a hover; a column heading doesn't, so described headers get a dotted
+underline and `cursor: help`. Don't extend that to value cells — the row already
+highlights under the cursor, and underlining every figure in a numeric column
+reads as noise.
+
+### Where it sits
+
+**Positioned at the item it describes**, not centred over the canvas.
+
+**Anchor only to a real CSS box.** `anchor-name` on an SVG shape is not a
+reliable anchor — an SVG `<rect>`/`<path>` isn't a CSS box — and the failure is
+loud rather than graceful: `position: fixed` with `inset: auto` falls back to the
+element's *static* position, so a card lands wherever it happens to sit in the
+tooltip list instead of near its item. The number KPI anchors to a `<div>`, so it
+can use anchoring freely.
+
+A chart that draws in SVG must therefore **carry its own coordinates**, and treat
+anchoring as an enhancement on top of a placement that is already correct:
+
+- The **pie** emits px. It can, because its canvas is a fixed 220×220 with a 1:1
+  viewBox, so units *are* pixels.
+- The **bar** scales, so px are unknowable server-side. It emits each card's
+  position as a **share of the viewBox**, placed with `position: absolute` and
+  clamped so the card can't leave the canvas.
+
+**Pass that placement as custom properties (`--ff-tip-x`/`--ff-tip-y`), never as
+inline `left`/`top`.** An inline declaration outranks every stylesheet rule
+without `!important`, so inline coordinates survive the `inset: auto` in the
+`@supports` block while its `position: fixed` still applies — the canvas
+coordinates then resolve against the **viewport** and the card lands in the
+corner of the page. Through a variable the base rule owns `left`/`top`
+(`left: var(--ff-tip-x)`) and the anchored block overrides it as an ordinary
+cascade. The pie shipped this bug: it was invisible while the block still used
+`!important`, and appeared the moment that was removed.
+
+To get anchoring back on top of that, emit a 1px **marker element inside the
+SVG**, in a `<foreignObject>` at the item's own coordinates, and anchor to *it*:
+
+```html
+<foreignObject x="143.00" y="79.33" width="1" height="1"
+  ><div xmlns="http://www.w3.org/1999/xhtml" style="anchor-name: --ff-<n>-s3"></div
+></foreignObject>
+```
+
+Two things at once. A `<div>` is a real CSS box, so the anchor can't fail to
+resolve. And being *inside* the SVG puts it in the **drawing's** coordinate
+space: `preserveAspectRatio: meet` letterboxes the drawing inside its canvas, so
+a marker placed at a share of the *canvas* drifts from its item by however much
+slack the letterboxing left — and that slack changes with every cell size. In
+user space there's no drift at any size.
+
+The card then keeps both properties: it lands beside the right item *and*
+escapes every clipping ancestor.
+
+Hang it off the edge **nearest where the eye already is**: the bar anchors to its
+segment's *top* (`bottom: anchor(top)`), because bar values are labelled above
+and anchoring to the bottom threw the card down to the baseline, far from the
+part being pointed at.
+
+**Anchor to the shape's bounding box, not to a point on a curve.** The pie
+anchored each card to the slice's outer-edge point and offset it sideways — and
+cards still landed over the donut, because a circle bulges back out past a point
+offset horizontally from its upper or lower arc. Clearing a *point* on a curve
+doesn't clear the curve. The anchor is now the donut's bounding-box edge on the
+slice's side, level with the slice: the bounding box is the outermost the shape
+ever gets, so clearing it clears the chart at every angle.
+
+**Keep both placement paths on one geometry.** A chart has two — the anchored one
+and the plain-absolute fallback — and they should put the card in the same place,
+differing only in whether clipping ancestors can cut it off. Share the offset
+through a custom property (`--ff-tip-gap`) rather than repeating a literal, so a
+later tweak can't move one path and leave the other behind. Remember that
+`flip-inline`/`flip-block` mirror **inset properties** and can't mirror a
+transform, so any offset you want mirrored has to live in `left`/`right`/
+`top`/`bottom`.
+
+**Fall back on whichever axis can actually overflow.** A card *centred* on its
+item hangs off the side of the screen when the item sits in the first or last
+column, and a vertical flip never notices — the overflow isn't vertical. So
+match the fallbacks to the placement:
+
+```css
+/* Centred on its item: it can overflow either way, so cover both. */
+position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+
+/* Hung off one side (the pie): overflow is sideways, so one flip covers it. */
+position-try-fallbacks: flip-inline;
+```
+
+(The bar predates this and still names five `@position-try` blocks, which pin the
+card's near edge to the segment rather than mirroring it — that's the case the
+keywords can't express.)
+
+Prefer the `flip-*` keywords to hand-written `@position-try` blocks — they mirror
+the primary placement, so there's one geometry to keep right instead of six. Only
+write a `@position-try` block when a fallback has to differ from a mirror image
+of the original.
+
+**No `!important` in the `@supports` block.** It can stop a `@position-try`
+block from applying, and it buys nothing: the `@supports` rule has the same
+specificity as the in-flow fallback and comes later, so source order already
+wins.
+
+### It must never truncate
+
+A tooltip positioned in-flow (absolute inside the chart) is clipped by any
+ancestor with non-visible overflow — the chart card
+(`.fireflyer-dashboard-cell > .fireflyer-chart` is `overflow: hidden` to contain
+scrolling charts) **and** the editor's output pane (`overflow-y: auto`,
+`overflow-x: hidden`). No in-flow placement avoids clipping everywhere, because
+the surrounding scroll pane always clips at its own edges.
+
+Solve it with **CSS anchor positioning** (no JS — the hard rule), as a
+progressive enhancement:
+
+- **Fallback (any browser):** position the card in-flow (`position: absolute`)
+  near its target — fine when nothing clips.
+- **Enhancement (`@supports (anchor-name: --a)`):** `position: fixed` +
+  `position-anchor` + `anchor()` offsets. `position: fixed` is clipped by no
+  overflow ancestor, so it escapes the card *and* the pane. Add the
+  `@position-try` fallback via `position-try-fallbacks`. Put `anchor-scope: all`
+  on the chart root so anchor names don't leak between charts on one dashboard.
+- Reveal is CSS-only too: `.fireflyer-<name>:hover` / `:has(... :hover)` toggles
+  the card's `opacity`.
+- Cards are **translucent** (`color-mix(... 85%, transparent)` +
+  `backdrop-filter: blur`) so they read over content without hiding it.
+
+A plain absolute tooltip that the pane can clip is a bug.
+
+### Testing them
+
+Assert on the **markup**, not on strings that also appear in the stylesheet.
+Every chart inlines its CSS into its own output, so `"fireflyer-bar-tooltip" in
+html` is true even when no tooltip was rendered — the *rule* is there. Anchor
+assertions on an attribute (`class="fireflyer-bar-tooltip"`), or slice the
+markup first (`html[html.index('<article class="fireflyer-chart'):]`). The same
+trap bites `data-active="0"`, `[data-i]` and any `<svg>`/`<path>` count, since
+the dashboard chrome has icons of its own.
+
+**One rule per selector.** A stylesheet is injected verbatim, so a stale rule
+left behind by an edit doesn't error — it just wins the cascade if it sits later
+in the file, and the chart silently keeps its old look. The bar's stylesheet once
+held two `.fireflyer-bar-tooltip` rules with the older one last, so a rebuilt
+tooltip rendered with the *previous* design and every test still passed: the
+markup was right, and the assertions matched the copy that lost.
+`tests/test_chart_css_is_coherent.py` now fails on a duplicated top-level
+selector, unbalanced braces, an anchored rule outside its `@supports` guard, or a
+translucent tooltip. When a rule seems not to take effect, grep the file for a
+second copy of the selector before touching the rule you're looking at.
+
 ## Wiring a NEW chart type in (5 edits)
 
 1. `fireflyer/chart/__init__.py` — add `from fireflyer.chart.<name> import <Class> as <name>`
@@ -123,9 +330,9 @@ chart — don't invent colors:
    "Chart types and their keys" describing its params. Keep this DSL spec in sync with
    `architecture.md` and the chart `spec.md`.
 4. `fireflyer/web/app.py` — add at least one example (ideally showing each variation,
-   e.g. different `measure` references) to `DEFAULT_YAML` under `charts:`, define any
-   measures it needs under the top-level `measures:` block, and place it in the
-   `dashboard:` layout. Row widths are proportions, not percentages.
+   e.g. different `calc` references) to `DEFAULT_YAML` under `charts:`, define any
+   calcs it needs under the top-level `calcs:` block, and place it in the
+   `layout:` layout. Row widths are proportions, not percentages.
 5. Declare **`PARAMS`** on the chart class — a `list[Param]`, one per constructor field
    in display order — so the editor's edit modal can build a form for it. Reuse the
    widgets in `fireflyer/params.py`; a sync test asserts `PARAMS` names == constructor

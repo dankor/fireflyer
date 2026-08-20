@@ -1,4 +1,5 @@
 import re
+from html import escape
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ import polars as pl
 import yaml
 
 from fireflyer import filters as filters_mod
-from fireflyer import measures as measures_mod
+from fireflyer import calcs as calcs_mod
 from fireflyer.scan import scan
 from fireflyer.chart.bar.chart import Bar
 from fireflyer.chart.map.chart import Map
@@ -29,6 +30,57 @@ CHART_TYPES: dict[str, type] = {
 CROSSFILTER_ENDPOINT = "/dashboard"
 CROSSFILTER_TARGET = "#fireflyer-dashboard"
 CROSSFILTER_INCLUDE = "#fireflyer-dashboard input[type=hidden]"
+
+# A chart's own grain/window controls change only that chart, so they re-render
+# just their cell instead of the whole dashboard. (Crossfilter still goes wide —
+# it changes every chart's data.) `closest` lets the chart address its cell
+# without knowing an id.
+CELL_ENDPOINT = "/dashboard/cell"
+CELL_TARGET = "closest .fireflyer-dashboard-cell"
+
+# The page-level grain state, wrapped so a cell-scoped response can rewrite it
+# out-of-band — see `grain_state_html`.
+GRAIN_STATE_ID = "ff-grain-state"
+
+
+def grain_state_html(tokens: list[str]) -> str:
+    """The dashboard's grain hidden inputs as an **out-of-band** swap.
+
+    A chart-local re-render replaces only its own cell, so the page-level state
+    it just changed has to be written back separately — otherwise the next
+    request would still carry the old token and undo the change."""
+    inputs = "".join(
+        f'<input type="hidden" name="grain" value="{escape(tok, quote=True)}">'
+        for tok in tokens
+    )
+    return f'<span id="{GRAIN_STATE_ID}" hx-swap-oob="true">{inputs}</span>' 
+
+
+def set_grain_token(tokens: list[str], token: str) -> list[str]:
+    """Apply one `"<chart id>|<grain>[|<offset>]"` pick to the token list,
+    replacing any previous pick for that chart. A bare `"by_day|"` drops the
+    entry, putting the chart back on its automatic grain and default window.
+
+    One token carries both parts because they're one idea — how *this viewer* is
+    looking at this chart's time axis right now. It lives beside the crossfilter
+    tokens (hidden inputs on the dashboard, same round-trip) rather than in the
+    YAML, which is the dashboard's definition and shared by everyone."""
+    cid, _, rest = token.partition("|")
+    kept = [t for t in tokens if t.partition("|")[0] != cid]
+    return kept + [token] if rest else kept
+
+
+def view_for(tokens: list[str], cid: str) -> tuple[str, int | None]:
+    """`(grain, window offset)` for a chart. An empty grain means automatic; a
+    None offset means the default window (the most recent bars). Either part can
+    be set without the other — moving the window keeps an automatic grain."""
+    for token in tokens:
+        owner, _, rest = token.partition("|")
+        if owner == cid:
+            grain, _, offset = rest.partition("|")
+            return grain, int(offset) if offset.isdigit() else None
+    return "", None
+
 
 _DIR = Path(__file__).parent
 _CSS = (_DIR / "dashboard.css").read_text()
@@ -76,7 +128,7 @@ class _Row:
     height: float
     # (chart_id, width) — width is None for a bare token (inherit-if-above, else 1).
     cells: list[tuple[str, float | None]]
-    # 0-based position among row-arrays in the `dashboard:` list. The editor's
+    # 0-based position among row-arrays in the `layout:` list. The editor's
     # resize handles use this to find which `@<height>` token to rewrite.
     ordinal: int = -1
 
@@ -131,12 +183,12 @@ class _RowGroup:
 @dataclass
 class Dashboard:
     chart_configs: dict[str, _ChartConfig]
-    # Measures, keyed by dataset name -> MeasureSet. Parsed from the top-level
-    # `measures:` block; a chart resolves its `measure:` within its dataset's set.
-    measure_sets: dict[str, Any] = field(default_factory=dict)
+    # Calcs, keyed by dataset name -> CalcSet. Parsed from the top-level
+    # `calcs:` block; a chart resolves its `calc:` within its dataset's set.
+    calc_sets: dict[str, Any] = field(default_factory=dict)
     items: list[Any] = field(default_factory=list)
     # None for a flat (list-form) dashboard; a list of `_Tab` when the
-    # `dashboard:` section is a mapping of tab name -> layout list.
+    # `layout:` section is a mapping of tab name -> layout list.
     tabs: list[_Tab] | None = None
     yaml_source: str = ""
     # Optional top-level `name:` — the dashboard's display name, part of the
@@ -162,9 +214,9 @@ class Dashboard:
 
         if not isinstance(config, dict):
             raise DashboardError(
-                "top-level must be a mapping with keys: name, charts, dashboard"
+                "top-level must be a mapping with keys: name, charts, layout"
             )
-        for key in ("charts", "dashboard", "name"):
+        for key in ("charts", "layout", "name"):
             if key not in config:
                 raise DashboardError(f"missing top-level key: {key!r}")
 
@@ -175,25 +227,25 @@ class Dashboard:
         resolve = _resolver_from(datasets)
         chart_configs = _parse_charts(config["charts"])
         try:
-            measure_sets = measures_mod.parse_block(config.get("measures"))
-        except measures_mod.MeasureError as exc:
+            calc_sets = calcs_mod.parse_block(config.get("calcs"))
+        except calcs_mod.CalcError as exc:
             raise DashboardError(str(exc)) from exc
-        _validate_measure_refs(chart_configs, measure_sets)
+        _validate_calc_refs(chart_configs, calc_sets)
 
-        raw_dashboard = config["dashboard"]
-        if isinstance(raw_dashboard, dict):
-            tabs = _parse_tabs(raw_dashboard, chart_configs)
+        raw_layout = config["layout"]
+        if isinstance(raw_layout, dict):
+            tabs = _parse_tabs(raw_layout, chart_configs)
             # A chart resolves to exactly one placement across the whole
             # dashboard (span-aware), so the move machinery — which pulls a
             # chart from every row it's in — stays sound across tabs.
             _validate_unique_placements([g for t in tabs for g in t.items])
-            dash = cls(chart_configs=chart_configs, measure_sets=measure_sets,
+            dash = cls(chart_configs=chart_configs, calc_sets=calc_sets,
                        tabs=tabs, yaml_source=text, name=name)
         else:
-            items = _parse_layout(raw_dashboard, chart_configs)
+            items = _parse_layout(raw_layout, chart_configs)
             items = _group_layout(items)
             _validate_unique_placements(items)
-            dash = cls(chart_configs=chart_configs, measure_sets=measure_sets,
+            dash = cls(chart_configs=chart_configs, calc_sets=calc_sets,
                        items=items, yaml_source=text, name=name)
         dash._resolve = resolve
         return dash
@@ -230,10 +282,12 @@ class Dashboard:
         cf_tokens: list[str] | None = None,
         active_tab: int = 0,
         theme: str | None = None,
+        grain_tokens: list[str] | None = None,
     ) -> str:
         cf_tokens = list(cf_tokens or [])
+        grain_tokens = list(grain_tokens or [])
         tabs_meta, active_tab, items = self._tab_context(active_tab)
-        rendered = [self._render_item(item, cf_tokens) for item in items]
+        rendered = [self._render_item(item, cf_tokens, grain_tokens) for item in items]
         return _TEMPLATE.render(
             css=_CSS,
             items=rendered,
@@ -241,6 +295,7 @@ class Dashboard:
             active_tab=active_tab,
             yaml_source=self.yaml_source,
             cf_tokens=cf_tokens,
+            grain_tokens=grain_tokens,
             ff_theme=_normalize_theme(theme),
         )
 
@@ -250,6 +305,7 @@ class Dashboard:
         editing: bool = False,
         active_tab: int = 0,
         theme: str | None = None,
+        grain_tokens: list[str] | None = None,
     ) -> str:
         """Layout-only render: cells are placeholders that hx-trigger on load.
 
@@ -268,6 +324,7 @@ class Dashboard:
         document-global — matching how `config_edit` scans the YAML.
         """
         cf_tokens = list(cf_tokens or [])
+        grain_tokens = list(grain_tokens or [])
         tabs_meta, active_tab, _ = self._tab_context(active_tab)
         # Number headers in document order so the editor can double-click one to
         # rename it and the server can find the matching header line. `before` is
@@ -310,6 +367,7 @@ class Dashboard:
             end_before=end_before,
             yaml_source=self.yaml_source,
             cf_tokens=cf_tokens,
+            grain_tokens=grain_tokens,
             editing=editing,
             ff_theme=_normalize_theme(theme),
         )
@@ -321,6 +379,10 @@ class Dashboard:
         col: str = "1",
         row: str = "1",
         editing: bool = False,
+        grain_tokens: list[str] | None = None,
+        legend_page: int = 0,
+        table_page: int = 1,
+        table_query: str = "",
     ) -> str:
         """Render a single dashboard cell (indicator + chart). Used by
         /dashboard/cell — the response replaces the placeholder in place.
@@ -331,11 +393,16 @@ class Dashboard:
         cf_tokens = list(cf_tokens or [])
         if cid not in self.chart_configs:
             raise DashboardError(f"unknown chart {cid!r}")
-        result = self._render_chart(cid, cf_tokens)
+        result = self._render_chart(
+            cid, cf_tokens, list(grain_tokens or []),
+            col=col, row=row, legend_page=legend_page,
+            table_page=table_page, table_query=table_query,
+        )
         return _CELL_TEMPLATE.render(
             chart_html=result["html"],
             applied=result["filters"],
             emitted=result["emitted"],
+            col_labels=result["col_labels"],
             col=col,
             row=row,
             editing=editing,
@@ -348,7 +415,7 @@ class Dashboard:
     def __str__(self) -> str:
         return self.to_html()
 
-    def _render_item(self, item, cf_tokens: list[str]) -> dict:
+    def _render_item(self, item, cf_tokens: list[str], grain_tokens: list[str]) -> dict:
         if isinstance(item, _Header):
             return {"kind": "header", "text": item.text}
         if isinstance(item, _Separator):
@@ -362,7 +429,10 @@ class Dashboard:
                 {
                     "grid_column": p.grid_column,
                     "grid_row": p.grid_row,
-                    **self._render_chart(p.chart_id, cf_tokens),
+                    **self._render_chart(
+                        p.chart_id, cf_tokens, grain_tokens,
+                        col=p.grid_column, row=p.grid_row,
+                    ),
                 }
                 for p in item.placements
             ],
@@ -399,7 +469,17 @@ class Dashboard:
             "col_count": len(item.columns_css.split()),
         }
 
-    def _render_chart(self, cid: str, cf_tokens: list[str]) -> dict:
+    def _render_chart(
+        self,
+        cid: str,
+        cf_tokens: list[str],
+        grain_tokens: list[str],
+        col: str = "1",
+        row: str = "1",
+        legend_page: int = 0,
+        table_page: int = 1,
+        table_query: str = "",
+    ) -> dict:
         # Re-instantiate every render so merged filters reflect the current
         # crossfilter state. Cheap — chart classes are dataclasses, real work
         # happens in to_html(). Tokens from this chart itself are dropped so
@@ -412,29 +492,79 @@ class Dashboard:
         kwargs["filters"] = [f.as_dict() for f in merged]
         chart = cfg.cls(**kwargs)
         chart._resolve = self._resolve  # name -> Parquet source at read time
-        # Measures for this chart's dataset, so a `measure:` key resolves.
-        chart._measures = self.measure_sets.get(kwargs["dataset"])
+        # Calcs for this chart's dataset, so a `calc:` key resolves.
+        chart._calcs = self.calc_sets.get(kwargs["dataset"])
 
-        if isinstance(chart, Pie):
-            active = filters_mod.active_values_for(cf_tokens, cid, chart.column)
-            chart_html = chart.to_html(crossfilter={
-                "endpoint": CROSSFILTER_ENDPOINT,
-                "target": CROSSFILTER_TARGET,
-                "include": CROSSFILTER_INCLUDE,
-                "emitter": cid,
-                "active": active,
-            })
-        elif isinstance(chart, Bar):
-            active = filters_mod.active_values_for(cf_tokens, cid, chart.y)
-            chart_html = chart.to_html(crossfilter={
-                "endpoint": CROSSFILTER_ENDPOINT,
-                "target": CROSSFILTER_TARGET,
-                "include": CROSSFILTER_INCLUDE,
-                "emitter": cid,
-                "active": active,
-            })
-        else:
-            chart_html = chart.to_html()
+        refresh = {
+            "endpoint": CELL_ENDPOINT,
+            "target": CELL_TARGET,
+            "include": CROSSFILTER_INCLUDE,
+            "cid": cid,
+            "col": col,
+            "row": row,
+        }
+        try:
+            if isinstance(chart, Pie):
+                active = filters_mod.active_values_for(cf_tokens, cid, chart.column)
+                chart_html = chart.to_html(
+                    crossfilter={
+                        "endpoint": CROSSFILTER_ENDPOINT,
+                        "target": CROSSFILTER_TARGET,
+                        "include": CROSSFILTER_INCLUDE,
+                        "emitter": cid,
+                        "active": active,
+                    },
+                    legend_page=legend_page,
+                    refresh=refresh,
+                )
+            elif isinstance(chart, Bar):
+                active = filters_mod.active_values_for(cf_tokens, cid, chart.y)
+                grain, offset = view_for(grain_tokens, cid)
+                # Whole tokens, so a segment lights only for its own (x, y) cell.
+                selected = filters_mod.tokens_for(cf_tokens, cid)
+                chart_html = chart.to_html(
+                    crossfilter={
+                        "endpoint": CROSSFILTER_ENDPOINT,
+                        "target": CROSSFILTER_TARGET,
+                        "include": CROSSFILTER_INCLUDE,
+                        "emitter": cid,
+                        "active": active,
+                        "selected": selected,
+                    },
+                    grain=grain,
+                    offset=offset,
+                    legend_page=legend_page,
+                    refresh=refresh,
+                )
+            elif isinstance(chart, Table):
+                # The table's own search/pagination re-render this cell rather than
+                # calling /chart/table: only the dashboard holds the `calcs:` block,
+                # so a chart rebuilt from URL params alone would lose its measures.
+                # Whole tokens, so a row lights only for its own combination of
+                # dimension values — the same rule the bar's segments follow.
+                chart_html = chart.to_html(
+                    page=table_page,
+                    query=table_query,
+                    refresh=refresh,
+                    crossfilter={
+                        "endpoint": CROSSFILTER_ENDPOINT,
+                        "target": CROSSFILTER_TARGET,
+                        "include": CROSSFILTER_INCLUDE,
+                        "emitter": cid,
+                        "selected": filters_mod.tokens_for(cf_tokens, cid),
+                    },
+                )
+            else:
+                chart_html = chart.to_html()
+        except Exception as exc:
+            # A chart that cannot read its data must not take the page down with
+            # it. The cell arrives by htmx, which only swaps a 2xx response, so an
+            # exception here left the placeholder spinning forever with the reason
+            # visible only in the server log. The usual cause is a dashboard that
+            # has outrun its dataset — a calc naming a column the data no longer
+            # has — which is precisely the thing someone can fix once they can see
+            # it. Every other cell still renders.
+            chart_html = _chart_error_html(cid, exc)
 
         # Indicator state for the dashboard cell, computed here so chart code
         # stays unaware of it:
@@ -443,20 +573,58 @@ class Dashboard:
         # When both apply (chart is both source and downstream of others),
         # the template prefers the emitter state — the user typically wants
         # to know which chart is causing the cascade.
-        applied = _applied_filters_for(merged, kwargs["dataset"], self._resolve)
+        applied = _applied_filters_for(
+            merged, kwargs["dataset"], self._resolve, chart._calcs
+        )
         emitted = filters_mod.emitted_by(cf_tokens, cid)
-        return {"html": chart_html, "filters": applied, "emitted": emitted}
+        # Display names for the columns those filters name, so a relabelled
+        # column reads the same in the indicator as it does in the chart. Keyed
+        # by the real column name, which is what a Filter carries.
+        labels = {}
+        if chart._calcs is not None:
+            for f in [*applied, *emitted]:
+                labels[f.column] = chart._calcs.column_label(f.column)
+        return {
+            "html": chart_html,
+            "filters": applied,
+            "emitted": emitted,
+            "col_labels": labels,
+        }
+
+
+def _chart_error_html(cid: str, exc: Exception) -> str:
+    """A chart that failed to render, as a card in its own cell.
+
+    Only the first line of the message is kept: Polars appends the resolved
+    query plan to its errors, which is pages long and says nothing a reader of
+    the dashboard can act on. The first line is the part that does — e.g.
+    `unable to find column "qty"; valid columns: [...]`.
+    """
+    first_line = str(exc).strip().splitlines()
+    detail = first_line[0] if first_line else type(exc).__name__
+    return (
+        '<article class="fireflyer-chart-error" role="alert">'
+        f'<div class="fireflyer-chart-error-head">{escape(cid)} failed to render</div>'
+        f'<div class="fireflyer-chart-error-msg">{escape(detail)}</div>'
+        "</article>"
+    )
 
 
 def _applied_filters_for(
-    filters: list[filters_mod.Filter], dataset: str, resolve
+    filters: list[filters_mod.Filter], dataset: str, resolve, calcs=None
 ) -> list[filters_mod.Filter]:
-    """Filters that actually narrow this chart's data — column must exist."""
+    """Filters that actually narrow this chart's data — column must exist.
+
+    `calcs` matters: a filter can name a **column calc**, which only exists once
+    the calc set is attached to the scan. Reading the bare Parquet schema would
+    report such a filter as not applied even though the chart really is filtered
+    by it — the indicator would then contradict the chart.
+    """
     if not filters:
         return []
     # `scan(...).collect_schema()` reads only the Parquet footer/schema, not the
     # data. The chart's own to_html scans it too; a second schema read is cheap.
-    columns = scan(dataset, resolve).collect_schema().names()
+    columns = scan(dataset, resolve, calcs).collect_schema().names()
     return [f for f in filters if f.column in columns]
 
 
@@ -653,30 +821,40 @@ def _parse_charts(raw) -> dict[str, _ChartConfig]:
     return out
 
 
-def _validate_measure_refs(
-    chart_configs: dict[str, _ChartConfig], measure_sets: dict
+def _validate_calc_refs(
+    chart_configs: dict[str, _ChartConfig], calc_sets: dict
 ) -> None:
-    """Every chart `measure:` key must exist in its dataset's measure set. A
-    chart with no `measure` (or an inline dict) needs no lookup — it defaults to
-    a row count. Caught here so a typo'd key fails at parse time, not render."""
+    """Every chart `calc:` key must exist in its dataset's calc set, and name a
+    value rather than a dimension. A chart with no `calc` (or an inline dict)
+    needs no lookup — it defaults to a row count. Caught here so a typo'd key
+    fails at parse time, not render."""
     for cid, cfg in chart_configs.items():
-        measure = cfg.kwargs.get("measure")
-        if not isinstance(measure, str) or not measure:
-            continue
         dataset = cfg.kwargs["dataset"]
-        mset = measure_sets.get(dataset)
-        if mset is None or measure not in mset:
-            raise DashboardError(
-                f"chart {cid!r}: unknown measure {measure!r} for dataset "
-                f"{dataset!r} — define it under `measures: {dataset}:`"
-            )
+        # A chart's single `calc:`, plus the table's `measures:` list — same
+        # rules for both: the key must exist and must name a value.
+        keys = [cfg.kwargs.get("calc")]
+        keys += list(cfg.kwargs.get("measures") or [])
+        for calc in keys:
+            if not isinstance(calc, str) or not calc:
+                continue
+            cset = calc_sets.get(dataset)
+            if cset is None or calc not in cset:
+                raise DashboardError(
+                    f"chart {cid!r}: unknown calc {calc!r} for dataset "
+                    f"{dataset!r} — define it under `calcs: {dataset}:`"
+                )
+            if cset.get(calc).is_column:
+                raise DashboardError(
+                    f"chart {cid!r}: {calc!r} is a column calc — a dimension, not a "
+                    "value. Use it as the chart's `x`/`column` instead"
+                )
 
 
 def _parse_tabs(raw: dict, chart_configs: dict[str, _ChartConfig]) -> list[_Tab]:
-    """Parse the mapping form of `dashboard:` (tab name -> layout list) into
+    """Parse the mapping form of `layout:` (tab name -> layout list) into
     `_Tab`s. Row ordinals and — via the render pass — header/item indices run
     **globally** in document order across tabs, matching the way `config_edit`
-    scans the whole `dashboard:` section by text."""
+    scans the whole `layout:` section by text."""
     if not raw:
         raise DashboardError("`dashboard` mapping must have at least one tab")
     tabs: list[_Tab] = []
