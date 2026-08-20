@@ -14,7 +14,7 @@ def _yaml(name: str = "Sales", title: str = "KPI") -> str:
     return f"""name: {name}
 charts:
   kpi: {{type: number, dataset: orders, title: {title}}}
-dashboard:
+layout:
   Main:
     - ["@100", "kpi"]
 """

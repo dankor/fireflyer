@@ -1,4 +1,4 @@
-"""Tabs: a `dashboard:` mapping (tab name -> layout list). Covers parsing,
+"""Tabs: a `layout:` mapping (tab name -> layout list). Covers parsing,
 rendering (active tab only, tab bar, global numbering), and the surgical
 config_edit tab gestures."""
 
@@ -14,7 +14,7 @@ charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
   c: {{type: table, dataset: {orders_parquet}, title: C}}
-dashboard:
+layout:
   Overview:
     - ["@22", "a", "b"]
     - "-"
@@ -35,7 +35,7 @@ def test_flat_dashboard_has_no_tabs(orders_parquet):
     yaml = f"""name: Test dashboard
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
-dashboard:
+layout:
   - ["@20", "a"]
 """
     assert ff.Dashboard.from_yaml(yaml).tabs is None
@@ -45,7 +45,7 @@ def test_empty_tab_rejected(orders_parquet):
     yaml = f"""name: Test dashboard
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
-dashboard:
+layout:
   Empty:
   Full:
     - ["@20", "a"]
@@ -59,7 +59,7 @@ def test_chart_in_two_tabs_rejected(orders_parquet):
     yaml = f"""name: Test dashboard
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
-dashboard:
+layout:
   One:
     - ["@20", "a"]
   Two:
@@ -77,7 +77,7 @@ charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
   c: {{type: bar, dataset: {orders_parquet}, title: C, x: day, y: status}}
-dashboard:
+layout:
   First:
     - ["@20", "a"]
   Second:
@@ -106,8 +106,9 @@ def test_to_html_renders_tab_bar_and_active_tab_only(orders_parquet):
 def test_to_html_active_tab_switches_content(orders_parquet):
     d = ff.Dashboard.from_yaml(_tabbed(orders_parquet))
     html = d.to_html(active_tab=1)
-    # Tab 1 has c (a table) and no pie.
-    assert "fireflyer-pie" not in html
+    # Tab 1 has c (a table) and no pie. Match the chart element's class (space),
+    # not the injected CSS selector `.fireflyer-chart.fireflyer-pie` (dot).
+    assert "fireflyer-chart fireflyer-pie" not in html
     assert 'name="active_tab" value="1"' in html
 
 
@@ -135,7 +136,7 @@ def test_skeleton_flat_editing_has_no_tab_bar(orders_parquet):
     yaml = f"""name: Test dashboard
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
-dashboard:
+layout:
   - ["@20", "a"]
 """
     html = ff.Dashboard.from_yaml(yaml).render_skeleton(editing=True)
@@ -155,7 +156,7 @@ def _flat(orders_parquet: str) -> str:
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: pie, dataset: {orders_parquet}, title: B, column: status}}
-dashboard:
+layout:
   - ["@22", "a"]
   - ["@30", "b"]
 """
@@ -197,7 +198,7 @@ charts:
   x: {{type: table, dataset: {orders_parquet}, title: X}}
   y: {{type: table, dataset: {orders_parquet}, title: Y}}
   z: {{type: table, dataset: {orders_parquet}, title: Z}}
-dashboard:
+layout:
   A:
     - ["@20", "x"]
     - ["@20", "y"]
@@ -254,3 +255,67 @@ def test_cross_tab_move_dissolves_emptied_tab(orders_parquet):
 def test_delete_chart_dissolves_emptied_tab(orders_parquet):
     out = ce.delete_chart(_tabbed(orders_parquet), "c")
     assert ce.tab_names(out) == ["Overview"]
+
+
+def test_section_header_sits_just_off_the_edge(orders_parquet):
+    """A section header should clear the edge without lining up with the card
+    text: flush read as touching, and the card's full text inset read as
+    detached from the cards below it."""
+    import re
+
+    dashboard = ff.Dashboard.from_yaml(
+        "name: T\ncharts:\n"
+        "  t: {type: table, dataset: orders, title: Orders}\n"
+        'layout:\n  - "Overview"\n  - ["@30", "t:1"]\n',
+        datasets=lambda name: (orders_parquet, None),
+    )
+    html = dashboard.to_html()
+
+    start = html.index(".fireflyer-dashboard {\n  font-family")
+    root = html[start : html.index("}", start)]
+    indent = int(re.search(r"--ff-header-indent: (\d+)px;", root).group(1))
+
+    start = html.index(".fireflyer-dashboard-header {")
+    rule = html[start : html.index("}", start)]
+    assert "margin: 16px 0 8px var(--ff-header-indent);" in rule
+
+    # Between the two things that looked wrong: flush against the edge, and out
+    # at the card's own text inset, where it read as detached from the cards it
+    # heads. The card inset is that card's border + horizontal padding.
+    card_text_inset = 1 + int(
+        re.search(r"\.fireflyer-chart \{[^}]*?padding: 16px (\d+)px;", html, re.S).group(1)
+    )
+    assert 0 < indent < card_text_inset, (indent, card_text_inset)
+
+
+def test_every_revealed_toolbar_is_clickable(orders_parquet):
+    """`.fireflyer-chart-tools` parks itself `pointer-events: none` while hidden,
+    because opacity:0 alone does not stop clicks — an invisible bar would eat
+    hovers meant for the resize handle underneath. Every rule that reveals a
+    toolbar therefore has to hand pointer events back. The header/separator
+    badge's reveal rule didn't, so it appeared on hover and then ignored every
+    click on move/edit/delete.
+    """
+    import re
+
+    dashboard = ff.Dashboard.from_yaml(
+        "name: T\ncharts:\n"
+        "  t: {type: table, dataset: orders, title: Orders}\n"
+        'layout:\n  - "Overview"\n  - ["@30", "t:1"]\n',
+        datasets=lambda name: (orders_parquet, None),
+    )
+    css = dashboard.to_html()
+
+    # The base rule must still disable them while hidden.
+    start = css.index(".fireflyer-chart-tools {")
+    assert "pointer-events: none;" in css[start : css.index("}", start)]
+
+    # Every rule that turns a toolbar's opacity back on must restore them.
+    reveals = [
+        m.group(0)
+        for m in re.finditer(r"[^}]*fireflyer-(?:chart|item)-tools[^{}]*\{[^{}]*\}", css)
+        if "opacity: 1" in m.group(0)
+    ]
+    assert reveals, "expected at least one reveal rule"
+    for rule in reveals:
+        assert "pointer-events: auto;" in rule, rule.strip()[:120]

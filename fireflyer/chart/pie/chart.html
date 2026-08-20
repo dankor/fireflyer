@@ -1,7 +1,8 @@
 <style>{{ css|safe }}</style>
 <style>
 {%- for i in range(segments|length) %}
-.fireflyer-pie-canvas:has(svg [data-i="{{ i }}"]:hover) .fireflyer-pie-tooltip[data-i="{{ i }}"] { opacity: 1; }
+.fireflyer-pie-canvas:has(svg [data-i="{{ i }}"]:hover) .fireflyer-pie-tooltip[data-i="{{ i }}"],
+.fireflyer-pie-canvas:has(svg [data-i="{{ i }}"]:hover) .fireflyer-pie-pct-bg[data-i="{{ i }}"] { opacity: 1; }
 {%- endfor %}
 </style>
 <article class="fireflyer-chart fireflyer-pie{% if has_selection %} has-selection{% endif %}"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
@@ -17,25 +18,67 @@
         <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_in }}" class="fireflyer-pie-hole" />
         {%- endif %}
         {%- endfor %}
+        {%- for s in segments %}
+        {%- if s.show_pct %}
+        <rect class="fireflyer-pie-pct-bg" data-i="{{ loop.index0 }}" x="{{ s.pct_bg_x }}" y="{{ s.pct_bg_y }}" width="{{ s.pct_bg_w }}" height="16" rx="3" />
+        <text x="{{ s.pct_x }}" y="{{ s.pct_y }}" class="fireflyer-pie-pct" text-anchor="middle" dominant-baseline="central">{{ s.percent }}%</text>
+        {%- endif %}
+        {%- endfor %}
         {%- if show_total %}
-        <text x="{{ cx }}" y="{{ cy }}" class="fireflyer-pie-total" text-anchor="middle" dominant-baseline="central"><title>Total: {{ total_exact }}</title>{{ total_display }}</text>
+        {%- if calc_desc %}
+        <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_in }}" class="fireflyer-pie-total-hit" />
+        {%- endif %}
+        <text x="{{ cx }}" y="{{ cy }}" class="fireflyer-pie-total" text-anchor="middle" dominant-baseline="central">{% if not calc_desc %}<title>Total: {{ total_raw }}</title>{% endif %}{{ total_display }}</text>
+        {%- endif %}
+        {#- Anchor markers. An `anchor-name` on a <path>/<circle> is ignored — SVG
+            shapes aren't CSS boxes — and a failed anchor silently drops the card
+            at its static position. These 1x1 <div>s inside <foreignObject> are
+            real boxes, placed in the SVG's own user space, so the card lands on
+            the slice at any size. See fireflyer/chart/SKILL.md, "Tooltips". -#}
+        {%- for s in segments %}
+        <foreignObject x="{{ s.tip_x }}" y="{{ s.tip_y }}" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-pie-tip-anchor" style="anchor-name: --ff-pie-s{{ loop.index0 }}"></div></foreignObject>
+        {%- endfor %}
+        {%- if show_total and calc_desc %}
+        {#- At the bottom of the ring, not the centre: the card hangs below its
+            anchor, and anchoring at the centre would drop it over the donut. -#}
+        <foreignObject x="{{ cx }}" y="{{ cy + r_out }}" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-pie-tip-anchor" style="anchor-name: --ff-pie-total"></div></foreignObject>
         {%- endif %}
       </svg>
       {%- for s in segments %}
-      <div class="fireflyer-pie-tooltip" data-i="{{ loop.index0 }}" role="tooltip">
-        <span class="fireflyer-pie-tooltip-label">{{ s.label }}</span>
-        <span class="fireflyer-pie-tooltip-meta">{{ s.display }} · {{ s.percent }}%</span>
+      <div class="fireflyer-pie-tooltip fireflyer-pie-tooltip--{{ s.tip_side }}" data-i="{{ loop.index0 }}" style="--ff-tip-x: {{ s.tip_x }}px; --ff-tip-y: {{ s.tip_y }}px; position-anchor: --ff-pie-s{{ loop.index0 }}" role="tooltip">
+        <div class="fireflyer-pie-tooltip-head">{{ s.label }}</div>
+        <div class="fireflyer-pie-tooltip-row">
+          {%- if calc_name %}<span class="fireflyer-pie-tooltip-name">{{ calc_name }}</span>{% endif %}
+          <span class="fireflyer-pie-tooltip-val">{{ s.exact }}</span>
+          <span class="fireflyer-pie-tooltip-pct">{{ s.percent }}%</span>
+        </div>
+        {%- if calc_desc %}<div class="fireflyer-pie-tooltip-desc">{{ calc_desc }}</div>{% endif %}
       </div>
       {%- endfor %}
+      {%- if show_total and calc_desc %}
+      <div class="fireflyer-pie-total-tip" role="tooltip">
+        {%- if calc_name %}<span class="fireflyer-pie-total-tip-name">{{ calc_name }}</span>{% endif %}
+        <span class="fireflyer-pie-total-tip-desc">{{ calc_desc }}</span>
+        <span class="fireflyer-pie-total-tip-value">{{ total_raw }}</span>
+      </div>
+      {%- endif %}
     </div>
-    <ul class="fireflyer-legend">
-      {%- for s in segments %}
-      <li{% if s.is_active %} class="active"{% endif %}>
+    <div class="fireflyer-pie-legend-bar">
+      <ul class="fireflyer-legend{% if crossfilter %} fireflyer-legend-clickable{% endif %}">
+      {%- for s in legend %}
+      <li{% if s.is_active %} class="active"{% endif %}{% if crossfilter %} hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}' role="button" tabindex="0"{% endif %}>
         <span class="swatch" style="background:{{ s.color }};"></span>
         <span class="label">{{ s.label }}</span>
-        <span class="meta">{{ s.display }} · {{ s.percent }}%</span>
       </li>
       {%- endfor %}
-    </ul>
+      </ul>
+      {%- if legend_nav %}
+      <div class="fireflyer-pie-legend-pager">
+        <button type="button" class="fireflyer-pie-legend-step" title="Previous" aria-label="Previous legend page"{% if legend_nav.at_start %} disabled{% endif %} hx-post="{{ refresh.endpoint }}" hx-target="{{ refresh.target }}" hx-swap="outerHTML" hx-include="{{ refresh.include }}" hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "legend_page": "{{ legend_nav.prev }}"}'>&#9664;</button>
+        <span class="fireflyer-pie-legend-count">{{ legend_nav.label }}</span>
+        <button type="button" class="fireflyer-pie-legend-step" title="Next" aria-label="Next legend page"{% if legend_nav.at_end %} disabled{% endif %} hx-post="{{ refresh.endpoint }}" hx-target="{{ refresh.target }}" hx-swap="outerHTML" hx-include="{{ refresh.include }}" hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "legend_page": "{{ legend_nav.next }}"}'>&#9654;</button>
+      </div>
+      {%- endif %}
+    </div>
   </div>
 </article>

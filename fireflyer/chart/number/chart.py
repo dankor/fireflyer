@@ -4,8 +4,8 @@ from pathlib import Path
 import jinja2
 
 from fireflyer import filters as filters_mod
-from fireflyer import measures as measures_mod
-from fireflyer.params import DatasetParam, FilterListParam, MeasureParam, TextParam
+from fireflyer import calcs as calcs_mod
+from fireflyer.params import DatasetParam, FilterListParam, CalcParam, TextParam
 from fireflyer.scan import scan
 
 _DIR = Path(__file__).parent
@@ -20,57 +20,62 @@ _TEMPLATE = jinja2.Template(
 class Number:
     dataset: str
     title: str
-    # A measure key resolved against the dashboard's `measures:` block, or — for
-    # standalone use — an inline measure definition dict (None means row count).
+    # A calc key resolved against the dashboard's `calcs:` block, or — for
+    # standalone use — an inline calc definition dict (None means row count).
     # The scalar it reduces to fills the card; its `format` drives display.
-    measure: object = None
+    calc: object = None
     filters: list = field(default_factory=list)
 
     _resolve = None   # name -> (uri, storage_options); not a dataclass field
-    _measures = None  # MeasureSet for this chart's dataset; set by the dashboard
+    _calcs = None  # CalcSet for this chart's dataset; set by the dashboard
 
     # Editor modal schema — one Param per constructor kwarg, in display order.
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
-        MeasureParam("measure", "Measure"),
+        CalcParam("calc", "Calc"),
         FilterListParam("filters", "Filters"),
     ]
 
     def __post_init__(self) -> None:
         self.filters = filters_mod.normalize(self.filters)
 
-    def _resolve_measure(self):
-        """(MeasureSet, key). Inline dict / None builds a one-off set; a string
+    def _resolve_calc(self):
+        """(CalcSet, key). Inline dict / None builds a one-off set; a string
         key resolves against the dashboard-supplied set."""
-        if isinstance(self.measure, dict):
-            return measures_mod.single(self.measure)
-        if self.measure in (None, ""):
-            return measures_mod.single(None)
-        if self._measures is None:
+        if isinstance(self.calc, dict):
+            return calcs_mod.single(self.calc)
+        if self.calc in (None, ""):
+            return calcs_mod.single(None)
+        if self._calcs is None:
             raise ValueError(
-                f"measure {self.measure!r} needs a dashboard `measures:` block"
+                f"calc {self.calc!r} needs a dashboard `calcs:` block"
             )
-        return self._measures, self.measure
+        return self._calcs, self.calc
 
     def to_html(self, *, theme: str | None = None) -> str:
         """`theme` forces a palette (`"dark"`/`"light"`); omitted, the chart
         follows the viewer's OS preference (inherited from the dashboard root
         when nested)."""
-        lf = scan(self.dataset, self._resolve)
+        lf = scan(self.dataset, self._resolve, self._calcs)
         preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
         if preds:
             lf = lf.filter(*preds)
-        measures, key = self._resolve_measure()
-        value = measures.scalar(lf, key)
+        calcs, key = self._resolve_calc()
+        value = calcs.scalar(lf, key)
+        calc = calcs.get(key)
 
-        # `exact` is the un-formatted, full-precision figure, surfaced as a native
-        # hover tooltip so a shaped display value can still reveal its exact one.
+        # Hover tooltip: when the calc has a `description`, a small card shows
+        # the calc name, its description, and the exact (unformatted) value —
+        # what the number means + its precise figure. Without one, a plain
+        # `title` keeps the exact-value hover.
         return _TEMPLATE.render(
             css=_CSS,
             title=self.title,
-            value=measures.fmt(key, value),
-            exact=measures_mod.format_value(value),
+            value=calcs.fmt(key, value),
+            exact=calcs_mod.exact_value(value),
+            calc_name=calc.name,
+            description=calc.description,
             ff_theme=theme if theme in ("dark", "light") else "",
         )
 

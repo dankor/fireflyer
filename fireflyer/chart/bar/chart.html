@@ -4,35 +4,72 @@
 .fireflyer-bar-canvas:has(svg rect[data-i="{{ s.i }}"]:hover) .fireflyer-bar-tooltip[data-i="{{ s.i }}"] { opacity: 1; }
 {%- endfor %}
 </style>
-<article class="fireflyer-chart fireflyer-bar{% if has_selection %} has-selection{% endif %}"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
+<article class="fireflyer-chart fireflyer-bar{% if crossfilter %} fireflyer-bar-embedded{% endif %}{% if sideways %} fireflyer-bar-sideways{% endif %}{% if scrolls %} fireflyer-bar-scroll{% endif %}{% if has_selection %} has-selection{% endif %}"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <div class="fireflyer-title">{{ title }}</div>
   <div class="fireflyer-bar-layout">
-    <div class="fireflyer-bar-canvas">
-      <svg viewBox="0 0 {{ chart_w }} {{ chart_h }}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
-        <line x1="{{ plot_x }}" y1="{{ baseline_y }}" x2="{{ plot_right }}" y2="{{ baseline_y }}" class="fireflyer-bar-axis" stroke-width="1" />
-        {%- for b in bars %}
-        {%- for s in b.segments %}
-        <rect x="{{ '%.2f'|format(s.x) }}" y="{{ '%.2f'|format(s.y) }}" width="{{ '%.2f'|format(s.width) }}" height="{{ '%.2f'|format(s.height) }}" fill="{{ s.color }}" data-i="{{ s.i }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ b.label }} · {{ s.label }}: {{ s.count }}" />
+    <div class="fireflyer-bar-plot">
+      <div class="fireflyer-bar-canvas">
+        <svg viewBox="0 0 {{ chart_w }} {{ chart_h }}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="{% if sideways %}xMinYMid{% else %}xMidYMid{% endif %} meet">
+          <line x1="{{ axis.x1 }}" y1="{{ axis.y1 }}" x2="{{ axis.x2 }}" y2="{{ axis.y2 }}" class="fireflyer-bar-axis" stroke-width="1" />
+          {%- for b in bars %}
+          {%- for s in b.segments %}
+          <rect x="{{ '%.2f'|format(s.x) }}" y="{{ '%.2f'|format(s.y) }}" width="{{ '%.2f'|format(s.width) }}" height="{{ '%.2f'|format(s.height) }}" fill="{{ s.color }}" data-i="{{ s.i }}"{% if crossfilter %} data-active="{{ '1' if s.is_active else '0' }}" hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ s.click_token }}"}'{% endif %} aria-label="{{ b.label }}{% if s.label %} · {{ s.label }}{% endif %}: {{ s.count }}" />
+          {%- endfor %}
+          <text x="{{ '%.2f'|format(b.value_x) }}" y="{{ '%.2f'|format(b.value_y) }}" text-anchor="{{ b.value_anchor }}" font-size="11" class="fireflyer-bar-value">{{ b.total }}</text>
+          <text x="{{ '%.2f'|format(b.label_x) }}" y="{{ '%.2f'|format(b.label_y) }}" text-anchor="{{ b.label_anchor }}" font-size="10"{% if b.label_rotate %} transform="rotate({{ b.label_rotate }} {{ '%.2f'|format(b.label_x) }} {{ '%.2f'|format(b.label_y) }})"{% endif %} class="fireflyer-bar-label">{{ b.label }}</text>
+          {%- endfor %}
+          {%- for s in all_segments %}
+          <foreignObject x="{{ '%.2f'|format(s.x + s.width / 2) }}" y="{{ '%.2f'|format(s.y) }}" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-bar-tip-anchor" style="anchor-name: --ff-bar-s{{ s.i }}"></div></foreignObject>
+          {%- endfor %}
+        </svg>
+        {%- for s in all_segments %}
+        <div class="fireflyer-bar-tooltip" data-i="{{ s.i }}" style="--ff-tip-x: {{ s.tip_x }}%; --ff-tip-y: {{ s.tip_y }}%; position-anchor: --ff-bar-s{{ s.i }}" role="tooltip">
+          <div class="fireflyer-bar-tooltip-head">{{ s.x_label }}</div>
+          <div class="fireflyer-bar-tooltip-row">
+            {%- if s.label or calc_name %}<span class="fireflyer-bar-tooltip-name">{{ s.label or calc_name }}</span>{% endif %}
+            <span class="fireflyer-bar-tooltip-val">{{ s.exact }}</span>
+          </div>
+          {%- if calc_desc %}<div class="fireflyer-bar-tooltip-desc">{{ calc_desc }}</div>{% endif %}
+        </div>
         {%- endfor %}
-        <text x="{{ '%.2f'|format(b.center_x) }}" y="{{ '%.2f'|format(b.value_y) }}" text-anchor="middle" font-size="11" class="fireflyer-bar-value">{{ b.total }}</text>
-        <text x="{{ '%.2f'|format(b.center_x) }}" y="{{ '%.2f'|format(b.label_y) }}" text-anchor="end" font-size="10" transform="rotate(-30 {{ '%.2f'|format(b.center_x) }} {{ '%.2f'|format(b.label_y) }})" class="fireflyer-bar-label">{{ b.label }}</text>
-        {%- endfor %}
-      </svg>
-      {%- for s in all_segments %}
-      <div class="fireflyer-bar-tooltip" data-i="{{ s.i }}" role="tooltip">
-        <span class="fireflyer-bar-tooltip-label">{{ s.x_label }} · {{ s.label }}</span>
-        <span class="fireflyer-bar-tooltip-meta">{{ s.count }}</span>
       </div>
-      {%- endfor %}
+      {%- if scale %}
+      <div class="fireflyer-bar-scale" role="group" aria-label="Timeline position">
+        <button type="button" class="fireflyer-bar-scale-step" title="Earlier" aria-label="Earlier"{% if scale.at_start %} disabled{% endif %} hx-post="{{ refresh.endpoint }}" hx-target="{{ refresh.target }}" hx-swap="outerHTML" hx-include="{{ refresh.include }}" hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "set_grain": "{{ scale.prev }}"}'>&lsaquo;</button>
+        <span class="fireflyer-bar-scale-track">
+          {%- for s in scale.segments %}
+          <button type="button" class="fireflyer-bar-scale-seg{% if s.is_current %} is-current{% endif %}" aria-label="{{ s.tip }}" hx-post="{{ refresh.endpoint }}" hx-target="{{ refresh.target }}" hx-swap="outerHTML" hx-include="{{ refresh.include }}" hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "set_grain": "{{ s.token }}"}'><span class="fireflyer-bar-scale-tip">{{ s.tip }}</span></button>
+          {%- endfor %}
+        </span>
+        <button type="button" class="fireflyer-bar-scale-step" title="Later" aria-label="Later"{% if scale.at_end %} disabled{% endif %} hx-post="{{ refresh.endpoint }}" hx-target="{{ refresh.target }}" hx-swap="outerHTML" hx-include="{{ refresh.include }}" hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "set_grain": "{{ scale.next }}"}'>&rsaquo;</button>
+      </div>
+      {%- endif %}
+      {%- if grain_options %}
+      <div class="fireflyer-bar-grain" role="group" aria-label="Time grain">
+        {%- for g in grain_options %}
+        <button type="button" class="fireflyer-bar-grain-seg{% if g.is_active %} is-active{% endif %}" title="{{ g.title }}" aria-pressed="{{ 'true' if g.is_active else 'false' }}" hx-post="{{ refresh.endpoint }}" hx-target="{{ refresh.target }}" hx-swap="outerHTML" hx-include="{{ refresh.include }}" hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "set_grain": "{{ g.token }}"}'>{{ g.abbr }}</button>
+        {%- endfor %}
+      </div>
+      {%- endif %}
     </div>
-    <ul class="fireflyer-legend">
-      {%- for l in legend %}
-      <li{% if l.is_active %} class="active"{% endif %}>
-        <span class="swatch" style="background:{{ l.color }};"></span>
-        <span class="label">{{ l.label }}</span>
-        <span class="meta">{{ l.total }}</span>
-      </li>
-      {%- endfor %}
-    </ul>
+    {%- if legend %}
+    <div class="fireflyer-bar-legend-bar">
+      <ul class="fireflyer-legend{% if crossfilter %} fireflyer-legend-clickable{% endif %}">
+        {%- for l in legend %}
+        <li{% if l.is_active %} class="active"{% endif %}{% if crossfilter %} hx-post="{{ crossfilter.endpoint }}" hx-target="{{ crossfilter.target }}" hx-swap="outerHTML" hx-include="{{ crossfilter.include }}" hx-vals='{"toggle": "{{ l.click_token }}"}' role="button" tabindex="0"{% endif %}>
+          <span class="swatch" style="background:{{ l.color }};"></span>
+          <span class="label">{{ l.label }}</span>
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- if legend_nav %}
+      <div class="fireflyer-bar-legend-pager">
+        <button type="button" class="fireflyer-bar-legend-step" title="Previous" aria-label="Previous legend page"{% if legend_nav.at_start %} disabled{% endif %} hx-post="{{ refresh.endpoint }}" hx-target="{{ refresh.target }}" hx-swap="outerHTML" hx-include="{{ refresh.include }}" hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "legend_page": "{{ legend_nav.prev }}"}'>&#9664;</button>
+        <span class="fireflyer-bar-legend-count">{{ legend_nav.label }}</span>
+        <button type="button" class="fireflyer-bar-legend-step" title="Next" aria-label="Next legend page"{% if legend_nav.at_end %} disabled{% endif %} hx-post="{{ refresh.endpoint }}" hx-target="{{ refresh.target }}" hx-swap="outerHTML" hx-include="{{ refresh.include }}" hx-vals='{"cid": "{{ refresh.cid }}", "col": "{{ refresh.col }}", "row": "{{ refresh.row }}", "legend_page": "{{ legend_nav.next }}"}'>&#9654;</button>
+      </div>
+      {%- endif %}
+    </div>
+    {%- endif %}
   </div>
 </article>

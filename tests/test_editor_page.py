@@ -6,6 +6,8 @@ the greyed preview swallow clicks and broke the row/column resize handles."""
 
 import re
 
+from pathlib import Path
+
 from fireflyer.web.app import DEFAULT_YAML, _theme_switch, render_editor_page
 
 
@@ -46,3 +48,38 @@ def test_row_resize_rewrite_is_yaml_style_agnostic():
     assert "function setRowUnits" in page
     assert "rowBracketSpan" not in page
     assert "lastIndexOf('['" not in page
+
+
+def test_default_dashboard_parses_and_every_chart_renders():
+    """The starter dashboard doubles as the quick guide — it's the first thing a
+    new user sees and the example the AI assistant is shown. A YAML typo or a
+    stale calc key in it is a broken first impression, and nothing else would
+    catch it: the seed swallows exceptions so startup can't crash.
+
+    Rendered against the **bundled sample** it's written for (`files/orders`),
+    not the tiny test fixture — the two have different columns on purpose, and
+    the guide is only true of the one the app actually seeds.
+    """
+    import fireflyer as ff
+
+    sample = Path(__file__).resolve().parent.parent / "files" / "orders.parquet"
+    assert sample.exists(), "the bundled sample the starter dashboard needs"
+    dashboard = ff.Dashboard.from_yaml(
+        DEFAULT_YAML, datasets=lambda name: (str(sample), None)
+    )
+    assert dashboard.name
+    assert dashboard.tabs, "the guide demonstrates tabs"
+
+    for cid in dashboard.chart_configs:
+        html = dashboard.render_cell(cid, cf_tokens=[])
+        assert 'class="error"' not in html, f"{cid} failed to render"
+        assert "<article" in html, cid
+
+
+def test_default_dashboard_is_commented():
+    """It's a guide, not just a dashboard — the comments are the content, and a
+    reformat that drops them defeats the point."""
+    comments = [l for l in DEFAULT_YAML.splitlines() if l.strip().startswith("#")]
+    assert len(comments) > 40, len(comments)
+    for key in ("calcs", "charts", "layout"):
+        assert f"{key}:" in DEFAULT_YAML

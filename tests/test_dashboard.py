@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import fireflyer as ff
@@ -26,7 +28,7 @@ charts:
     title: All Orders
     pagination: 10
 
-dashboard:
+layout:
   - Overview
   - ["@40", "orders_table:60", "status_pie:40"]
   - "-"
@@ -178,7 +180,7 @@ charts:
   status: {{type: pie, dataset: {orders_parquet}, title: Status, column: status}}
   new: {{type: table, dataset: {orders_parquet}, title: New}}
   kpi: {{type: number, dataset: {orders_parquet}, title: KPI}}
-dashboard:
+layout:
 {dashboard_block}
 """
 
@@ -279,7 +281,7 @@ charts:
       - column: nonexistent
         op: in
         values: [x]
-dashboard:
+layout:
   - ["@20", "t:100"]
 """
     dashboard = ff.Dashboard.from_yaml(yaml)
@@ -299,7 +301,7 @@ charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: table, dataset: {orders_parquet}, title: B}}
   c: {{type: table, dataset: {orders_parquet}, title: C}}
-dashboard:
+layout:
   - ["@20", "a:1", "b:1", "c:1"]
 """
     html = ff.Dashboard.from_yaml(yaml).to_html()
@@ -315,7 +317,7 @@ name: Test dashboard
 charts:
   a: {{type: table, dataset: {orders_parquet}, title: A}}
   b: {{type: table, dataset: {orders_parquet}, title: B}}
-dashboard:
+layout:
   - ["@20", "a:{a}", "b:{b}"]
 """
         html = ff.Dashboard.from_yaml(yaml).to_html()
@@ -332,7 +334,7 @@ def test_dashboard_single_cell_fills_row(orders_parquet):
 name: Test dashboard
 charts:
   t: {{type: table, dataset: {orders_parquet}, title: T}}
-dashboard:
+layout:
   - ["@20", "t:60"]
 """
     html = ff.Dashboard.from_yaml(yaml).to_html()
@@ -366,7 +368,7 @@ def test_dashboard_rejects_unknown_chart(orders_parquet):
 name: Test dashboard
 charts:
   t: {{type: table, dataset: {orders_parquet}, title: T}}
-dashboard:
+layout:
   - ["@20", "nope:100"]
 """
     with pytest.raises(ff.DashboardError, match="unknown chart 'nope'"):
@@ -394,7 +396,7 @@ def test_dashboard_rejects_missing_dataset():
 name: Test dashboard
 charts:
   t: {type: table, title: T}
-dashboard: []
+layout: []
 """
     with pytest.raises(ff.DashboardError, match="missing `dataset`"):
         ff.Dashboard.from_yaml(yaml)
@@ -405,7 +407,7 @@ def test_dashboard_rejects_unknown_chart_type(orders_parquet):
 name: Test dashboard
 charts:
   t: {{type: histogram, dataset: {orders_parquet}, title: T}}
-dashboard: []
+layout: []
 """
     with pytest.raises(ff.DashboardError, match="unknown type 'histogram'"):
         ff.Dashboard.from_yaml(yaml)
@@ -417,7 +419,7 @@ name: Test dashboard
 charts:
   t: {{type: table, dataset: {orders_parquet}, title: T}}
 """
-    with pytest.raises(ff.DashboardError, match="missing top-level key: 'dashboard'"):
+    with pytest.raises(ff.DashboardError, match="missing top-level key: 'layout'"):
         ff.Dashboard.from_yaml(yaml)
 
 
@@ -431,7 +433,7 @@ def test_dataset_names_and_rename_ref():
 charts:
   a: {type: table, dataset: orders, title: A}
   b: {type: pie, dataset: sales, title: B, column: x}
-dashboard:
+layout:
   - ["@20", "a", "b"]
 """
     assert ff.Dashboard.dataset_names(yaml) == {"orders", "sales"}
@@ -449,9 +451,162 @@ def test_rename_ref_respects_word_boundary():
 charts:
   a: {type: table, dataset: orders, title: A}
   b: {type: table, dataset: orders_archive, title: B}
-dashboard:
+layout:
   - ["@20", "a", "b"]
 """
     out = rename_dataset_ref(yaml, "orders", "sales")
     assert "dataset: sales" in out
     assert "dataset: orders_archive" in out   # not renamed to sales_archive
+
+
+def test_set_grain_token_replaces_per_chart():
+    """One pick per chart: setting again replaces, and an empty grain clears it
+    back to automatic without disturbing other charts."""
+    from fireflyer.dashboard import set_grain_token, view_for
+
+    tokens = set_grain_token([], "by_day|month")
+    assert tokens == ["by_day|month"]
+    tokens = set_grain_token(tokens, "by_day|year")
+    assert tokens == ["by_day|year"]
+    tokens = set_grain_token(tokens, "other|day")
+    assert sorted(tokens) == ["by_day|year", "other|day"]
+
+    tokens = set_grain_token(tokens, "by_day|")     # back to auto
+    assert tokens == ["other|day"]
+    assert view_for(tokens, "other") == ("day", None)
+    assert view_for(tokens, "by_day") == ("", None)
+    assert view_for(tokens, "absent") == ("", None)
+
+    # The same token carries the window offset alongside the grain, and either
+    # part can be set without the other.
+    tokens = set_grain_token(tokens, "by_day|month|120")
+    assert view_for(tokens, "by_day") == ("month", 120)
+    tokens = set_grain_token(tokens, "by_day||60")      # move window, grain auto
+    assert view_for(tokens, "by_day") == ("", 60)
+
+
+def test_grain_state_rides_back_out_of_band():
+    """A cell-scoped re-render doesn't touch the page-level hidden inputs, so the
+    grain state it just changed is written back as an out-of-band swap —
+    otherwise the next request would carry the old token and undo the change."""
+    from fireflyer.dashboard import GRAIN_STATE_ID, grain_state_html
+
+    html = grain_state_html(["by_day|month", "other|day|60"])
+    assert f'id="{GRAIN_STATE_ID}"' in html
+    assert 'hx-swap-oob="true"' in html
+    assert html.count('name="grain"') == 2
+    assert 'value="by_day|month"' in html
+
+    # Quoting is escaped, not concatenated raw.
+    assert "&quot;" in grain_state_html(['a|b"c'])
+
+
+def test_between_filter_renders_readably_in_the_indicator(orders_parquet):
+    """A `between` row is not `in`/`not in` — labelling it "not in" was actively
+    wrong, and one nowrap line truncated away the end of the range."""
+    yaml = f"""
+name: Between
+charts:
+  t: {{type: table, dataset: {orders_parquet}, title: T,
+      filters: [{{column: day, op: between, values: ['2026-06-01', '2026-06-03']}}]}}
+layout:
+  - ["@20", "t"]
+"""
+    html = ff.Dashboard.from_yaml(yaml).to_html()
+    row = re.search(r'<div class="fireflyer-filter-row">(.*?)</div>\s*</div>',
+                    html, re.S).group(1)
+    text = " ".join(re.sub(r"<[^>]+>", " ", row).split())
+    assert text == "day between 2026-06-01\u20132026-06-03"
+    assert "not in" not in text
+
+
+def test_column_calc_filter_counts_as_applied(csv_to_parquet):
+    """The indicator resolves columns against the scan *with* calcs attached: a
+    filter naming a column calc really does narrow the chart, so reporting it as
+    unapplied made the indicator contradict the data."""
+    import fireflyer as ff_mod
+
+    csv = "day,status\n2026-01-01,paid\n2026-02-01,paid\n"
+    parquet = csv_to_parquet(csv, "calc_filter")
+    yaml = f"""
+name: Calc filter
+calcs:
+  {parquet}:
+    order_day: {{formula: 'str2dt(day, YYYY-MM-DD)'}}
+charts:
+  t: {{type: table, dataset: {parquet}, title: T,
+      filters: [{{column: order_day, op: between,
+                 values: ['2026-01-01', '2026-02-01']}}]}}
+layout:
+  - ["@20", "t"]
+"""
+    html = ff_mod.Dashboard.from_yaml(yaml).to_html()
+    assert '<span class="count">1</span>' in html      # not 0
+    assert "order_day" in html
+
+
+def test_indicator_counts_match_across_emitters_and_recipients(orders_parquet):
+    """Every badge shows the same number for the same dashboard state, red or
+    blue. A chart is exempt from its own crossfilter, so an emitter's applied
+    list is short by exactly what it emits — counting one *or* the other made
+    the red badges read lower than their blue neighbours."""
+    yaml = f"""
+name: Counts
+charts:
+  pie1: {{type: pie, dataset: {orders_parquet}, title: A, column: status}}
+  pie2: {{type: pie, dataset: {orders_parquet}, title: B, column: day}}
+  tbl:  {{type: table, dataset: {orders_parquet}, title: C}}
+layout:
+  - ["@30", "pie1", "pie2", "tbl"]
+"""
+    dash = ff.Dashboard.from_yaml(yaml)
+
+    def counts(tokens):
+        html = dash.to_html(cf_tokens=tokens)
+        return re.findall(r'<span class="count">(\d+)</span>', html)
+
+    assert counts([]) == ["0", "0", "0"]
+    assert counts(["pie1|status=paid"]) == ["1", "1", "1"]          # one is red
+    assert counts(["pie1|status=paid", "pie2|day=2026-06-01"]) == ["2", "2", "2"]
+
+
+def test_emitter_tooltip_lists_both_its_own_and_incoming_filters(orders_parquet):
+    """An emitter that's also downstream of another chart shows both sections,
+    so the list adds up to the number on the badge."""
+    yaml = f"""
+name: Both
+charts:
+  pie1: {{type: pie, dataset: {orders_parquet}, title: A, column: status}}
+  pie2: {{type: pie, dataset: {orders_parquet}, title: B, column: day}}
+layout:
+  - ["@30", "pie1", "pie2"]
+"""
+    html = ff.Dashboard.from_yaml(yaml).to_html(
+        cf_tokens=["pie1|status=paid", "pie2|day=2026-06-01"]
+    )
+    # pie1's tooltip: emits status, receives day.
+    tip = re.search(
+        r'<div class="fireflyer-filter-tooltip" role="tooltip">(.*?)</div>\s*</div>',
+        html, re.S,
+    ).group(1)
+    assert "Filtering others by" in tip
+    assert "Active filters" in tip
+    assert tip.count('class="fireflyer-filter-row"') == 2
+
+
+def test_open_tooltip_is_lifted_above_other_badges(orders_parquet):
+    """A tooltip lives inside its badge's stacking context, so it could only be
+    ordered against that badge's siblings — another cell's badge at the same
+    z-index drew over it. The badge is raised while the tooltip is open."""
+    html = ff.Dashboard.from_yaml(_smart_yaml(orders_parquet)).to_html()
+    rule = re.search(
+        r"\.fireflyer-filter-indicator:hover,\s*"
+        r"\.fireflyer-filter-indicator:focus-within \{([^}]*)\}",
+        html,
+    )
+    assert rule and "z-index" in rule.group(1)
+    lifted = int(re.search(r"z-index:\s*(\d+)", rule.group(1)).group(1))
+    base = int(re.search(
+        r"\.fireflyer-filter-indicator \{[^}]*z-index:\s*(\d+)", html, re.S
+    ).group(1))
+    assert lifted > base

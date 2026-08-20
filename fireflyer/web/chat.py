@@ -29,8 +29,8 @@ When the user asks for a change to the datasets, charts, or layout, call the `up
 
 # Dashboard YAML format
 
-A dashboard has these top-level keys: `name`, `charts`, `dashboard`, and an
-OPTIONAL `measures` block (see Measures below). There is NO `datasets:` block —
+A dashboard has these top-level keys: `name`, `charts`, `layout`, and an
+OPTIONAL `calcs` block (see Calcs below). There is NO `datasets:` block —
 datasets are managed separately and referenced by name (see Datasets below).
 `name` is required — a short human-readable title for the whole dashboard.
 Always include it and preserve the existing one unless asked to rename.
@@ -45,7 +45,7 @@ charts:
     title: <string>
     # ...type-specific keys below...
 
-dashboard:
+layout:
   - <layout item>
   - <layout item>
 ```
@@ -55,42 +55,48 @@ dashboard:
 Datasets are managed outside the dashboard file — you do NOT declare them. The
 available datasets and their column schemas (each column's name and type, no
 data) are listed in every message. Reference one from a chart with
-`dataset: <name>`, and build measures/filters from that dataset's columns. Only
+`dataset: <name>`, and build calcs/filters from that dataset's columns. Only
 use datasets and columns that appear in the provided list — never invent a
 dataset, file path, or column name. If the user asks for something that needs a
 column or dataset that isn't listed, say so instead of guessing.
 
 ## Chart types and their keys
 
-Charts no longer carry an aggregation — they reference a named **measure** (see Measures below). A chart with no `measure` defaults to a row count.
+Charts no longer carry an aggregation — they reference a named **calc** (see Calcs below). A chart with no `calc` defaults to a row count.
 
-- table: `search` (bool, default true), `pagination` (rows per page, int; 0 = show all). Shows the first 1000 rows. No measure — it lists raw rows.
-- pie: `column` (the category column to group by), `measure` (measure key; the slice size per category). The centre total is the measure re-aggregated over the whole dataset.
-- bar: `x` (column for bar groups), `y` (column to stack/break down by), `measure` (segment size per x,y). Use an additive measure (count/sum) so stacking is meaningful.
-- map: `lat`, `lng` (column names), `grid_size` (hex size, int, default 20), `zoom` (int or omit for auto-fit), `measure` (per-hex weight — must be a `count` or `sum` measure). Plots points as a hex heatmap.
-- number: `measure` (the scalar KPI to show), `title`. The value is formatted by the measure's own `format`.
+- table: `columns` (list of columns), `measures` (list of calc keys), `sort` (list of keys, `-` = descending, `+`/bare = ascending, most significant first), `search` (bool, default true), `pagination` (rows per page, int; 0 = show all).
+  With no `measures` it lists raw rows (first 1000) and `columns` just picks which to show. With `measures` it **groups by** `columns` and shows one aggregated column per measure — `columns: [status]`, `measures: [revenue, order_count]`, `sort: ['-revenue']`. `measures` with no `columns` gives one grand-total row. A measure must be a calc key naming a *value*; a column calc is a dimension and belongs in `columns`. Note the table takes `measures` (a list), while every other chart takes a single `calc`.
+- pie: `column` (the category column to group by), `calc` (calc key; the slice size per category). The centre total is the calc re-aggregated over the whole dataset.
+- bar: `x` (column for bar groups), `y` (OPTIONAL column to stack/break down by — omit it for plain one-bar-per-category bars with no legend), `calc` (segment size per x,y), `top` (int, keep only the N biggest bars; 0 = all), `direction` (`horizontal` default = categories left-to-right with bars growing up, or `vertical` = categories top-to-bottom with bars growing rightward). Use an additive calc (count/sum) so stacking is meaningful.
+- map: `lat`, `lng` (column names), `grid_size` (hex size, int, default 20), `zoom` (int or omit for auto-fit), `calc` (per-hex weight — must be a `count` or `sum` calc). Plots points as a hex heatmap.
+- number: `calc` (the scalar KPI to show), `title`. The value is formatted by the calc's own `format`.
 
-## Measures
+## Calcs
 
-`measures` is an OPTIONAL top-level block, **keyed by dataset name**, then by a measure key unique within that dataset. A chart's `measure:` resolves within its own `dataset:`; a measure may only reference other measures in the same dataset.
+`calcs` is an OPTIONAL top-level block, **keyed by dataset name**, then by a calc key unique within that dataset. A chart's `calc:` resolves within its own `dataset:`; a calc may only reference other calcs in the same dataset.
 
-A measure is one of two kinds, told apart by whether `agg` is present:
+A calc is one of three kinds. NOTHING in the YAML names the kind: `agg` means aggregate, and a bare `formula` is sorted into derived vs column by WHAT IT REFERENCES.
 - Aggregate: `agg` (one of `count`, `sum`, `dcount`, `min`, `max`, `avg`) + a row-level `formula` (an expression over COLUMNS, e.g. `amount` or `price * qty`). `count` needs no formula. Optional `filters` (same shape as chart filters) pre-narrow the rows — this is how you express conditional aggregation like "count of won deals".
-- Derived: a `formula` over other MEASURE keys (no `agg`), e.g. `revenue / orders_count`. Computed per group, so it's a true per-group ratio. Its leaves must be aggregate measures (no derived-of-derived).
+- Derived: a `formula` over other CALC keys (no `agg`), e.g. `revenue / orders_count`. Computed per group, so it's a true per-group ratio. Its leaves must be aggregate calcs (no derived-of-derived).
+- Column: a row-level `formula` (no `agg`, no `filters`) over DATASET COLUMNS rather than sibling calcs. This is a calculated COLUMN, not a value — a DIMENSION you use wherever a column name goes (a chart's `x`, `y`, `column`, a filter, another calc's formula), never as a chart's `calc:`. Column calcs are applied in declaration order, so a later one may use an earlier one's key.
+  A column calc may also carry `name` and `description` to **relabel** a column wherever it is displayed, without renaming it: `status: {name: Order status, description: Where the order got to, formula: status}`. A self-reference in a formula means the DATASET COLUMN (a calc cannot reference itself), so this overlays the raw column. The key stays what `columns:`, filters and charts refer to; only the displayed label changes.
 
-Both formula kinds allow `+ - * /`, parentheses and numeric literals only.
+So a no-`agg` `formula` is derived when every name in it is another calc that produces a value, and a calculated column when it names a dataset column (or calls `str2dt()`, or uses another column calc). Write neither kind's name down — just the formula.
 
-Optional per-measure metadata: `name` (display label), `description`, `format`. A `format` token is `<prefix><0,.pattern>[a]<suffix>` — the `0 , .` run is the number pattern (decimals from digits after `.`, thousands if a `,` is in the integer part), text around it is literal, and an optional `a` after the pattern abbreviates big numbers with a `k`/`m`/`b`/`t` unit. Examples: `0.00$` → `1234.50$`, `$0,0` → `$1,234`, `0.0a $` → `23.4k $`, `0.0%` → `25.0%`. There is NO percentage auto-scaling — for a `0.25` ratio shown as `25%`, multiply in the formula (`* 100`) and use `0.0%`.
+All three formula kinds allow `+ - * /`, parentheses and numeric literals, plus ONE function: `str2dt(<column>, <pattern>)`. `str2dt()` turns a text or integer column into a real date so it can go on an axis. The pattern is written the way people write dates — `YYYY`, `YY`, `MM` (month), `DD`, `HH`, `mm` (minute), `ss`, `Z` (UTC offset, with or without the colon), with any other characters as literal separators — e.g. `str2dt(order_date, YYYYMMDD)`, `str2dt(created_at, YYYY-MM-DD HH:mm:ss)`, `str2dt(d, DD/MM/YYYY)`, `str2dt(ts, YYYY-MM-DD HH:mm:ssZ)` for `2024-06-26 17:14:03+03:00`, `str2dt(ts, YYYY-MM-DDTHH:mm:ssZ)` for the ISO form. A pattern with a time part (including `Z`) yields a datetime, otherwise a date; an offset is normalized to UTC. `ss` accepts optional fractional seconds and `Z` accepts `+03:00`/`+0300`/bare `Z`, so one pattern covers the usual export variants. Values that don't match the pattern become null and collect into a single `(no date)` bar — if the user reports one of those, their pattern doesn't fit every row. Do NOT quote the pattern itself. DO quote the whole formula whenever the calc is written inline as `{...}` — `{formula: 'str2dt(day, YYYYMMDD)'}` — because str2dt()'s comma would otherwise split the YAML flow mapping. In block style (`formula: str2dt(day, YYYYMMDD)` on its own line) no quoting is needed. A bar chart with a date `x` is ordered chronologically instead of by size, and picks its own time grain (day/week/month/quarter/year — day is the finest) so the bar count stays readable, and windows a long axis to the most recent bars with a scale to move it — there is NO grain/scale key to set, and you must not invent one.
+
+Optional per-calc metadata: `name` (display label), `description`, `format`. A `format` token is `<prefix><0,.pattern>[a]<suffix>` — the `0 , .` run is the number pattern (decimals from digits after `.`, thousands if a `,` is in the integer part), text around it is literal, and an optional `a` after the pattern abbreviates big numbers with a `k`/`m`/`b`/`t` unit (decimals are the max shown — truncated, trailing zeros dropped, so `0.0a` gives 1971 → `1.9k`, 2000 → `2k`). Examples: `0.00$` → `1234.50$`, `$0,0` → `$1,234`, `0.0a $` → `23.4k $`, `0.0%` → `25.0%`. There is NO percentage auto-scaling — for a `0.25` ratio shown as `25%`, multiply in the formula (`* 100`) and use `0.0%`.
 
 ```
-measures:
+calcs:
   orders:                              # dataset name
     revenue: {name: Revenue, agg: sum, formula: amount, format: '0.00$'}
     orders_count: {agg: count}
     avg_order_value: {formula: revenue / orders_count, format: '0.00$'}
+    order_day: {formula: 'str2dt(order_date, YYYYMMDD)'}   # names a column ⇒ calculated column
 ```
 
-Every chart also accepts an optional `filters` list. Each filter is `{column, op, values}` where `op` is `in` or `ni` (not-in), e.g.
+Every chart also accepts an optional `filters` list. Each filter is `{column, op, values}` where `op` is `in`, `ni` (not-in) or `between`. `between` takes exactly two values (low, high) and is half-open — `low <= v < high`. Example:
 ```
 filters:
   - column: status
@@ -98,7 +104,7 @@ filters:
     values: [open, pending]
 ```
 
-## Layout DSL (the `dashboard` list)
+## Layout DSL (the `layout` list)
 
 Each item is one of:
 - Row: a YAML array like `["@40", "orders:3", "status:2"]`. The first element is the row height `"@<units>"` (1 unit = 8px). The rest are widget tokens `"<chart_id>"` or `"<chart_id>:<width>"` — the width is optional.
@@ -158,7 +164,7 @@ def _get_client() -> anthropic.Anthropic:
 
 def _datasets_block(datasets) -> str:
     """A schema-only listing (column name:type, no data) of the datasets the
-    dashboard can reference — so the model builds charts/measures from real
+    dashboard can reference — so the model builds charts/calcs from real
     columns instead of guessing. `datasets` is a list of
     `{"name": str, "columns": [{"name": str, "dtype": str}, ...]}`."""
     if not datasets:
@@ -191,7 +197,7 @@ def run_chat(
     """Run one assistant turn.
 
     `datasets` is the schema-only listing of available datasets (see
-    `_datasets_block`) so the model can build charts and measures from real
+    `_datasets_block`) so the model can build charts and calcs from real
     columns. Returns `{"reply": str, "yaml": str | None}`; `yaml` is the
     validated new document when the model proposed a (parseable) change.
     """

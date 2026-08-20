@@ -87,6 +87,16 @@
 .fireflyer-table {
   display: flex;
   flex-direction: column;
+  /* Distance from a header to its tooltip. */
+  --ff-tip-gap: 8px;
+  /* How wide a header label may get before it wraps. Two lines of this is the
+     budget; past that it ellipses and the tooltip carries the full name. In
+     `ch` so it tracks the font, and deliberately narrow — a header should not be
+     what makes a column wide. */
+  --ff-header-max: 16ch;
+  /* Scoped so one table's column anchors can't bind another's cards — two
+     tables on a dashboard both number their columns from zero. */
+  anchor-scope: all;
 }
 /* Scroll the data area when there are more rows than fit; title, search, and
    pagination stay fixed at the top/bottom of the card. min-height: 0 is required
@@ -143,7 +153,23 @@
   padding: 8px 12px;
   text-align: left;
   border-bottom: 1px solid var(--ff-border);
-  white-space: nowrap;
+}
+/* Headers are the main thing forcing a column wider than its data: they're
+   uppercased, and `nowrap` made a long calc name reserve a whole line of width.
+   The label wraps to at most two lines and ellipses past that — the tooltip
+   carries the full name, so nothing is lost. `-webkit-box` has to sit on an
+   inner span: a header cell is a table-cell, and changing its `display` would
+   drop it out of the table layout. */
+.fireflyer-table-th-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  /* A single long token (`order_day_bucketed`) has no space to break at, so
+     allow a mid-word break rather than letting it set the column width. */
+  overflow-wrap: anywhere;
+  max-width: var(--ff-header-max);
 }
 .fireflyer-table tbody td {
   padding: 7px 12px;
@@ -152,6 +178,24 @@
 }
 .fireflyer-table tbody tr:nth-child(even) { background: var(--ff-stripe); }
 .fireflyer-table tbody tr:hover { background: var(--ff-hover); }
+/* Inside a dashboard a row click crossfilters on its whole dimension
+   combination, so a clickable row needs the affordance — and the same
+   selected/unselected treatment the pie and bar use, so one glance says what is
+   filtering what. */
+.fireflyer-table tbody tr[hx-post] { cursor: pointer; }
+.fireflyer-table tbody tr[hx-post]:focus-visible {
+  outline: 2px solid var(--ff-accent);
+  outline-offset: -2px;
+}
+.fireflyer-table.has-selection tbody tr:not(.active) { opacity: 0.45; }
+.fireflyer-table tbody tr.active,
+.fireflyer-table tbody tr.active:nth-child(even) {
+  background: color-mix(in srgb, var(--ff-accent) 16%, transparent);
+}
+/* A left edge marks the selected rows even where the tint is subtle. */
+.fireflyer-table tbody tr.active td:first-child {
+  box-shadow: inset 2px 0 0 var(--ff-accent);
+}
 .fireflyer-table tbody tr:last-child td { border-bottom: none; }
 .fireflyer-table td.num, .fireflyer-table th.num { text-align: right; }
 .fireflyer-table td.fireflyer-table-empty {
@@ -202,4 +246,85 @@
   color: var(--ff-faint);
   user-select: none;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Column header tooltip ───────────────────────────────────────────────────
+   A measure column is headed by its calc's `name`, and a column calc by its
+   key — both are labels, so the description is where you find out what the
+   column actually means. Same role the description plays in the pie/bar/number
+   cards, and the same card: opaque, sized to its text (see
+   fireflyer/chart/SKILL.md, "Tooltips"). Only described columns get one. */
+.fireflyer-table th.has-tip,
+.fireflyer-table td.has-tip {
+  cursor: help;
+  position: relative;   /* containing block for the non-anchored placement */
+}
+/* Dotted underline on a *described* header only. A column heading doesn't invite
+   a hover, so an explanation needs the hint — but a header that merely got
+   clamped already advertises itself with an ellipsis, and a value cell sits in a
+   row that lights up under the cursor. Underlining either would be noise. */
+.fireflyer-table th.has-desc .fireflyer-table-th-label {
+  text-decoration: underline dotted currentColor 1px;
+  text-underline-offset: 3px;
+}
+.fireflyer-table-tip {
+  position: absolute;
+  /* Below the header, left edges aligned: a header is at the top of the card,
+     so downward is where the room is, and the left edge is where the eye is
+     already reading from. */
+  top: calc(100% + var(--ff-tip-gap));
+  left: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: max-content;
+  max-width: 240px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--ff-tooltip-bg);
+  color: var(--ff-tooltip-ink);
+  box-shadow: 0 6px 18px var(--ff-shadow-strong);
+  /* A header sets these for its uppercase label; the card is prose. */
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.fireflyer-table-tip-head { font-weight: 600; }
+.fireflyer-table-tip-desc { opacity: 0.75; }
+.fireflyer-table th.has-tip:hover .fireflyer-table-tip,
+.fireflyer-table th.has-tip:focus-visible .fireflyer-table-tip,
+.fireflyer-table td.has-tip:hover .fireflyer-table-tip,
+.fireflyer-table td.has-tip:focus-visible .fireflyer-table-tip { opacity: 1; }
+/* Name and exact value on one line, value pushed right — the same row the pie,
+   bar and number cards use. */
+.fireflyer-table-tip-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.fireflyer-table-tip-name { opacity: 0.75; margin-right: auto; }
+.fireflyer-table-tip-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Anchored placement, as an enhancement over the in-flow one above: the table
+   body scrolls (`.fireflyer-table-scroll` is `overflow: auto`), which clips an
+   absolutely-positioned card, and the dashboard cell clips it again. A fixed,
+   anchored card is clipped by neither. The header cell is itself the anchor — a real
+   CSS box, so this can't silently fail the way an SVG shape does. */
+@supports (anchor-name: --a) {
+  .fireflyer-table-tip {
+    position: fixed;
+    inset: auto;
+    top: calc(anchor(bottom) + var(--ff-tip-gap));
+    left: anchor(left);
+    /* A header near the right edge would push the card off-screen, and one in a
+       short cell has no room below — cover both. */
+    position-try-fallbacks: flip-inline, flip-block, flip-inline flip-block;
+  }
 }

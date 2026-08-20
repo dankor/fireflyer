@@ -83,31 +83,304 @@
   display: flex;
   flex-direction: column;
 }
+/* Plot column: the canvas, and — for a temporal axis inside a dashboard — the
+   grain picker directly beneath it, so the control sits on the axis it governs.
+   It's a sibling of the canvas, not a child, so it stays put when a long axis
+   scrolls horizontally. */
+.fireflyer-bar-plot {
+  flex: 1 1 280px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+.fireflyer-bar-grain {
+  display: flex;
+  flex: none;
+  align-self: center;
+  border: 1px solid var(--ff-border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.fireflyer-bar-grain-seg {
+  appearance: none;
+  border: 0;
+  border-left: 1px solid var(--ff-border);
+  background: transparent;
+  color: var(--ff-muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  padding: 3px 5px;
+  cursor: pointer;
+}
+.fireflyer-bar-grain-seg:first-child { border-left: 0; }
+.fireflyer-bar-grain-seg:hover {
+  color: var(--ff-title);
+  /* No hover token in the shared set (adding one would mean mirroring it into
+     every chart.css), so tint an existing one — same trick as the tooltips. */
+  background: color-mix(in srgb, var(--ff-border) 45%, transparent);
+}
+.fireflyer-bar-grain-seg.is-active {
+  color: var(--ff-title);
+  background: var(--ff-border);
+  font-weight: 600;
+}
+/* ── Legend placement ───────────────────────────────────────────────────────
+   Adaptive, no setting. The SVG letterboxes to a fixed aspect, so the drawing
+   is `min(available width, aspect × available height)` across. A right-hand
+   legend costs ~150px of width; a legend above costs ~26px of height. Width is
+   what a bar chart is short of, so **above wins in every cell that isn't
+   extremely wide and short** — the crossover sits near 3:1, and a typical
+   dashboard cell is ~2:1. Hence: above by default, right only for a letterbox.
+
+   Container queries need a definite size to resolve against, which only a
+   dashboard cell guarantees — `-embedded` marks that case (see chart.html).
+   Standalone the default simply stands. */
+.fireflyer-bar-embedded {
+  container-type: size;
+  container-name: ffbar;
+}
 .fireflyer-bar-layout {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  gap: 24px;
-  align-items: safe center;
-  justify-content: safe center;
-  flex-wrap: wrap;
-  overflow: auto;
+  flex-direction: column;
+  gap: 10px;
+  /* `stretch`, not `center`: the plot column has to inherit a **definite**
+     height for the SVG below to size against. Clipping rather than scrolling
+     means a chart can never sprout a surprise vertical scrollbar. */
+  align-items: stretch;
+  overflow: hidden;
+}
+/* `order` rather than markup order, so the legend still reads after the chart
+   it describes. */
+/* Legend row + its pager. More series than fit are reached with the pager, not
+   a scrollbar — every series is still drawn in the bars, so paging only ever
+   hides legend rows. */
+.fireflyer-bar-legend-bar {
+  order: -1;
+  flex: none;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+}
+.fireflyer-bar .fireflyer-legend {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ff-ink);
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-width: 0;
+}
+.fireflyer-bar-legend-pager {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ff-muted);
+  font-variant-numeric: tabular-nums;
+}
+.fireflyer-bar-legend-step {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ff-muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.fireflyer-bar-legend-step:hover:not(:disabled) {
+  color: var(--ff-title);
+  background: color-mix(in srgb, var(--ff-border) 50%, transparent);
+}
+.fireflyer-bar-legend-step:disabled { opacity: 0.3; cursor: default; }
+@container ffbar (min-aspect-ratio: 3 / 1) {
+  .fireflyer-bar-layout {
+    flex-direction: row;
+    gap: 24px;
+  }
+  .fireflyer-bar-legend-bar { order: 0; flex-direction: column; gap: 6px; }
+  .fireflyer-bar .fireflyer-legend {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
 }
 .fireflyer-bar-canvas {
   position: relative;
-  flex: 1 1 280px;
+  flex: 1 1 auto;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  min-height: 0;
 }
+/* The canvas is the box; the SVG fills it absolutely. Absolute positioning is
+   what makes `height: 100%` resolve — against an auto-height parent it silently
+   falls back to the viewBox's intrinsic aspect, which is how a two-bar chart
+   grew taller than its cell and pushed out a scrollbar. `preserveAspectRatio`
+   letterboxes inside the box, so the drawing is always fully visible and the
+   chart is exactly as tall as the cell allows, whatever the bar count. */
 .fireflyer-bar svg {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
-  max-width: 480px;
-  max-height: 320px;
+  height: 100%;
   display: block;
 }
+/* Sideways bars: the viewBox grows downward with the category count, so the
+   canvas scrolls vertically instead of the bands being squeezed thinner. The
+   SVG is sized by WIDTH here (the mirror of scroll mode, which sizes by height),
+   so its intrinsic height can exceed the canvas. */
+.fireflyer-bar-sideways .fireflyer-bar-canvas {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ff-muted) 45%, transparent) transparent;
+}
+.fireflyer-bar-sideways .fireflyer-bar svg {
+  position: static;
+  width: 100%;
+  height: auto;
+  min-height: 100%;
+}
+
+/* Scroll mode (many categories): the plot grew past the default, so the canvas
+   becomes a horizontal scroll container. The SVG is sized by HEIGHT (fills the
+   canvas, so x labels never clip); its intrinsic width — from the widened
+   viewBox aspect — exceeds the canvas, so it scrolls. `safe center` keeps the
+   first bars reachable (plain `center` would clip the scroll start). The title +
+   legend stay put. Few-category charts keep the fit-to-cell rules above. */
+.fireflyer-bar-scroll .fireflyer-bar-plot { height: 100%; }
+/* Scroll mode needs the SVG to be *wider* than its box, so it goes back in flow
+   — absolute + inset:0 could never overflow. */
+.fireflyer-bar-scroll .fireflyer-bar svg {
+  position: static;
+  height: 100%;
+  width: auto;
+  min-width: 100%;
+}
+.fireflyer-bar-scroll .fireflyer-bar-canvas {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: safe center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* The scrollbar IS the timeline lens: dragging the thumb scrolls the axis and
+     clicking the track jumps to that point — both for free, and both impossible
+     to hand-build without JS, which chart output forbids. It's styled up from a
+     hairline into something grabbable because the platform default (macOS
+     overlay scrollbars) is invisible until you already scroll, which makes a
+     long axis look broken rather than scrollable. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--ff-accent)
+    color-mix(in srgb, var(--ff-border) 60%, transparent);
+}
+.fireflyer-bar-scroll .fireflyer-bar-canvas::-webkit-scrollbar { height: 14px; }
+.fireflyer-bar-scroll .fireflyer-bar-canvas::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--ff-border) 60%, transparent);
+  border-radius: 7px;
+}
+.fireflyer-bar-scroll .fireflyer-bar-canvas::-webkit-scrollbar-thumb {
+  background: var(--ff-accent);
+  border-radius: 7px;
+  /* Transparent border + content-box clip insets the thumb inside the track,
+     so it reads as a lens sitting on a rail rather than filling it. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+.fireflyer-bar-scroll .fireflyer-bar-canvas::-webkit-scrollbar-thumb:hover {
+  background: var(--ff-accent);
+  border-width: 2px;
+  background-clip: content-box;
+}
+/* The scale: the whole range as hoverable segments with the current window lit.
+   Each segment names the dates it would show, revealed instantly on hover — so
+   moving across the scale reads the timeline out as you go, and clicking jumps
+   there. Segments rather than a drag-slider because the label has to follow the
+   pointer, and reading a range input's live value needs JavaScript, which chart
+   output forbids. */
+.fireflyer-bar-scale {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  height: 14px;
+}
+.fireflyer-bar-scale-track {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 1px;
+  min-width: 0;
+  padding: 2px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ff-border) 60%, transparent);
+}
+.fireflyer-bar-scale-seg {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--ff-muted) 28%, transparent);
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.fireflyer-bar-scale-seg:hover {
+  background: color-mix(in srgb, var(--ff-accent) 60%, transparent);
+}
+.fireflyer-bar-scale-seg.is-current { background: var(--ff-accent); }
+/* The tooltip is a child of its segment but positioned against the track, so a
+   segment near either end doesn't push it off the chart. */
+.fireflyer-bar-scale-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: var(--ff-tooltip-bg);
+  color: var(--ff-tooltip-ink);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 8px;
+  border-radius: 3px;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px var(--ff-shadow-strong);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  z-index: 3;
+}
+.fireflyer-bar-scale-seg:hover .fireflyer-bar-scale-tip { opacity: 1; }
+.fireflyer-bar-scale-step {
+  appearance: none;
+  border: 1px solid var(--ff-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ff-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 5px;
+  cursor: pointer;
+}
+.fireflyer-bar-scale-step:hover:not(:disabled) {
+  color: var(--ff-title);
+  background: color-mix(in srgb, var(--ff-border) 45%, transparent);
+}
+.fireflyer-bar-scale-step:disabled { opacity: 0.35; cursor: default; }
 /* The baseline axis and the value/label text are theme-driven; the bar fills
    themselves are data-coloured (set inline per segment). */
 .fireflyer-bar-axis { stroke: var(--ff-border-strong); }
@@ -125,42 +398,160 @@
 .fireflyer-bar.has-selection .fireflyer-legend li:not(.active) { opacity: 0.55; }
 .fireflyer-bar.has-selection .fireflyer-legend li.active .label { font-weight: 600; }
 
-/* Hover tooltip — one per segment, positioned over the canvas top. CSS-only
-   reveal via :has() on the canvas; inline rules in chart.html bind each
-   tooltip to its rect by `data-i`. */
+/* Hover tooltip — one per segment, revealed by the `:has()` rules inline in
+   chart.html. Same card as the pie's: the bucket as a header, then a
+   `calc · value · percent` row, the calc's description, and the unrounded
+   figure when the shown one is abbreviated. */
 .fireflyer-bar-tooltip {
   position: absolute;
-  top: 6px;
-  left: 50%;
+  /* Placed from the segment's own coordinates (set inline as a share of the
+     viewBox), clamped so the card can't leave the canvas: `--ff-tip-half` is
+     half the widest card, and the vertical clamp keeps a tall segment from
+     pushing it out of the top. */
+  --ff-tip-half: 120px;
+  left: clamp(
+    var(--ff-tip-half), var(--ff-tip-x, 50%), calc(100% - var(--ff-tip-half))
+  );
+  bottom: min(var(--ff-tip-y, 100%), calc(100% - 104px));
   transform: translateX(-50%);
+  /* Sized to its own text, not to a minimum: a two-word card padded out to a
+     fixed width reads as a panel that failed to fill rather than a label. */
+  width: max-content;
+  max-width: 240px;
   pointer-events: none;
+  /* Opaque. Translucency let the chart show through the card, so the same
+     tooltip looked like two different shades depending on what was behind it. */
   background: var(--ff-tooltip-bg);
   color: var(--ff-tooltip-ink);
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  padding: 5px 10px;
-  border-radius: 3px;
-  white-space: nowrap;
-  box-shadow: 0 2px 6px var(--ff-shadow-strong);
+  line-height: 1.35;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px var(--ff-shadow-strong);
   opacity: 0;
   transition: opacity 0.12s ease;
-  z-index: 2;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
-.fireflyer-bar-tooltip-label { font-weight: 600; margin-right: 6px; }
-.fireflyer-bar-tooltip-meta { opacity: 0.85; }
-
-.fireflyer-bar .fireflyer-legend {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+.fireflyer-bar-tooltip-head {
+  font-weight: 600;
   font-size: 13px;
-  color: var(--ff-ink);
+  font-variant-numeric: tabular-nums;
 }
+.fireflyer-bar-tooltip-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.fireflyer-bar-tooltip-name { opacity: 0.75; }
+.fireflyer-bar-tooltip-val { font-weight: 600; margin-left: auto; }
+.fireflyer-bar-tooltip-pct { opacity: 0.75; }
+.fireflyer-bar-tooltip-desc {
+  opacity: 0.75;
+  font-size: 11px;
+  white-space: normal;
+}
+.fireflyer-bar-tooltip-exact {
+  opacity: 0.6;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* A 1px marker per segment, carried inside the SVG in a foreignObject at the
+   segment's top-centre. Two problems at once:
+
+   `anchor-name` on an SVG shape isn't reliable — a shape isn't a CSS box — and a
+   failed anchor is loud rather than graceful: `position: fixed` with
+   `inset: auto` falls back to the element's *static* position, so cards landed
+   beside the wrong bar. A plain div is a real box, so it can't fail that way.
+
+   And being inside the SVG puts it in the **drawing's** coordinate space, not
+   the canvas's. The SVG letterboxes inside the canvas (`preserveAspectRatio:
+   meet`), so a marker placed at a share of the *canvas* drifts from its segment
+   by however much slack the letterboxing left. In user space there's no drift
+   at any cell size. */
+.fireflyer-bar-tip-anchor {
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+/* Anchored placement, as a progressive enhancement over the clamped in-canvas
+   one above: `position: fixed` is clipped by no overflow ancestor, so the card
+   escapes the chart card and the editor's scroll pane. Fallbacks on both axes —
+   a vertical flip never notices a card hanging off the side of the screen, which
+   is the common case for a bar in the first or last column. */
+@position-try --ff-bar-tip-below {
+  bottom: auto;
+  top: anchor(bottom);
+  margin: 8px 0 0 0;
+}
+@position-try --ff-bar-tip-start {
+  left: anchor(left);
+  right: auto;
+  transform: none;
+}
+@position-try --ff-bar-tip-end {
+  left: auto;
+  right: anchor(right);
+  transform: none;
+}
+@position-try --ff-bar-tip-below-start {
+  bottom: auto;
+  top: anchor(bottom);
+  margin: 8px 0 0 0;
+  left: anchor(left);
+  right: auto;
+  transform: none;
+}
+@position-try --ff-bar-tip-below-end {
+  bottom: auto;
+  top: anchor(bottom);
+  margin: 8px 0 0 0;
+  left: auto;
+  right: anchor(right);
+  transform: none;
+}
+@supports (anchor-name: --a) {
+  /* Scoped so one chart's markers can't bind another chart's cards. */
+  .fireflyer-bar { anchor-scope: all; }
+  .fireflyer-bar-tooltip {
+    position: fixed;
+    inset: auto;
+    bottom: anchor(top);
+    left: anchor(center);
+    transform: translateX(-50%);
+    margin-bottom: 8px;
+    position-try-fallbacks:
+      --ff-bar-tip-start,
+      --ff-bar-tip-end,
+      --ff-bar-tip-below,
+      --ff-bar-tip-below-start,
+      --ff-bar-tip-below-end;
+  }
+}
+
 .fireflyer-bar .fireflyer-legend li {
   display: flex;
   align-items: center;
   padding: 3px 0;
   white-space: nowrap;
+}
+/* Inside a dashboard the legend crossfilters like the bar segments: a click
+   toggles that series. Give the rows a pointer + hover affordance. */
+.fireflyer-bar .fireflyer-legend-clickable li {
+  cursor: pointer;
+  padding: 3px 5px;
+  margin: 0 -5px;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+.fireflyer-bar .fireflyer-legend-clickable li:hover { background: rgba(127, 127, 127, 0.14); }
+.fireflyer-bar .fireflyer-legend-clickable li:focus-visible {
+  outline: 2px solid var(--ff-accent);
+  outline-offset: -1px;
 }
 .fireflyer-bar .fireflyer-legend .swatch {
   display: inline-block;
@@ -171,8 +562,3 @@
   flex-shrink: 0;
 }
 .fireflyer-bar .fireflyer-legend .label { color: var(--ff-ink); }
-.fireflyer-bar .fireflyer-legend .meta {
-  color: var(--ff-muted);
-  margin-left: 6px;
-  font-variant-numeric: tabular-nums;
-}

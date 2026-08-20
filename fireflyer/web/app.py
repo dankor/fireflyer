@@ -13,13 +13,19 @@ from pydantic import BaseModel
 
 from fireflyer import config_edit
 from fireflyer import filters as filters_mod
-from fireflyer import measures_edit
+from fireflyer import calcs_edit
 from fireflyer.datasets import DatasetError, DatasetStore
 from fireflyer.storage import make_object_store
 from fireflyer.chart.map.chart import Map
 from fireflyer.chart.table.chart import Table
 from fastapi.responses import RedirectResponse
-from fireflyer.dashboard import Dashboard, DashboardError, rename_dataset_ref
+from fireflyer.dashboard import (
+    Dashboard,
+    DashboardError,
+    grain_state_html,
+    rename_dataset_ref,
+    set_grain_token,
+)
 from fireflyer.web import auth as auth_mod
 from fireflyer.web import chat as chat_mod
 from fireflyer.web import portal as portal_mod
@@ -113,84 +119,217 @@ HTMX_SRC = "https://unpkg.com/htmx.org@1.9.12"
 
 # Starter — exercises every layout element: header, two-chart row, separator,
 # single-chart row. Small enough to read at a glance.
-DEFAULT_YAML = """name: Orders overview
+DEFAULT_YAML = """# ==========================================================================
+#  Orders overview — a worked tour of what Fireflyer can do.
+#
+#  Everything below is commented. Edit anything; the preview re-renders.
+#  A dashboard has four top-level keys:
+#
+#    name    the dashboard's title
+#    calcs   named values and dimensions (optional)
+#    charts  what to draw
+#    layout  where to put it
+#
+#  Datasets are NOT declared here. Upload a CSV under Datasets and reference
+#  it by name (`dataset: orders`).
+# ==========================================================================
 
-measures:
+name: Orders overview
+
+# ---- CALCS ---------------------------------------------------------------
+# Named values and dimensions, keyed by DATASET name. A chart references one
+# by key instead of carrying its own aggregation.
+#
+# You never write down which kind a calc is — it's inferred from what it says:
+#
+#   has `agg:`                     -> AGGREGATE, a value reduced per group
+#   formula over other calc keys   -> DERIVED,   a value computed per group
+#   formula over dataset columns   -> COLUMN,    a dimension
+#
+# `name` is what a viewer reads; `description` becomes a tooltip.
+calcs:
   orders:
+
+    # -- COLUMN calcs: dimensions, usable anywhere a column name goes -------
+
+    # OVERLAY. A column calc keyed like a real column relabels it in place.
+    # Nothing is renamed: `status` is still what charts, filters and
+    # crossfilter clicks refer to — only what you READ changes. The table
+    # header below says "Order status" and explains itself on hover.
+    # (A formula that names its own key means the dataset column.)
+    status:
+      name: Order status
+      description: How far the order got - paid, shipped, refunded, and so on
+      formula: status
+
+    # str2dt() turns text into a real date, so a bar chart gets a proper
+    # chronological axis instead of sorted strings - and with it a grain
+    # picker (Y / Q / M / W / D) under the chart.
+    order_day:
+      name: Order day
+      description: The order date, parsed from the raw text column
+      formula: str2dt(day, YYYY-MM-DD)
+
+    # -- AGGREGATE calcs: values, reduced per group ------------------------
+
     order_count:
       name: Orders
-      agg: count
+      agg: count              # count is the one agg that needs no formula
+
     revenue:
       name: Revenue
+      description: Total value of the orders in this group
       agg: sum
-      formula: amount
+      formula: amount         # any row-level expression, e.g. price * qty
+      format: 0.0a $          # `a` abbreviates: 24800 -> 24.8k $
+
+    # A formula is a row-level EXPRESSION, not just a column name. This sums
+    # `unit_price * qty` and lands on the same figure as `revenue` above, which
+    # reads the stored line total - either way works.
+    line_revenue:
+      name: Line revenue
+      description: unit_price x qty, summed - the long way round to Revenue
+      agg: sum
+      formula: unit_price * qty
       format: 0.0a $
+
+    units:
+      name: Units
+      description: Items sold in this group
+      agg: sum
+      formula: qty
+
+    avg_unit_price:
+      name: Avg unit price
+      agg: avg                # count / sum / dcount / min / max / avg
+      formula: unit_price
+      format: 0.00$
+
+    # `filters:` on a calc is conditional aggregation: this one only ever
+    # sees paid rows, whatever the chart around it is showing.
     paid_revenue:
       name: Paid revenue
+      description: Revenue from orders that reached paid
       agg: sum
       formula: amount
       format: 0.0a $
       filters:
         - {column: status, op: in, values: [paid]}
-    avg_order_value:
-      name: Avg order value
-      formula: revenue / order_count
-      format: 0.00$
+
     paid_count:
       name: Paid orders
       agg: count
       filters:
         - {column: status, op: in, values: [paid]}
+
+    biggest_order:
+      name: Biggest order
+      description: Largest single order in this group
+      agg: max
+      formula: amount
+      format: 0$
+
+    # -- DERIVED calcs: a formula over OTHER CALCS -------------------------
+    # Computed per group, after the aggregates - so this is a true per-group
+    # average, not an average of averages.
+
+    avg_order_value:
+      name: Avg order value
+      description: Revenue divided by order count, within each group
+      formula: revenue / order_count
+      format: 0.00$
+
     paid_rate:
       name: Paid share
-      # `%` is a literal suffix (no auto-scaling), so scale to a percentage here.
+      description: Share of orders that reached paid
+      # `%` is a literal suffix with no auto-scaling, so scale it here.
       formula: paid_count / order_count * 100
       format: 0.0%
 
+# ---- CHARTS --------------------------------------------------------------
+# Every chart needs `type`, `dataset` and `title`. Anything that aggregates
+# names a calc by key. Any chart may take `filters:` to pre-narrow its data.
 charts:
+
+  # NUMBER - one big figure, formatted by its calc's own `format`.
+  # Hover it: a calc with a `description` explains itself and shows the exact,
+  # unrounded number behind the abbreviation.
   total_orders:
     type: number
     dataset: orders
     title: Total orders
-    measure: order_count
+    calc: order_count
 
-  revenue:
+  revenue_kpi:
     type: number
     dataset: orders
     title: Revenue (paid)
-    measure: paid_revenue
+    calc: paid_revenue
 
   avg_order:
     type: number
     dataset: orders
     title: Avg order amount
-    measure: avg_order_value
+    calc: avg_order_value
 
   paid_share:
     type: number
     dataset: orders
     title: Paid share
-    measure: paid_rate
+    calc: paid_rate
 
-  orders:
-    type: table
-    dataset: orders
-    title: Orders
-
-  status:
+  # PIE - `column` groups, `calc` sizes each slice. Click a slice to
+  # crossfilter every other chart; click it again to clear.
+  status_pie:
     type: pie
     dataset: orders
-    title: Revenue by Status
+    title: Revenue by status
     column: status
-    measure: revenue
+    calc: revenue
 
+  # BAR - `x` makes the bar groups, `y` (optional) stacks them.
+  # A temporal `x` picks its own grain and windows a long axis for you.
   by_day:
     type: bar
     dataset: orders
-    title: Orders by Day, stacked by status
-    x: day
+    title: Orders by day, stacked by status
+    x: order_day
     y: status
+    calc: order_count
 
+  # Drop `y` for plain one-bar-per-category, and use `top` to keep only the
+  # biggest N. `direction: vertical` turns the bars sideways, which suits long
+  # category labels.
+  top_days:
+    type: bar
+    dataset: orders
+    title: Top 3 days by revenue
+    x: order_day
+    calc: revenue
+    top: 3
+    direction: vertical
+
+  # A chart may be placed only ONCE in the layout, so this is a second pie
+  # rather than a reuse - sized by order count instead of revenue, which is a
+  # different question about the same column.
+  status_share:
+    type: pie
+    dataset: orders
+    title: Orders by status
+    column: status
+    calc: order_count
+
+  # There are eight channels and a legend shows six at a time, so this one
+  # gets a pager beside its legend. Every slice is still drawn - only the
+  # legend pages.
+  by_channel:
+    type: pie
+    dataset: orders
+    title: Revenue by channel
+    column: channel
+    calc: revenue
+
+  # MAP - a hex heatmap of lat/lng points, weighted by a count or sum calc.
   density:
     type: map
     dataset: orders
@@ -198,22 +337,92 @@ charts:
     lat: lat
     lng: lng
     grid_size: 16
+    calc: order_count
 
-  orders_long:
+  # TABLE, raw mode - no `measures`, so one row per record.
+  # `columns` picks which columns to show, in order; `sort` orders them.
+  recent_orders:
     type: table
     dataset: orders
-    title: All Orders
-    pagination: 1000
+    title: Orders, newest first
+    columns: [order_day, status, amount]
+    sort: ['-order_day', '-amount']
+    pagination: 8
 
-dashboard:
+  # TABLE, grouped mode - `measures` turns `columns` into GROUPING keys and
+  # gives one aggregated column per measure. Hover any measure cell for the
+  # exact figure; click a row to crossfilter on that whole combination.
+  by_status:
+    type: table
+    dataset: orders
+    title: By status
+    columns: [status]
+    measures: [order_count, revenue, avg_order_value, biggest_order]
+    sort: ['-revenue']         # `-` descending, `+` or bare ascending
+    pagination: 0              # 0 = no pager, show every group
+    search: false
+
+  # `segment` has gaps in it. A null grouping key is ONE group and shows as a
+  # blank cell - not a row per missing value, and not quietly dropped. (Its row
+  # isn't clickable: "is null" isn't something a filter can say.)
+  by_segment:
+    type: table
+    dataset: orders
+    title: By segment
+    columns: [segment]
+    measures: [order_count, revenue, units, avg_unit_price]
+    sort: ['-revenue']
+    pagination: 0
+    search: false
+
+  # `measures` with no `columns` = one row of grand totals.
+  totals:
+    type: table
+    dataset: orders
+    title: Everything, totalled
+    measures: [order_count, revenue, line_revenue, paid_revenue, avg_order_value, paid_rate]
+    pagination: 0
+    search: false
+
+  all_orders:
+    type: table
+    dataset: orders
+    title: All orders
+    pagination: 25
+
+# ---- LAYOUT --------------------------------------------------------------
+# A list of rows, top to bottom. Each row is:
+#
+#   ["@<height>", "<chart id>:<width>", ...]
+#
+# `@30` is the row height; `:60` / `:40` are relative widths that share the
+# row. A bare id with no `:width` fills whatever is left. Two extras: a
+# quoted string on its own is a HEADER, and "-" is a horizontal RULE.
+#
+# Give `layout` named keys instead of a plain list and each one becomes a TAB.
+layout:
+
   Overview:
-    - ["@22", "total_orders", "revenue", "avg_order", "paid_share"]
-    - ["@40", "orders:3", "status:2"]
-    - ["@30", "by_day", "status"]
+    - "How the business is doing"
+    - ["@22", "total_orders", "revenue_kpi", "avg_order", "paid_share"]
+    - ["@40", "by_day:60", "status_pie:40"]
     - "-"
-    - ["@100", "density"]
-  All orders:
-    - ["@50", "orders_long"]
+    - "Where the orders are"
+    - ["@90", "density"]
+
+  Tables:
+    - "One row per order"
+    - ["@34", "recent_orders"]
+    - "-"
+    - "Grouped, with measures"
+    - ["@30", "by_status:60", "totals:40"]
+    - ["@26", "by_segment"]
+
+  More charts:
+    - ["@36", "top_days:40", "status_share:60"]
+    - "-"
+    - ["@36", "by_channel"]
+    - ["@50", "all_orders"]
 """
 
 # Chat body differs by whether a key is configured: the live input, or a setup
@@ -222,7 +431,7 @@ if CHAT_ENABLED:
     CHAT_PANEL = """
       <div class="ff-docs-body chat-log" id="chat-log"></div>
       <form class="chat-input" id="chat-form">
-        <textarea id="chat-text" spellcheck="false" placeholder="Ask to add or change charts, add measures, resize rows…"></textarea>
+        <textarea id="chat-text" spellcheck="false" placeholder="Ask to add or change charts, add calcs, resize rows…"></textarea>
         <button type="submit" class="chat-send" id="chat-send">Send</button>
       </form>"""
 else:
@@ -341,8 +550,8 @@ INDEX = f"""<!DOCTYPE html>
   /* Documentation overlay — covers the output pane; a chart reference from each
      chart's spec.md. z-index clears the dashboard content (sticky tab bar z:10,
      up to z:20) and the refresh overlay, but stays under modals (z:50). */
-  #ff-docs-btn, #ff-measures-btn, #ff-chat-btn {{ display: inline-flex; align-items: center; padding: 5px 9px; }}
-  #ff-docs-btn svg, #ff-measures-btn svg, #ff-chat-btn svg {{ width: 16px; height: 16px; display: block; }}
+  #ff-docs-btn, #ff-calcs-btn, #ff-chat-btn {{ display: inline-flex; align-items: center; padding: 5px 9px; }}
+  #ff-docs-btn svg, #ff-calcs-btn svg, #ff-chat-btn svg {{ width: 16px; height: 16px; display: block; }}
   .ff-docs {{ position: absolute; inset: 0; z-index: 40; background: var(--panel);
     display: flex; flex-direction: column; }}
   .ff-docs[hidden] {{ display: none; }}
@@ -370,27 +579,27 @@ INDEX = f"""<!DOCTYPE html>
   .ff-docs-md li {{ margin: 3px 0; }}
   .ff-docs-md code {{ background: var(--bg); padding: 1px 5px; border-radius: 3px;
     font-family: ui-monospace, Menlo, monospace; font-size: 12px; }}
-  /* Measures manager (reuses the .ff-docs overlay shell). */
-  .ff-measures-empty {{ color: var(--muted); font-size: 13px; padding: 8px 4px; }}
-  .ff-measures-ds {{ margin: 0 0 14px; }}
-  .ff-measures-ds-head {{ display: flex; align-items: center; justify-content: space-between;
+  /* Calcs manager (reuses the .ff-docs overlay shell). */
+  .ff-calcs-empty {{ color: var(--muted); font-size: 13px; padding: 8px 4px; }}
+  .ff-calcs-ds {{ margin: 0 0 14px; }}
+  .ff-calcs-ds-head {{ display: flex; align-items: center; justify-content: space-between;
     border-bottom: 1px solid var(--border); padding: 6px 2px; }}
-  .ff-measures-ds-name {{ font-weight: 600; font-size: 13px; }}
-  .ff-measures-add, .ff-measures-edit, .ff-measures-del, .ff-measures-cancel {{
+  .ff-calcs-ds-name {{ font-weight: 600; font-size: 13px; }}
+  .ff-calcs-add, .ff-calcs-edit, .ff-calcs-del, .ff-calcs-cancel {{
     background: none; border: 1px solid var(--border); color: var(--text);
     border-radius: 5px; padding: 2px 8px; font-size: 12px; cursor: pointer; }}
-  .ff-measures-add:hover, .ff-measures-edit:hover, .ff-measures-cancel:hover {{ background: var(--bg); }}
-  .ff-measures-del:hover {{ color: var(--error); border-color: var(--error); }}
-  .ff-measures-row {{ display: flex; align-items: center; gap: 10px; padding: 6px 2px;
+  .ff-calcs-add:hover, .ff-calcs-edit:hover, .ff-calcs-cancel:hover {{ background: var(--bg); }}
+  .ff-calcs-del:hover {{ color: var(--error); border-color: var(--error); }}
+  .ff-calcs-row {{ display: flex; align-items: center; gap: 10px; padding: 6px 2px;
     border-bottom: 1px solid var(--border); }}
-  .ff-measures-key {{ font-weight: 600; font-size: 13px; min-width: 120px; }}
-  .ff-measures-sum {{ flex: 1; color: var(--muted); font-size: 12px;
+  .ff-calcs-key {{ font-weight: 600; font-size: 13px; min-width: 120px; }}
+  .ff-calcs-sum {{ flex: 1; color: var(--muted); font-size: 12px;
     font-family: ui-monospace, Menlo, monospace; }}
-  .ff-measures-acts {{ display: flex; gap: 6px; }}
-  .ff-measures-form {{ max-width: 520px; }}
-  .ff-measures-form-head {{ font-weight: 600; font-size: 14px; margin: 4px 0 12px; }}
-  .ff-measures-form-foot {{ display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }}
-  .ff-measures-form[data-kind="derived"] [data-param-hide] {{ display: none; }}
+  .ff-calcs-acts {{ display: flex; gap: 6px; }}
+  .ff-calcs-form {{ max-width: 520px; }}
+  .ff-calcs-form-head {{ font-weight: 600; font-size: 14px; margin: 4px 0 12px; }}
+  .ff-calcs-form-foot {{ display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }}
+  .ff-calcs-form[data-kind="formula"] [data-param-hide] {{ display: none; }}
   /* Transient error toast (bottom-centre). */
   .ff-toast {{ position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
     background: var(--error); color: #fff; padding: 9px 16px; border-radius: 6px;
@@ -432,7 +641,7 @@ INDEX = f"""<!DOCTYPE html>
   .pane-body:has(#output) {{ overflow-x: hidden; }}
   pre.error {{ color: var(--error); white-space: pre-wrap; font-size: 12px; }}
   /* AI assistant — a left-pane overlay (reuses the .ff-docs shell), toggled
-     from the topbar like the docs/measures overlays on the right. */
+     from the topbar like the docs/calcs overlays on the right. */
   .pane.editor {{ position: relative; }}
   #ff-chat .chat-log {{
     display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
@@ -557,7 +766,7 @@ INDEX = f"""<!DOCTYPE html>
     __FF_PATHDD__
     __FF_SAVE__
     <button type="button" class="toggle" id="ff-chat-btn" title="AI assistant" aria-label="AI assistant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg></button>
-    <button type="button" class="toggle" id="ff-measures-btn" title="Measures" aria-label="Measures"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5H6l6 7-6 7h12"/></svg></button>
+    <button type="button" class="toggle" id="ff-calcs-btn" title="Calcs" aria-label="Calcs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5H6l6 7-6 7h12"/></svg></button>
     <button type="button" class="toggle" id="ff-docs-btn" title="Chart documentation" aria-label="Chart documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></button>
     <button class="toggle" id="toggle">Preview</button>
     __FF_THEME__
@@ -571,7 +780,7 @@ INDEX = f"""<!DOCTYPE html>
       <textarea id="code" spellcheck="false" autocomplete="off">__FF_YAML_CONTENT__</textarea>
     </div>
     <!-- AI assistant: a left-pane overlay toggled from the topbar, like the
-         docs/measures overlays on the right. Knows the YAML + dataset schemas. -->
+         docs/calcs overlays on the right. Knows the YAML + dataset schemas. -->
     <aside class="ff-docs ff-chat" id="ff-chat" hidden>
       <div class="ff-docs-head">
         <span class="ff-docs-title">AI assistant</span>
@@ -592,13 +801,13 @@ INDEX = f"""<!DOCTYPE html>
       </div>
       <div class="ff-docs-body">__FF_DOCS__</div>
     </aside>
-    <!-- Measures manager: overlaps the output pane; add/edit/delete measures. -->
-    <aside class="ff-docs" id="ff-measures" hidden>
+    <!-- Calcs manager: overlaps the output pane; add/edit/delete calcs. -->
+    <aside class="ff-docs" id="ff-calcs" hidden>
       <div class="ff-docs-head">
-        <span class="ff-docs-title">Measures</span>
-        <button type="button" class="ff-docs-close" id="ff-measures-close" title="Close (Esc)" aria-label="Close">✕</button>
+        <span class="ff-docs-title">Calcs</span>
+        <button type="button" class="ff-docs-close" id="ff-calcs-close" title="Close (Esc)" aria-label="Close">✕</button>
       </div>
-      <div class="ff-docs-body" id="ff-measures-body"></div>
+      <div class="ff-docs-body" id="ff-calcs-body"></div>
     </aside>
   </section>
 </div>
@@ -794,57 +1003,57 @@ document.addEventListener('keydown', e => {{
   if (e.key === 'Escape' && !docsPanel.hidden) docsPanel.hidden = true;
 }});
 
-// Measures manager overlay: lists a dashboard's measures per dataset and
+// Calcs manager overlay: lists a dashboard's calcs per dataset and
 // add/edit/deletes them. Server-rendered (like docs); each mutation swaps the
 // editor YAML and re-runs, then reloads the list.
-const measuresPanel = document.getElementById('ff-measures');
-const measuresBody = document.getElementById('ff-measures-body');
+const calcsPanel = document.getElementById('ff-calcs');
+const calcsBody = document.getElementById('ff-calcs-body');
 
-async function loadMeasures() {{
+async function loadCalcs() {{
   const fd = new FormData();
   fd.append('yaml_text', codeEl.value);
-  const res = await fetch('/measures/manager', {{ method: 'POST', body: fd }});
-  measuresBody.innerHTML = await res.text();
+  const res = await fetch('/calcs/manager', {{ method: 'POST', body: fd }});
+  calcsBody.innerHTML = await res.text();
 }}
-function openMeasures() {{ measuresPanel.hidden = false; loadMeasures(); }}
-function closeMeasures() {{ measuresPanel.hidden = true; }}
+function openCalcs() {{ calcsPanel.hidden = false; loadCalcs(); }}
+function closeCalcs() {{ calcsPanel.hidden = true; }}
 
-document.getElementById('ff-measures-btn').addEventListener('click', () => {{
-  if (measuresPanel.hidden) openMeasures(); else closeMeasures();
+document.getElementById('ff-calcs-btn').addEventListener('click', () => {{
+  if (calcsPanel.hidden) openCalcs(); else closeCalcs();
 }});
-document.getElementById('ff-measures-close').addEventListener('click', closeMeasures);
+document.getElementById('ff-calcs-close').addEventListener('click', closeCalcs);
 document.addEventListener('keydown', e => {{
-  if (e.key === 'Escape' && !measuresPanel.hidden) closeMeasures();
+  if (e.key === 'Escape' && !calcsPanel.hidden) closeCalcs();
 }});
 
-async function openMeasureForm(dataset, key) {{
+async function openCalcForm(dataset, key) {{
   const fd = new FormData();
   fd.append('yaml_text', codeEl.value);
   fd.append('dataset', dataset);
   fd.append('key', key || '');
-  const res = await fetch('/measures/form', {{ method: 'POST', body: fd }});
-  measuresBody.innerHTML = await res.text();
+  const res = await fetch('/calcs/form', {{ method: 'POST', body: fd }});
+  calcsBody.innerHTML = await res.text();
 }}
 
 // Overlay clicks: add / edit / delete, plus the filter builder rows.
-measuresBody.addEventListener('click', async e => {{
-  const add = e.target.closest('.ff-measures-add');
-  if (add) {{ openMeasureForm(add.dataset.dataset, ''); return; }}
-  const edit = e.target.closest('.ff-measures-edit');
-  if (edit) {{ openMeasureForm(edit.dataset.dataset, edit.dataset.key); return; }}
-  const del = e.target.closest('.ff-measures-del');
+calcsBody.addEventListener('click', async e => {{
+  const add = e.target.closest('.ff-calcs-add');
+  if (add) {{ openCalcForm(add.dataset.dataset, ''); return; }}
+  const edit = e.target.closest('.ff-calcs-edit');
+  if (edit) {{ openCalcForm(edit.dataset.dataset, edit.dataset.key); return; }}
+  const del = e.target.closest('.ff-calcs-del');
   if (del) {{
     const fd = new FormData();
     fd.append('yaml_text', codeEl.value);
     fd.append('dataset', del.dataset.dataset);
     fd.append('key', del.dataset.key);
-    const res = await fetch('/measures/delete', {{ method: 'POST', body: fd }});
+    const res = await fetch('/calcs/delete', {{ method: 'POST', body: fd }});
     const data = await res.json();
     if (!data.ok) {{ flash(data.error || 'Could not delete.'); return; }}
-    codeEl.value = data.yaml; run(); loadMeasures();
+    codeEl.value = data.yaml; run(); loadCalcs();
     return;
   }}
-  if (e.target.closest('.ff-measures-cancel')) {{ loadMeasures(); return; }}
+  if (e.target.closest('.ff-calcs-cancel')) {{ loadCalcs(); return; }}
   const fadd = e.target.closest('.ff-filter-add');
   if (fadd) {{
     const wrap = fadd.closest('.ff-filters');
@@ -856,27 +1065,28 @@ measuresBody.addEventListener('click', async e => {{
   if (fdel) fdel.closest('.ff-filter-row').remove();
 }});
 
-// Kind dropdown flips the form between aggregate (agg + filters shown) and
-// derived (formula over other measures only).
-measuresBody.addEventListener('change', e => {{
+// Kind dropdown flips the form between aggregate (agg + filters shown) and a
+// bare formula (neither) — whether that formula reads as a derived value or a
+// calculated column is inferred from what it references.
+calcsBody.addEventListener('change', e => {{
   if (e.target.name !== 'kind') return;
-  e.target.closest('.ff-measures-form').dataset.kind = e.target.value;
+  e.target.closest('.ff-calcs-form').dataset.kind = e.target.value;
 }});
 
 // Save the add/edit form: swap the YAML, re-run, and return to the list.
-measuresBody.addEventListener('submit', async e => {{
+calcsBody.addEventListener('submit', async e => {{
   e.preventDefault();
   const form = e.target;
   const fd = new FormData(form);
   fd.append('yaml_text', codeEl.value);
-  const res = await fetch('/measures/save', {{ method: 'POST', body: fd }});
+  const res = await fetch('/calcs/save', {{ method: 'POST', body: fd }});
   const data = await res.json();
   if (!data.ok) {{
     const err = form.querySelector('.ff-modal-error');
     err.textContent = data.error || 'Could not save.'; err.hidden = false;
     return;
   }}
-  codeEl.value = data.yaml; run(); loadMeasures();
+  codeEl.value = data.yaml; run(); loadCalcs();
 }});
 
 const layoutEl = document.getElementById('layout');
@@ -939,14 +1149,14 @@ function reduceRatio(nums) {{
 
 const editingDisabled = () => layoutEl.classList.contains('editor-hidden');
 
-// Rewrite the Nth @<height> token in the `dashboard:` section. `@<n>` is the
+// Rewrite the Nth @<height> token in the `layout:` section. `@<n>` is the
 // row-height indicator and rows carry exactly one each in order, so the Nth
 // token is row `ordinal`'s height. Rewriting the token directly works for any
 // YAML style (flow `["@30", ...]` or block `- "@30"`) — an earlier bracket-only
 // version silently no-op'd on block-style rows, so drags snapped back.
 function setRowUnits(ordinal, units) {{
   const text = codeEl.value;
-  const dashIdx = text.search(/^dashboard:/m);
+  const dashIdx = text.search(/^layout:/m);
   const re = /@(\\d+(?:\\.\\d+)?)/g;
   re.lastIndex = dashIdx === -1 ? 0 : dashIdx;
   let m, n = 0;
@@ -1054,7 +1264,7 @@ async function commitColumnResize(ordinals, widths) {{
 // in the log; if the assistant returns new YAML, it replaces the editor and
 // re-renders through the same run() path as a manual edit.
 // The assistant lives in a left-pane overlay toggled from the topbar, mirroring
-// the docs/measures overlays on the right. It stays available whether or not a
+// the docs/calcs overlays on the right. It stays available whether or not a
 // key is configured (a disabled build shows a setup notice inside).
 const chatPanel = document.getElementById('ff-chat');
 function openChat() {{
@@ -2164,7 +2374,7 @@ def index(request: Request) -> str:
 def _empty_yaml(name: str) -> str:
     """A blank but valid dashboard named `name` — no datasets, charts, or layout
     yet. The author fills it in the editor. json.dumps quotes the name safely."""
-    return f"name: {json.dumps(name)}\n\ndatasets: {{}}\n\ncharts: {{}}\n\ndashboard: []\n"
+    return f"name: {json.dumps(name)}\n\ndatasets: {{}}\n\ncharts: {{}}\n\nlayout: []\n"
 
 
 def _set_yaml_name(yaml_text: str, name: str) -> str:
@@ -2395,7 +2605,7 @@ async def chat(request: Request, req: ChatRequest) -> dict:
     when the assistant proposed a change that parsed cleanly; the browser then
     swaps it into the editor and re-renders. The available datasets' schemas
     (columns + types, no data) are handed to the model so it builds charts and
-    measures from real columns."""
+    calcs from real columns."""
     if not CHAT_ENABLED:
         return {
             "ok": False,
@@ -2461,13 +2671,21 @@ def chart_table(
     page: int = 1,
     q: str = "",
     filters: str = "",
+    columns: str = "",
+    sort: str = "",
 ) -> str:
     # `filters` is JSON-encoded by Table._base_params so the chart's own htmx
     # round-trips (search, pagination) preserve declared + merged crossfilters.
+    # `measures` is deliberately absent: resolving a measure needs the
+    # dashboard's `calcs:` block, which this standalone route has no access to,
+    # so an embedded table posts to /dashboard/cell instead (see chart.html).
     parsed = json.loads(filters) if filters else []
+    split = lambda text: [p.strip() for p in text.split(",") if p.strip()]
     chart = Table(
         dataset=dataset,
         title=title,
+        columns=split(columns),
+        sort=split(sort),
         search=bool(search),
         pagination=pagination,
         filters=parsed,
@@ -2481,7 +2699,9 @@ async def dashboard_render(
     request: Request,
     yaml_text: str = Form(""),
     cf: list[str] = Form(default=[]),
+    grain: list[str] = Form(default=[]),
     toggle: str = Form(""),
+    set_grain: str = Form(""),
     editing: str = Form(""),
     active_tab: int = Form(0),
 ) -> str:
@@ -2500,13 +2720,20 @@ async def dashboard_render(
     except DashboardError as exc:
         return f'<pre class="error">{escape(str(exc))}</pre>'
     new_tokens = filters_mod.toggle_token(list(cf), toggle) if toggle else list(cf)
+    # `set_grain` is a bar chart's time-grain picker: "<cid>|<grain>", or
+    # "<cid>|" to go back to automatic. Rides the same hidden-input round-trip
+    # as `cf` so a grain choice survives crossfilter clicks and tab switches.
+    grains = set_grain_token(list(grain), set_grain) if set_grain else list(grain)
     # Returning a skeleton means every cell re-fetches with the new cf state.
     # The dashboard div is swapped (outerHTML) and the fresh placeholders fire
     # hx-trigger="load" — same async path as the initial /execute response.
     # `active_tab` rides along (hidden input) so a crossfilter click or a tab
     # switch keeps the right tab showing.
     return dashboard.render_skeleton(
-        cf_tokens=new_tokens, editing=bool(editing), active_tab=active_tab
+        cf_tokens=new_tokens,
+        editing=bool(editing),
+        active_tab=active_tab,
+        grain_tokens=grains,
     )
 
 
@@ -2516,6 +2743,11 @@ async def dashboard_cell(
     yaml_text: str = Form(""),
     cid: str = Form(""),
     cf: list[str] = Form(default=[]),
+    grain: list[str] = Form(default=[]),
+    set_grain: str = Form(""),
+    legend_page: int = Form(0),
+    table_page: int = Form(1),
+    table_q: str = Form(""),
     col: str = Form("1"),
     row: str = Form("1"),
     editing: str = Form(""),
@@ -2525,12 +2757,27 @@ async def dashboard_cell(
 
     `col` / `row` round-trip the CSS grid placement from the skeleton so the
     rendered cell lands in the right slot (and preserves any merged span).
-    `editing` adds the per-chart edit (pencil) button."""
+    `editing` adds the per-chart edit (pencil) button.
+
+    `set_grain` arrives when a chart's own grain/scale control fired: those
+    change nothing for the other charts, so they re-render this cell alone
+    rather than the whole dashboard. The page-level grain state rides back as an
+    out-of-band swap, since a cell response doesn't otherwise touch it."""
+    grains = set_grain_token(list(grain), set_grain) if set_grain else list(grain)
     try:
         dashboard = Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request))
-        return dashboard.render_cell(
-            cid, cf_tokens=list(cf), col=col, row=row, editing=bool(editing)
+        html = dashboard.render_cell(
+            cid,
+            cf_tokens=list(cf),
+            col=col,
+            row=row,
+            editing=bool(editing),
+            grain_tokens=grains,
+            legend_page=legend_page,
+            table_page=table_page,
+            table_query=table_q,
         )
+        return html + grain_state_html(grains) if set_grain else html
     except DashboardError as exc:
         return f'<pre class="error">{escape(str(exc))}</pre>'
 
@@ -2760,35 +3007,35 @@ async def chart_config_save(request: Request) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
-# --- Measures manager ---------------------------------------------------------
+# --- Calcs manager ---------------------------------------------------------
 #
 # A modal-like overlay (toggled from the topbar, styled like the docs overlay)
-# lists a dashboard's measures per dataset and adds / edits / deletes them.
-# Pure logic lives in `measures_edit`; these routes just thread the current YAML
+# lists a dashboard's calcs per dataset and adds / edits / deletes them.
+# Pure logic lives in `calcs_edit`; these routes just thread the current YAML
 # and the dataset's columns (for the filter builder) through it.
 
 
-@app.post("/measures/manager", response_class=HTMLResponse)
-async def measures_manager(yaml_text: str = Form("")) -> str:
-    """The overlay body: measures grouped by dataset with edit/delete controls."""
-    return measures_edit.render_manager(yaml_text)
+@app.post("/calcs/manager", response_class=HTMLResponse)
+async def calcs_manager(yaml_text: str = Form("")) -> str:
+    """The overlay body: calcs grouped by dataset with edit/delete controls."""
+    return calcs_edit.render_manager(yaml_text)
 
 
-@app.post("/measures/form", response_class=HTMLResponse)
-async def measures_form(
+@app.post("/calcs/form", response_class=HTMLResponse)
+async def calcs_form(
     request: Request,
     yaml_text: str = Form(""),
     dataset: str = Form(""),
     key: str = Form(""),
 ) -> str:
-    """The add/edit measure form (prefilled when `key` names an existing one)."""
+    """The add/edit calc form (prefilled when `key` names an existing one)."""
     columns = config_edit._columns(dataset, _dataset_store(request).source)
-    return measures_edit.render_form(yaml_text, dataset, key, columns=columns)
+    return calcs_edit.render_form(yaml_text, dataset, key, columns=columns)
 
 
-@app.post("/measures/save")
-async def measures_save(request: Request) -> dict:
-    """Add or replace a measure. Returns {ok, yaml} for the browser to swap into
+@app.post("/calcs/save")
+async def calcs_save(request: Request) -> dict:
+    """Add or replace a calc. Returns {ok, yaml} for the browser to swap into
     the editor, else {ok:false, error}."""
     form = await request.form()
     yaml_text = form.get("yaml_text", "")
@@ -2796,23 +3043,23 @@ async def measures_save(request: Request) -> dict:
     key = form.get("key", "")
     original_key = form.get("original_key", "")
     try:
-        definition = measures_edit.definition_from_form(form)
-        new_yaml = measures_edit.upsert_measure(
+        definition = calcs_edit.definition_from_form(form)
+        new_yaml = calcs_edit.upsert_calc(
             yaml_text, dataset, key, definition, original_key=original_key
         )
         return {"ok": True, "yaml": new_yaml}
-    except measures_edit.MeasuresEditError as exc:
+    except calcs_edit.CalcsEditError as exc:
         return {"ok": False, "error": str(exc)}
 
 
-@app.post("/measures/delete")
-async def measures_delete(request: Request) -> dict:
-    """Delete a measure (guarded if a chart still references it)."""
+@app.post("/calcs/delete")
+async def calcs_delete(request: Request) -> dict:
+    """Delete a calc (guarded if a chart still references it)."""
     form = await request.form()
     try:
-        new_yaml = measures_edit.delete_measure(
+        new_yaml = calcs_edit.delete_calc(
             form.get("yaml_text", ""), form.get("dataset", ""), form.get("key", "")
         )
         return {"ok": True, "yaml": new_yaml}
-    except measures_edit.MeasuresEditError as exc:
+    except calcs_edit.CalcsEditError as exc:
         return {"ok": False, "error": str(exc)}

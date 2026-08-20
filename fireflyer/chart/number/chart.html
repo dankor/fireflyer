@@ -2,6 +2,17 @@
 <article class="fireflyer-chart fireflyer-number"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <div class="fireflyer-title">{{ title }}</div>
   <div class="fireflyer-number-body">
-    <div class="fireflyer-number-value" title="{{ exact }}">{{ value }}</div>
+    <div class="fireflyer-number-fit">
+      <div class="fireflyer-number-value"{% if not description %} title="{{ exact }}"{% endif %}>{{ value }}</div>
+    </div>
+    {%- if description %}
+    <div class="fireflyer-number-tip" role="tooltip">
+      <div class="fireflyer-number-tip-row">
+        {%- if calc_name %}<span class="fireflyer-number-tip-name">{{ calc_name }}</span>{% endif %}
+        <span class="fireflyer-number-tip-value">{{ exact }}</span>
+      </div>
+      <div class="fireflyer-number-tip-desc">{{ description }}</div>
+    </div>
+    {%- endif %}
   </div>
 </article>

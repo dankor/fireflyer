@@ -9,13 +9,13 @@ import jinja2
 import polars as pl
 
 from fireflyer import filters as filters_mod
-from fireflyer import measures as measures_mod
+from fireflyer import calcs as calcs_mod
 from fireflyer.params import (
     ColumnParam,
     DatasetParam,
     FilterListParam,
     IntParam,
-    MeasureParam,
+    CalcParam,
     TextParam,
 )
 from fireflyer.scan import scan
@@ -154,15 +154,15 @@ class Map:
     # overrides (clamped to [ZOOM_MIN, ZOOM_MAX]). The +/- buttons round-trip
     # this value to step zoom up/down.
     zoom: int | None = None
-    # A measure key resolved against the dashboard's `measures:` block, or — for
+    # A calc key resolved against the dashboard's `calcs:` block, or — for
     # standalone use — an inline definition dict (None means row count). A hex
-    # is a density bin, so the measure must be additive: only `count` (rows per
+    # is a density bin, so the calc must be additive: only `count` (rows per
     # hex) or `sum` (a per-hex weight) are supported here.
-    measure: object = None
+    calc: object = None
     filters: list = field(default_factory=list)
 
     _resolve = None   # name -> (uri, storage_options); not a dataclass field
-    _measures = None  # MeasureSet for this chart's dataset; set by the dashboard
+    _calcs = None  # CalcSet for this chart's dataset; set by the dashboard
 
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
@@ -172,7 +172,7 @@ class Map:
         ColumnParam("lng", "Longitude column"),
         IntParam("grid_size", "Hex size", minimum=GRID_MIN, maximum=GRID_MAX),
         IntParam("zoom", "Tile zoom", minimum=ZOOM_MIN, maximum=ZOOM_MAX, nullable=True),
-        MeasureParam("measure", "Measure"),
+        CalcParam("calc", "Calc"),
         FilterListParam("filters", "Filters"),
     ]
 
@@ -183,27 +183,27 @@ class Map:
             self.zoom = max(ZOOM_MIN, min(ZOOM_MAX, int(self.zoom)))
 
     def _weight(self):
-        """(weight_expr, measure_filters, formatter) for the per-hex bin. A hex
-        can only show an additive density, so the measure must be `count` (one
+        """(weight_expr, calc_filters, formatter) for the per-hex bin. A hex
+        can only show an additive density, so the calc must be `count` (one
         per row) or `sum` (a per-row weight expression)."""
-        if isinstance(self.measure, dict):
-            measures, key = measures_mod.single(self.measure)
-        elif self.measure in (None, ""):
-            measures, key = measures_mod.single(None)
-        elif self._measures is None:
+        if isinstance(self.calc, dict):
+            calcs, key = calcs_mod.single(self.calc)
+        elif self.calc in (None, ""):
+            calcs, key = calcs_mod.single(None)
+        elif self._calcs is None:
             raise ValueError(
-                f"measure {self.measure!r} needs a dashboard `measures:` block"
+                f"calc {self.calc!r} needs a dashboard `calcs:` block"
             )
         else:
-            measures, key = self._measures, self.measure
-        m = measures.get(key)
+            calcs, key = self._calcs, self.calc
+        m = calcs.get(key)
         if not m.is_aggregate or m.agg not in ("count", "sum"):
-            raise ValueError("map supports only `count` or `sum` measures")
+            raise ValueError("map supports only `count` or `sum` calcs")
         if m.agg == "count":
             weight = pl.lit(1.0)
         else:
-            weight, _ = measures_mod.compile_formula(m.formula, pl.col)
-        return weight, m.filters, (lambda v: measures.fmt(key, v))
+            weight, _ = calcs_mod.compile_formula(m.formula, pl.col)
+        return weight, m.filters, (lambda v: calcs.fmt(key, v))
 
     def to_html(self, *, theme: str | None = None) -> str:
         """`theme` forces a palette (`"dark"`/`"light"`); omitted, the chart
@@ -211,13 +211,13 @@ class Map:
         when nested). Only the card chrome is themed — the tile basemap and its
         hex overlay stay fixed."""
         ff_theme = theme if theme in ("dark", "light") else ""
-        weight, measure_filters, fmt = self._weight()
-        # Lazy scan: only lat/lng (+ measure / filter columns) are read from the
-        # Parquet. Chart filters and the measure's own filters both narrow rows.
-        lf = scan(self.dataset, self._resolve)
+        weight, calc_filters, fmt = self._weight()
+        # Lazy scan: only lat/lng (+ calc / filter columns) are read from the
+        # Parquet. Chart filters and the calc's own filters both narrow rows.
+        lf = scan(self.dataset, self._resolve, self._calcs)
         schema = lf.collect_schema().names()
         preds = filters_mod.predicates(self.filters, schema) + filters_mod.predicates(
-            measure_filters, schema
+            calc_filters, schema
         )
         if preds:
             lf = lf.filter(*preds)
@@ -326,7 +326,7 @@ class Map:
             hexes.append({
                 "points": points,
                 "opacity": f"{opacity:.3f}",
-                "count": fmt(count),  # measure-formatted display value
+                "count": fmt(count),  # calc-formatted display value
                 "n": count,           # numeric — drives label pluralization
                 # Center coords drive the hover label; pre-rounded so the
                 # template doesn't need formatting logic.

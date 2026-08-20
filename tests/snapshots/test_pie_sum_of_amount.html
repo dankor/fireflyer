@@ -88,26 +88,38 @@
 .fireflyer-pie {
   display: flex;
   flex-direction: column;
+  /* Distance from a slice's outer edge to its tooltip. Both placement paths
+     (transform-based and anchored) read it, so they can't drift apart. */
+  --ff-tip-gap: 8px;
 }
 .fireflyer-pie-layout {
   flex: 1 1 auto;
-  /* min-height: 0 lets the layout shrink below its content size, and overflow:
-     auto then scrolls when the donut + legend don't fit the dashboard cell. */
+  /* min-height: 0 lets the layout shrink below its content size, so the legend
+     below can be given the leftover height to scroll inside. */
   min-height: 0;
-  overflow: auto;
+  /* The **legend** scrolls, not the chart. Scrolling the whole layout (what
+     this used to do) pushed the donut out of view to reach the categories;
+     keeping the donut put and scrolling just the list is what a long legend
+     actually wants. */
+  overflow: hidden;
   display: flex;
   gap: 24px;
-  /* `safe center` keeps content centered when it fits, but falls back to
-     flex-start when it overflows so the top stays scrollable. */
-  align-items: safe center;
+  /* `stretch` on both axes so the legend inherits a definite height to scroll
+     within — side by side it fills the row, and once it wraps below the donut
+     it takes the leftover line. `align-content` is what splits the height
+     between the two wrapped lines. */
+  flex-direction: column;
+  align-items: center;
   justify-content: safe center;
-  flex-wrap: wrap;
 }
 .fireflyer-pie-canvas {
   position: relative;
   width: 220px;
   height: 220px;
   flex-shrink: 0;
+  /* The layout stretches its items so the legend can inherit a height; the
+     donut has a fixed size, so centre it in whatever space it's given. */
+  align-self: center;
 }
 .fireflyer-pie svg { display: block; }
 /* Slice separators and the donut hole take the card colour so slices read as
@@ -119,10 +131,35 @@
    the slices, so it never eats slice hovers/clicks. */
 .fireflyer-pie-total { fill: var(--ff-ink); font-size: 24px; font-weight: 700;
   pointer-events: none; }
+/* Percent label drawn on each big-enough slice (small slices are skipped). White
+   with a faint dark halo so it stays legible over any slice colour. */
+.fireflyer-pie-pct {
+  fill: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  /* A soft shadow (not a thick outline) keeps the label crisp on any slice
+     colour without the chunky look of a wide stroke halo. */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+/* Highlight box behind a slice's percent label, revealed while that slice is
+   hovered (see the per-slice reveal rules in the template). */
+.fireflyer-pie-pct-bg {
+  fill: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
 .fireflyer-pie svg path,
-.fireflyer-pie svg circle[data-i] { cursor: pointer; transition: filter 0.15s ease; }
+.fireflyer-pie svg circle[data-i] {
+  cursor: pointer;
+  /* Scale a hovered slice radially from the donut centre so it pops out. */
+  transform-box: view-box;
+  transform-origin: center;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
 .fireflyer-pie svg path:hover,
-.fireflyer-pie svg circle[data-i]:hover { filter: brightness(1.1); }
+.fireflyer-pie svg circle[data-i]:hover { transform: scale(1.05); filter: brightness(1.08); }
 /* When the chart has at least one slice selected via crossfilter, fade the
    unselected slices so the active selection reads at a glance. */
 .fireflyer-pie.has-selection [data-active="0"] { opacity: 0.35; }
@@ -130,36 +167,222 @@
 .fireflyer-pie.has-selection .fireflyer-legend li.active .label { font-weight: 600; }
 .fireflyer-pie-tooltip {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  /* Per-slice placement (its outer-edge mid-angle point) arrives as custom
+     properties, not inline `left`/`top`: an inline declaration outranks any
+     stylesheet rule, so the anchored block below could not override it and the
+     canvas coordinates leaked into `position: fixed` — resolving against the
+     viewport and throwing the card into the page corner. Through a variable the
+     override is a plain stylesheet-vs-stylesheet cascade. */
+  left: var(--ff-tip-x, 50%);
+  top: var(--ff-tip-y, 50%);
+  /* The `--rt/rb/lt/lb` quadrant class then offsets the card outward from the
+     centre — horizontally away, vertically hanging into the canvas — so it sits
+     next to the hovered slice and stays on-screen. */
+  width: max-content;
+  max-width: 240px;
   pointer-events: none;
   background: var(--ff-tooltip-bg);
   color: var(--ff-tooltip-ink);
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  padding: 6px 10px;
-  border-radius: 3px;
-  white-space: nowrap;
-  box-shadow: 0 2px 6px var(--ff-shadow-strong);
+  line-height: 1.4;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px var(--ff-shadow-strong);
   opacity: 0;
   transition: opacity 0.12s ease;
-  z-index: 2;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.fireflyer-pie-tooltip-label { font-weight: 600; margin-right: 6px; }
-.fireflyer-pie-tooltip-meta { opacity: 0.85; }
+/* The card sits beside the donut on its slice's side, vertically centred on the
+   slice. One gap value for both placement paths — the anchored block at the
+   bottom of this file repeats this geometry with inset properties. */
+.fireflyer-pie-tooltip--r { transform: translate(var(--ff-tip-gap), -50%); }
+.fireflyer-pie-tooltip--l {
+  transform: translate(calc(-100% - var(--ff-tip-gap)), -50%);
+}
+/* Category name as a header, then a `calc · value · percent` row and an
+   optional calc description. */
+.fireflyer-pie-tooltip-head {
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+}
+.fireflyer-pie-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.fireflyer-pie-tooltip-name { opacity: 0.7; margin-right: auto; }
+.fireflyer-pie-tooltip-val { font-weight: 600; }
+.fireflyer-pie-tooltip-pct { opacity: 0.85; }
+.fireflyer-pie-tooltip-desc { opacity: 0.7; font-size: 11.5px; line-height: 1.4; }
+/* Centre-total tooltip — shown (CSS-only) when the calc has a description:
+   the calc name, its description, and the exact grand total. It hangs *below*
+   the donut (not over it) so it never covers the ring; a transparent hit circle
+   in the hole gives a large hover target on the total. */
+.fireflyer-pie-total-hit { fill: transparent; pointer-events: all; cursor: default; }
+.fireflyer-pie-total-tip {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 8px);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  background: var(--ff-tooltip-bg);
+  color: var(--ff-tooltip-ink);
+  padding: 10px 13px;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px var(--ff-shadow-strong);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 3;
+}
+.fireflyer-pie-canvas:has(.fireflyer-pie-total-hit:hover) .fireflyer-pie-total-tip,
+.fireflyer-pie-canvas:has(.fireflyer-pie-total:hover) .fireflyer-pie-total-tip { opacity: 1; }
+.fireflyer-pie-total-tip-name { font-weight: 600; font-size: 13px; letter-spacing: -0.01em; }
+.fireflyer-pie-total-tip-desc { opacity: 0.82; }
+.fireflyer-pie-total-tip-value {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* Tooltips escape the chart/scroll frame via CSS anchor positioning (no JS): a
+   `position: fixed` tooltip anchored to its slice/total is clipped by nothing,
+   and a position-try fallback flips it above when there's no room below — so it
+   never truncates. Progressive enhancement — browsers without anchor positioning
+   keep the in-flow placement above. See fireflyer/chart/SKILL.md, "Tooltips". */
+.fireflyer-pie-tip-anchor {
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+@supports (anchor-name: --a) {
+  .fireflyer-pie { anchor-scope: all; }
+  /* The anchored placement repeats the quadrant geometry above rather than
+     replacing it with a single centred-below position. The anchor is the
+     slice's *outer edge*, so a card centred under it covers the donut for every
+     slice on the left half and reads as detached from the slice it names —
+     which is what it did. Keeping both paths on one geometry also means the
+     card lands in the same place whether or not the browser has anchor
+     positioning; only the clipping behaviour differs.
+
+     The offset moves from `transform` into the inset properties because
+     `flip-inline`/`flip-block` mirror insets and can't mirror a transform. */
+  .fireflyer-pie-tooltip {
+    position: fixed;
+    inset: auto;
+    /* Vertical centring stays a transform (no inset expresses "centre on the
+       anchor"); the horizontal offset is an inset so `flip-inline` can mirror
+       it. */
+    top: anchor(center);
+    transform: translateY(-50%);
+    /* Near a screen edge, mirror to whichever side has room. */
+    position-try-fallbacks: flip-inline;
+  }
+  /* The anchor is 1px, so its edges are one point: `anchor(right)` and
+     `anchor(left)` differ only in which card edge they align. */
+  .fireflyer-pie-tooltip--r { left: calc(anchor(right) + var(--ff-tip-gap)); }
+  .fireflyer-pie-tooltip--l { right: calc(anchor(left) + var(--ff-tip-gap)); }
+  /* The total's marker sits at the bottom of the ring (see chart.html), so the
+     card hangs below the donut rather than out of its middle. */
+  .fireflyer-pie-total-tip {
+    position: fixed;
+    inset: auto;
+    position-anchor: --ff-pie-total;
+    top: calc(anchor(bottom) + var(--ff-tip-gap));
+    left: anchor(center);
+    transform: translateX(-50%);
+    position-try-fallbacks: flip-block;
+  }
+}
+/* The legend is a single row above the donut with a pager on the right, rather
+   than a tall column beside it: the donut is a fixed 220px square, so width
+   spent on a legend column is width the chart can't use, while a row costs one
+   line of height. Entries beyond a page are reached with the pager — the donut
+   itself always shows every slice, so paging never hides data. */
+.fireflyer-pie-legend-bar {
+  order: -1;
+  flex: none;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+}
 .fireflyer-pie .fireflyer-legend {
   list-style: none;
   padding: 0;
   margin: 0;
   font-size: 13px;
   color: var(--ff-ink);
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
 }
+.fireflyer-pie-legend-pager {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ff-muted);
+  font-variant-numeric: tabular-nums;
+}
+.fireflyer-pie-legend-step {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ff-muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.fireflyer-pie-legend-step:hover:not(:disabled) {
+  color: var(--ff-title);
+  background: color-mix(in srgb, var(--ff-border) 50%, transparent);
+}
+.fireflyer-pie-legend-step:disabled { opacity: 0.3; cursor: default; }
 .fireflyer-pie .fireflyer-legend li {
   display: flex;
   align-items: center;
   padding: 3px 0;
   white-space: nowrap;
+}
+/* Inside a dashboard the legend crossfilters like the slices: a click toggles
+   the category. Give the rows a pointer + hover affordance. */
+.fireflyer-pie .fireflyer-legend-clickable li {
+  cursor: pointer;
+  padding: 3px 5px;
+  margin: 0 -5px;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+.fireflyer-pie .fireflyer-legend-clickable li:hover { background: rgba(127, 127, 127, 0.14); }
+.fireflyer-pie .fireflyer-legend-clickable li:focus-visible {
+  outline: 2px solid var(--ff-accent);
+  outline-offset: -1px;
 }
 .fireflyer-pie .fireflyer-legend .swatch {
   display: inline-block;
@@ -170,56 +393,69 @@
   flex-shrink: 0;
 }
 .fireflyer-pie .fireflyer-legend .label { color: var(--ff-ink); }
-.fireflyer-pie .fireflyer-legend .meta {
-  color: var(--ff-muted);
-  margin-left: 6px;
-  font-variant-numeric: tabular-nums;
-}
 </style>
 <style>
-.fireflyer-pie-canvas:has(svg [data-i="0"]:hover) .fireflyer-pie-tooltip[data-i="0"] { opacity: 1; }
-.fireflyer-pie-canvas:has(svg [data-i="1"]:hover) .fireflyer-pie-tooltip[data-i="1"] { opacity: 1; }
-.fireflyer-pie-canvas:has(svg [data-i="2"]:hover) .fireflyer-pie-tooltip[data-i="2"] { opacity: 1; }
+.fireflyer-pie-canvas:has(svg [data-i="0"]:hover) .fireflyer-pie-tooltip[data-i="0"],
+.fireflyer-pie-canvas:has(svg [data-i="0"]:hover) .fireflyer-pie-pct-bg[data-i="0"] { opacity: 1; }
+.fireflyer-pie-canvas:has(svg [data-i="1"]:hover) .fireflyer-pie-tooltip[data-i="1"],
+.fireflyer-pie-canvas:has(svg [data-i="1"]:hover) .fireflyer-pie-pct-bg[data-i="1"] { opacity: 1; }
+.fireflyer-pie-canvas:has(svg [data-i="2"]:hover) .fireflyer-pie-tooltip[data-i="2"],
+.fireflyer-pie-canvas:has(svg [data-i="2"]:hover) .fireflyer-pie-pct-bg[data-i="2"] { opacity: 1; }
 </style>
 <article class="fireflyer-chart fireflyer-pie">
   <div class="fireflyer-title">Revenue by Status</div>
   <div class="fireflyer-pie-layout">
     <div class="fireflyer-pie-canvas">
       <svg viewBox="0 0 220 220" width="220" height="220" xmlns="http://www.w3.org/2000/svg">
-        <path d="M 110.00 20.00 A 90 90 0 1 1 30.82 67.22 L 62.49 84.33 A 54 54 0 1 0 110.00 56.00 Z" fill="#1FA8C9" stroke-width="1.5" data-i="0" aria-label="paid: 276 (82.9%)" />
-        <path d="M 30.82 67.22 A 90 90 0 0 1 66.11 31.43 L 83.66 62.86 A 54 54 0 0 0 62.49 84.33 Z" fill="#454E7C" stroke-width="1.5" data-i="1" aria-label="cancelled: 30 (9.0%)" />
-        <path d="M 66.11 31.43 A 90 90 0 0 1 110.00 20.00 L 110.00 56.00 A 54 54 0 0 0 83.66 62.86 Z" fill="#5AC189" stroke-width="1.5" data-i="2" aria-label="pending: 27 (8.1%)" />
+        <path d="M 110.00 20.00 A 90 90 0 1 1 30.82 67.22 L 71.29 89.09 A 44 44 0 1 0 110.00 66.00 Z" fill="#1FA8C9" stroke-width="1.5" data-i="0" aria-label="paid: 276 (82.88%)" />
+        <path d="M 30.82 67.22 A 90 90 0 0 1 66.11 31.43 L 88.54 71.59 A 44 44 0 0 0 71.29 89.09 Z" fill="#454E7C" stroke-width="1.5" data-i="1" aria-label="cancelled: 30 (9.01%)" />
+        <path d="M 66.11 31.43 A 90 90 0 0 1 110.00 20.00 L 110.00 66.00 A 44 44 0 0 0 88.54 71.59 Z" fill="#5AC189" stroke-width="1.5" data-i="2" aria-label="pending: 27 (8.11%)" />
+        <rect class="fireflyer-pie-pct-bg" data-i="0" x="117.9" y="159.5" width="52.8" height="16" rx="3" />
+        <text x="144.3" y="167.5" class="fireflyer-pie-pct" text-anchor="middle" dominant-baseline="central">82.88%</text>
+        <rect class="fireflyer-pie-pct-bg" data-i="1" x="39.3" y="55.0" width="46.0" height="16" rx="3" />
+        <text x="62.3" y="63.0" class="fireflyer-pie-pct" text-anchor="middle" dominant-baseline="central">9.01%</text>
         <text x="110" y="110" class="fireflyer-pie-total" text-anchor="middle" dominant-baseline="central"><title>Total: 333</title>333</text>
+        <foreignObject x="200.0" y="187.3" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-pie-tip-anchor" style="anchor-name: --ff-pie-s0"></div></foreignObject>
+        <foreignObject x="20.0" y="46.8" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-pie-tip-anchor" style="anchor-name: --ff-pie-s1"></div></foreignObject>
+        <foreignObject x="20.0" y="22.9" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-pie-tip-anchor" style="anchor-name: --ff-pie-s2"></div></foreignObject>
       </svg>
-      <div class="fireflyer-pie-tooltip" data-i="0" role="tooltip">
-        <span class="fireflyer-pie-tooltip-label">paid</span>
-        <span class="fireflyer-pie-tooltip-meta">276 · 82.9%</span>
+      <div class="fireflyer-pie-tooltip fireflyer-pie-tooltip--r" data-i="0" style="--ff-tip-x: 200.0px; --ff-tip-y: 187.3px; position-anchor: --ff-pie-s0" role="tooltip">
+        <div class="fireflyer-pie-tooltip-head">paid</div>
+        <div class="fireflyer-pie-tooltip-row">
+          <span class="fireflyer-pie-tooltip-val">276</span>
+          <span class="fireflyer-pie-tooltip-pct">82.88%</span>
+        </div>
       </div>
-      <div class="fireflyer-pie-tooltip" data-i="1" role="tooltip">
-        <span class="fireflyer-pie-tooltip-label">cancelled</span>
-        <span class="fireflyer-pie-tooltip-meta">30 · 9.0%</span>
+      <div class="fireflyer-pie-tooltip fireflyer-pie-tooltip--l" data-i="1" style="--ff-tip-x: 20.0px; --ff-tip-y: 46.8px; position-anchor: --ff-pie-s1" role="tooltip">
+        <div class="fireflyer-pie-tooltip-head">cancelled</div>
+        <div class="fireflyer-pie-tooltip-row">
+          <span class="fireflyer-pie-tooltip-val">30</span>
+          <span class="fireflyer-pie-tooltip-pct">9.01%</span>
+        </div>
       </div>
-      <div class="fireflyer-pie-tooltip" data-i="2" role="tooltip">
-        <span class="fireflyer-pie-tooltip-label">pending</span>
-        <span class="fireflyer-pie-tooltip-meta">27 · 8.1%</span>
+      <div class="fireflyer-pie-tooltip fireflyer-pie-tooltip--l" data-i="2" style="--ff-tip-x: 20.0px; --ff-tip-y: 22.9px; position-anchor: --ff-pie-s2" role="tooltip">
+        <div class="fireflyer-pie-tooltip-head">pending</div>
+        <div class="fireflyer-pie-tooltip-row">
+          <span class="fireflyer-pie-tooltip-val">27</span>
+          <span class="fireflyer-pie-tooltip-pct">8.11%</span>
+        </div>
       </div>
     </div>
-    <ul class="fireflyer-legend">
+    <div class="fireflyer-pie-legend-bar">
+      <ul class="fireflyer-legend">
       <li>
         <span class="swatch" style="background:#1FA8C9;"></span>
         <span class="label">paid</span>
-        <span class="meta">276 · 82.9%</span>
       </li>
       <li>
         <span class="swatch" style="background:#454E7C;"></span>
         <span class="label">cancelled</span>
-        <span class="meta">30 · 9.0%</span>
       </li>
       <li>
         <span class="swatch" style="background:#5AC189;"></span>
         <span class="label">pending</span>
-        <span class="meta">27 · 8.1%</span>
       </li>
-    </ul>
+      </ul>
+    </div>
   </div>
 </article>

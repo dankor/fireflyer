@@ -19,6 +19,8 @@ Rendering context (available datasets/columns) is passed in via `ParamContext`.
 from dataclasses import dataclass, field
 from html import escape
 
+from fireflyer import filters as filters_mod
+
 
 @dataclass
 class ParamContext:
@@ -26,7 +28,7 @@ class ParamContext:
     datasets: dict[str, str] = field(default_factory=dict)  # dataset id -> path
     dataset_id: str | None = None                           # this chart's dataset
     columns: list[str] = field(default_factory=list)        # its dataset's columns
-    measures: list[str] = field(default_factory=list)       # measure keys for its dataset
+    calcs: list[str] = field(default_factory=list)       # calc keys for its dataset
 
 
 class Param:
@@ -113,13 +115,20 @@ class DatasetParam(Param):
 class ColumnParam(Param):
     """Dropdown of the chart dataset's columns. Keeps the current value even if
     the column list can't be read (e.g. missing CSV) so nothing is silently
-    dropped."""
+    dropped. `optional` adds a blank choice, without which a column that has a
+    meaning when unset (the bar's `y`) could be set but never cleared."""
     kind = "column"
+
+    def __init__(self, name: str, label: str, optional: bool = False):
+        super().__init__(name, label)
+        self.optional = optional
 
     def render(self, value, ctx: ParamContext) -> str:
         choices = list(ctx.columns)
         if value not in choices and value not in (None, ""):
             choices = [str(value), *choices]
+        if self.optional:
+            choices = [("", "—"), *choices]
         return self._wrap(
             f'<select class="ff-input" name="{escape(self.name, quote=True)}">'
             f'{_options(choices, value)}</select>'
@@ -129,14 +138,14 @@ class ColumnParam(Param):
         return (form.get(self.name) or "").strip()
 
 
-class MeasureParam(Param):
-    """Dropdown of the chart dataset's measure keys (defined in the dashboard's
-    `measures:` block, managed in the measures modal). Keeps the current value
-    even when the measure list can't be read, so nothing is silently dropped."""
-    kind = "measure"
+class CalcParam(Param):
+    """Dropdown of the chart dataset's calc keys (defined in the dashboard's
+    `calcs:` block, managed in the calcs modal). Keeps the current value
+    even when the calc list can't be read, so nothing is silently dropped."""
+    kind = "calc"
 
     def render(self, value, ctx: ParamContext) -> str:
-        choices = list(ctx.measures)
+        choices = list(ctx.calcs)
         if value not in choices and value not in (None, ""):
             choices = [str(value), *choices]
         return self._wrap(
@@ -219,13 +228,50 @@ class BoolParam(Param):
         return bool(form.get(self.name))
 
 
+class ListParam(Param):
+    """Comma-separated list of names — the table's `columns`, `measures` and
+    `sort`.
+
+    A text field rather than a multi-select: all three are **order-sensitive**
+    (column order, measure order, sort precedence), and `sort` entries carry a
+    `+`/`-` prefix. A checkbox list expresses neither.
+    """
+    kind = "list"
+
+    def __init__(self, name: str, label: str, placeholder: str = ""):
+        super().__init__(name, label)
+        self.placeholder = placeholder
+
+    def render(self, value, ctx: ParamContext) -> str:
+        val = ", ".join(str(v) for v in (value or []))
+        placeholder = (
+            f' placeholder="{escape(self.placeholder, quote=True)}"'
+            if self.placeholder
+            else ""
+        )
+        return self._wrap(
+            f'<input class="ff-input" type="text" '
+            f'name="{escape(self.name, quote=True)}" '
+            f'value="{escape(val, quote=True)}"{placeholder}>'
+        )
+
+    def parse(self, form):
+        raw = form.get(self.name) or ""
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
+    def to_yaml(self, value):
+        return value or []  # empty list is dropped by the emitter
+
+
 class FilterListParam(Param):
     """The full filter builder: zero or more `{column, op, values}` rows. Rows
     are added/removed client-side; each row submits three parallel fields
     (`filter_column`, `filter_op`, `filter_values`), zipped back on parse."""
     kind = "filters"
 
-    OPS = (("in", "in"), ("ni", "not in"))
+    # `between` takes exactly two comma-separated values (low, high) and is
+    # half-open — the same op a bar segment emits for a bucketed axis.
+    OPS = (("in", "in"), ("ni", "not in"), ("between", "between"))
 
     def _row(self, columns, column="", op="in", values_text="") -> str:
         col_opts = _options(
@@ -272,7 +318,7 @@ class FilterListParam(Param):
                 continue
             out.append({
                 "column": col,
-                "op": op if op in ("in", "ni") else "in",
+                "op": op if op in filters_mod.OPS else "in",
                 "values": values,
             })
         return out
