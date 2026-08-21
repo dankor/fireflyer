@@ -21,7 +21,22 @@ def client():
     return TestClient(app)
 
 
-# `orders` is the sample dataset the app seeds from files/orders.csv at startup.
+# These dashboards carry their own data, so the suite doesn't depend on a store
+# having been seeded — which it no longer is, and which quietly made these tests
+# pass off a leftover file on the developer's disk.
+_DATA = """
+datasets:
+  orders: |
+    id,day,status,amount
+    1,2026-06-01,paid,42
+    2,2026-06-01,pending,15
+    3,2026-06-02,paid,80
+    4,2026-06-02,shipped,11
+    5,2026-06-03,paid,7
+    6,2026-06-03,cancelled,30
+    7,2026-06-04,pending,12
+"""
+
 _YAML = """name: Route test
 calcs:
   orders:
@@ -31,7 +46,7 @@ charts:
   b: {type: bar, dataset: orders, title: T, x: at, y: status, calc: n}
 layout:
   - ["@40", "b"]
-"""
+""" + _DATA
 
 
 def _labels(html):
@@ -95,7 +110,7 @@ charts:
     pagination: 2
 layout:
   - ["@40", "t"]
-"""
+""" + _DATA
 
 
 def _headers(html):
@@ -174,7 +189,7 @@ charts:
   fine: {type: number, dataset: orders, title: Rows, calc: n}
 layout:
   - ["@30", "broken:50", "fine:50"]
-"""
+""" + _DATA
 
 
 def test_a_chart_that_cannot_render_returns_an_error_card(client):

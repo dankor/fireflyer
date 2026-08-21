@@ -73,31 +73,6 @@ def _object_store_config() -> dict:
 app.state.datasets = DatasetStore(make_object_store(_object_store_config()))
 
 
-def _seed_sample_dataset() -> None:
-    """Seed the `orders` dataset the starter dashboard references so a fresh
-    **local** checkout renders out of the box. Skipped for S3/Garage (don't
-    auto-write a shared object store) and best-effort — a misconfigured or
-    unreachable object store must never crash startup. Paths mode seeds a
-    per-path demo instead (see `_seed_demo_path`)."""
-    import pathlib
-
-    if os.environ.get("FIREFLYER_S3_ENDPOINT"):
-        return
-    if os.environ.get("FIREFLYER_PATHS") and not PORTAL_ENABLED:
-        return
-    csv = pathlib.Path("files/orders.csv")
-    if not csv.exists():
-        return
-    try:
-        if app.state.datasets.get("orders") is None:
-            app.state.datasets.create(
-                "orders", csv.read_bytes(), description="Sample orders data"
-            )
-    except Exception:
-        pass
-
-
-_seed_sample_dataset()
 
 
 @app.middleware("http")
@@ -423,6 +398,143 @@ layout:
     - "-"
     - ["@36", "by_channel"]
     - ["@50", "all_orders"]
+
+# ---- DATA ----------------------------------------------------------------
+# The dashboard carries its own data. `datasets:` is a mapping of name -> CSV
+# text: first line the header, the rest ordinary rows. A chart names one with
+# `dataset: orders`, exactly as it would a dataset you uploaded.
+#
+# This is for prototyping without leaving the editor - invent a table, chart it,
+# iterate, and the whole thing stays one file you can paste to someone. Ask the
+# assistant for sample data and it will write a block like this. For real or
+# large data, upload it under Datasets instead and drop this block: a name
+# defined here overrides an uploaded one.
+#
+# It sits at the end because it is the least interesting part to read - edit
+# these rows like any other text.
+datasets:
+  orders: |
+    id,day,status,channel,segment,qty,unit_price,amount,lat,lng
+    1,2026-04-06,pending,wholesale,enterprise,2,31.69,63.38,50.514622,30.47396
+    2,2026-04-06,shipped,partner,business,4,69.25,277.0,50.424105,30.497742
+    3,2026-04-06,paid,mobile app,,1,22.62,22.62,50.436325,30.503082
+    4,2026-04-07,shipped,partner,consumer,3,66.54,199.62,50.511851,30.561561
+    5,2026-04-08,shipped,wholesale,consumer,2,62.78,125.56,50.469298,30.555402
+    6,2026-04-08,paid,partner,,1,8.88,8.88,50.412343,30.636681
+    7,2026-04-09,cancelled,referral,enterprise,4,72.38,289.52,50.414505,30.450244
+    8,2026-04-09,pending,wholesale,business,1,27.63,27.63,50.426878,30.492299
+    9,2026-04-09,refunded,partner,business,2,20.75,41.5,50.47905,30.466574
+    10,2026-04-10,paid,web,,1,79.36,79.36,50.410702,30.364388
+    11,2026-04-11,refunded,mobile app,business,1,79.67,79.67,50.435517,30.557719
+    12,2026-04-11,paid,mobile app,business,1,77.28,77.28,50.468706,30.536808
+    13,2026-04-11,shipped,retail,consumer,3,25.94,77.82,50.438043,30.509055
+    14,2026-04-11,shipped,partner,consumer,3,56.85,170.55,50.442767,30.498301
+    15,2026-04-12,pending,partner,,3,87.06,261.18,50.493714,30.57738
+    16,2026-04-12,shipped,wholesale,consumer,3,51.63,154.89,50.527239,30.655275
+    17,2026-04-13,cancelled,marketplace,consumer,1,35.4,35.4,50.488861,30.614526
+    18,2026-04-14,paid,referral,business,1,17.89,17.89,50.442627,30.506183
+    19,2026-04-15,paid,retail,consumer,3,52.09,156.27,50.404261,30.528246
+    20,2026-04-16,shipped,partner,enterprise,4,27.18,108.72,50.403286,30.568775
+    21,2026-04-17,paid,partner,consumer,2,86.94,173.88,50.497505,30.504119
+    22,2026-04-17,shipped,phone,consumer,1,66.48,66.48,50.424385,30.518512
+    23,2026-04-18,shipped,mobile app,business,4,20.64,82.56,50.456815,30.47264
+    24,2026-04-18,refunded,mobile app,consumer,5,13.21,66.05,50.461677,30.474148
+    25,2026-04-20,pending,retail,consumer,3,87.15,261.45,50.457448,30.51422
+    26,2026-04-23,pending,mobile app,enterprise,5,15.22,76.1,50.492648,30.574639
+    27,2026-04-24,shipped,wholesale,,3,59.19,177.57,50.455281,30.413182
+    28,2026-04-25,refunded,web,business,1,83.22,83.22,50.455084,30.548336
+    29,2026-04-25,pending,phone,business,3,67.86,203.58,50.453793,30.533732
+    30,2026-04-25,paid,retail,business,4,23.69,94.76,50.529539,30.569363
+    31,2026-04-25,paid,mobile app,business,1,17.47,17.47,50.474079,30.564899
+    32,2026-04-25,refunded,phone,consumer,5,76.08,380.4,50.374242,30.446518
+    33,2026-04-26,paid,mobile app,enterprise,1,9.64,9.64,50.477878,30.5663
+    34,2026-04-27,shipped,marketplace,enterprise,4,69.48,277.92,50.34116,30.50405
+    35,2026-04-27,shipped,web,consumer,1,16.75,16.75,50.443166,30.57788
+    36,2026-04-27,cancelled,referral,,5,88.61,443.05,50.515363,30.497129
+    37,2026-04-28,paid,wholesale,enterprise,2,54.97,109.94,50.417481,30.72118
+    38,2026-04-29,paid,marketplace,consumer,3,17.35,52.05,50.501154,30.531599
+    39,2026-04-29,shipped,web,,4,20.43,81.72,50.494053,30.487521
+    40,2026-04-29,refunded,mobile app,enterprise,2,81.29,162.58,50.358787,30.457863
+    41,2026-04-30,shipped,mobile app,business,2,87.49,174.98,50.469282,30.424195
+    42,2026-04-30,pending,retail,enterprise,5,23.14,115.7,50.435124,30.655469
+    43,2026-05-02,paid,wholesale,consumer,2,89.02,178.04,50.481987,30.512355
+    44,2026-05-02,pending,wholesale,,1,71.25,71.25,50.422678,30.576613
+    45,2026-05-02,paid,referral,business,1,13.22,13.22,50.457052,30.600079
+    46,2026-05-03,shipped,phone,enterprise,5,43.64,218.2,50.472243,30.498255
+    47,2026-05-04,paid,partner,,2,22.94,45.88,50.453988,30.479782
+    48,2026-05-04,pending,partner,enterprise,4,52.66,210.64,50.482693,30.639391
+    49,2026-05-04,shipped,referral,business,5,74.91,374.55,50.392719,30.425561
+    50,2026-05-04,refunded,partner,enterprise,1,84.45,84.45,50.495401,30.503456
+    51,2026-05-05,refunded,wholesale,,3,6.23,18.69,50.444037,30.551654
+    52,2026-05-05,paid,retail,business,1,72.98,72.98,50.395371,30.531942
+    53,2026-05-05,pending,marketplace,consumer,1,27.9,27.9,50.517658,30.432512
+    54,2026-05-05,pending,partner,business,5,61.3,306.5,50.40261,30.443559
+    55,2026-05-06,paid,mobile app,business,1,12.19,12.19,50.472602,30.521657
+    56,2026-05-07,cancelled,marketplace,enterprise,1,66.13,66.13,50.429836,30.454864
+    57,2026-05-09,shipped,phone,business,2,60.66,121.32,50.419476,30.497705
+    58,2026-05-09,pending,wholesale,consumer,1,86.36,86.36,50.490263,30.647008
+    59,2026-05-09,paid,referral,consumer,2,84.54,169.08,50.445935,30.621777
+    60,2026-05-09,paid,web,enterprise,1,78.12,78.12,50.482445,30.342715
+    61,2026-05-11,cancelled,mobile app,business,5,60.49,302.45,50.481262,30.595727
+    62,2026-05-11,shipped,marketplace,enterprise,1,47.38,47.38,50.479405,30.495547
+    63,2026-05-11,pending,retail,business,3,20.93,62.79,50.435088,30.594094
+    64,2026-05-13,shipped,phone,business,1,53.61,53.61,50.407522,30.521978
+    65,2026-05-13,paid,web,enterprise,4,33.39,133.56,50.562065,30.489311
+    66,2026-05-13,paid,wholesale,business,4,26.52,106.08,50.514435,30.520154
+    67,2026-05-13,shipped,phone,consumer,2,30.27,60.54,50.422659,30.590034
+    68,2026-05-14,shipped,partner,enterprise,3,7.52,22.56,50.356795,30.582245
+    69,2026-05-14,pending,mobile app,consumer,2,71.8,143.6,50.453368,30.608357
+    70,2026-05-15,refunded,phone,enterprise,2,84.99,169.98,50.462959,30.705777
+    71,2026-05-15,cancelled,phone,business,1,89.22,89.22,50.358975,30.51476
+    72,2026-05-15,shipped,referral,business,2,75.45,150.9,50.480311,30.458413
+    73,2026-05-15,pending,mobile app,business,1,84.46,84.46,50.404028,30.573867
+    74,2026-05-16,paid,wholesale,consumer,3,37.08,111.24,50.382297,30.50985
+    75,2026-05-17,paid,wholesale,consumer,1,13.2,13.2,50.33684,30.610687
+    76,2026-05-17,shipped,marketplace,,2,19.62,39.24,50.469336,30.520496
+    77,2026-05-18,shipped,mobile app,consumer,2,64.53,129.06,50.421872,30.526292
+    78,2026-05-18,paid,web,business,2,33.25,66.5,50.460045,30.554011
+    79,2026-05-18,shipped,phone,business,2,31.24,62.48,50.417152,30.518017
+    80,2026-05-20,shipped,phone,business,2,60.22,120.44,50.425571,30.520492
+    81,2026-05-22,paid,retail,business,1,35.84,35.84,50.428034,30.572555
+    82,2026-05-22,cancelled,retail,consumer,5,29.0,145.0,50.468267,30.526529
+    83,2026-05-23,refunded,marketplace,business,1,18.6,18.6,50.418496,30.536452
+    84,2026-05-24,shipped,web,business,3,88.19,264.57,50.438205,30.51865
+    85,2026-05-24,refunded,marketplace,business,2,75.6,151.2,50.500859,30.552371
+    86,2026-05-24,shipped,referral,business,1,71.87,71.87,50.490302,30.589213
+    87,2026-05-24,shipped,web,consumer,2,38.52,77.04,50.51845,30.480088
+    88,2026-05-25,paid,phone,business,1,6.07,6.07,50.501988,30.480386
+    89,2026-05-27,shipped,wholesale,enterprise,2,80.62,161.24,50.471501,30.492252
+    90,2026-05-27,refunded,partner,enterprise,2,61.04,122.08,50.45366,30.560615
+    91,2026-05-28,shipped,mobile app,business,1,35.55,35.55,50.431164,30.633676
+    92,2026-05-30,paid,marketplace,business,1,11.4,11.4,50.432564,30.559327
+    93,2026-05-30,shipped,referral,business,1,66.36,66.36,50.523788,30.451367
+    94,2026-05-31,paid,referral,,1,48.96,48.96,50.448173,30.447391
+    95,2026-06-01,shipped,web,business,1,60.43,60.43,50.473805,30.531194
+    96,2026-06-01,refunded,marketplace,,1,23.76,23.76,50.47105,30.423138
+    97,2026-06-02,pending,mobile app,consumer,1,69.0,69.0,50.456113,30.512493
+    98,2026-06-02,paid,wholesale,enterprise,3,50.71,152.13,50.405561,30.507132
+    99,2026-06-03,refunded,mobile app,consumer,1,69.15,69.15,50.406048,30.495127
+    100,2026-06-03,shipped,referral,,3,63.12,189.36,50.512429,30.563916
+    101,2026-06-03,refunded,retail,consumer,3,72.96,218.88,50.456787,30.534148
+    102,2026-06-03,refunded,retail,,2,61.72,123.44,50.50917,30.513061
+    103,2026-06-04,shipped,phone,business,3,66.45,199.35,50.483585,30.563888
+    104,2026-06-04,refunded,web,business,1,46.87,46.87,50.369797,30.623822
+    105,2026-06-04,shipped,marketplace,,1,52.72,52.72,50.395165,30.5573
+    106,2026-06-05,pending,partner,business,1,26.86,26.86,50.459272,30.523891
+    107,2026-06-05,refunded,partner,consumer,4,19.42,77.68,50.453124,30.516923
+    108,2026-06-05,cancelled,phone,,1,17.25,17.25,50.487567,30.503846
+    109,2026-06-07,shipped,referral,enterprise,3,27.83,83.49,50.449004,30.507966
+    110,2026-06-07,shipped,mobile app,,1,66.8,66.8,50.419049,30.401447
+    111,2026-06-08,pending,mobile app,consumer,1,13.75,13.75,50.413747,30.516756
+    112,2026-06-08,paid,referral,business,5,36.98,184.9,50.497008,30.580199
+    113,2026-06-10,paid,mobile app,,5,39.37,196.85,50.418761,30.470602
+    114,2026-06-11,shipped,marketplace,enterprise,1,34.17,34.17,50.391045,30.438169
+    115,2026-06-11,pending,referral,consumer,2,21.18,42.36,50.399066,30.52526
+    116,2026-06-13,shipped,partner,enterprise,1,32.49,32.49,50.432476,30.502238
+    117,2026-06-13,shipped,phone,business,1,40.33,40.33,50.41336,30.580718
+    118,2026-06-13,pending,referral,enterprise,1,66.2,66.2,50.441513,30.461491
+    119,2026-06-14,paid,mobile app,consumer,1,52.35,52.35,50.378372,30.53615
+    120,2026-06-14,pending,marketplace,consumer,5,27.05,135.25,50.548595,30.500813
 """
 
 # Chat body differs by whether a key is configured: the live input, or a setup
@@ -2284,12 +2396,11 @@ def _gallery_kwargs(request: Request) -> dict:
 
 def _seed_demo_path() -> None:
     """Paths mode: on first run, seed a `demo` path so the gallery opens on a
-    working example — the starter dashboard in `demo/dashboards/`, and the
-    `orders` dataset it references in the demo path's isolated blob store. The
-    dashboard is only written when the path is brand new (its `dashboards/` dir is
-    absent), so it never clobbers your edits; the dataset is (re)seeded whenever
-    it's missing (the blob volume can reset independently of the path files).
-    Best-effort — never crashes startup."""
+    working example. Only the starter dashboard is written, and only when the
+    path is brand new (its `dashboards/` dir is absent), so it never clobbers
+    your edits — the dashboard carries its own data in an inline `datasets:`
+    block, so there is no dataset to seed alongside it. Best-effort — never
+    crashes startup."""
     import pathlib
 
     if not _paths_mode():
@@ -2299,16 +2410,6 @@ def _seed_demo_path() -> None:
             paths_mod.PathDashboardStore(
                 f"{PATHS_BASE}/{DEMO_PATH}"
             ).create(DEFAULT_YAML)
-        except Exception:
-            pass
-    csv = pathlib.Path("files/orders.csv")
-    if csv.exists():
-        datasets = DatasetStore(make_object_store({"base": f"{_DATA_BASE}/{DEMO_PATH}"}))
-        try:
-            if datasets.get("orders") is None:
-                datasets.create(
-                    "orders", csv.read_bytes(), description="Sample orders data"
-                )
         except Exception:
             pass
 

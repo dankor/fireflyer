@@ -12,7 +12,7 @@ Core flow, kept deliberately flat:
 CSV → Parquet (dataset) → LazyFrame → Chart → HTML → Browser
 ```
 
-**Datasets are managed, named entities** (`datasets.py`/`storage.py`): a CSV is uploaded, converted to **Parquet**, and stored in an object store (local folder for dev/tests, **Garage/S3** for portal). A chart references a dataset **by name** — the dashboard YAML has **no `datasets:` block** and no file paths. `Dashboard.from_yaml(text, datasets=<DatasetStore>)` resolves names to `(uri, storage_options)`; charts read via lazy `scan_parquet` with projection + predicate pushdown (`scan.py`), so only what a chart needs is read. Standalone/tests may pass a Parquet path directly as `dataset`.
+**Datasets are managed, named entities** (`datasets.py`/`storage.py`): a CSV is uploaded, converted to **Parquet**, and stored in an object store (local folder for dev/tests, **Garage/S3** for portal). A chart references a dataset **by name**, resolved two ways: a **managed** dataset in the store, or an **inline** one — CSV carried in the dashboard's own optional `datasets:` block (`inline_data.py`), converted to Parquet once and cached by content checksum in the temp dir. Inline shadows managed for the same name. Inline exists for prototyping without leaving the editor (and for the assistant to invent sample data on request); managed is still the home for real or large data. No file paths either way. `Dashboard.from_yaml(text, datasets=<DatasetStore>)` resolves names to `(uri, storage_options)`; charts read via lazy `scan_parquet` with projection + predicate pushdown (`scan.py`), so only what a chart needs is read. Standalone/tests may pass a Parquet path directly as `dataset`.
 
 Charts are declarations, not stateful objects. Every render re-scans the Parquet, re-executes chart logic, and re-generates HTML. No caching.
 
@@ -39,7 +39,7 @@ fireflyer/
     ├── portal.py                       # gallery: Dashboards + Datasets tabs, stores
     └── chat.py                         # AI assistant: Anthropic SDK + DSL system prompt
 tests/                                  # snapshot-based; snapshots/ holds expected HTML
-files/ , tests/data/                    # sample data (orders.csv + orders.parquet)
+tests/data/                             # test fixtures (orders.csv + orders.parquet)
 architecture.md                         # authoritative spec
 ```
 
@@ -85,7 +85,7 @@ Snapshot-based. Each test pairs an input CSV + chart/dashboard definition with e
 The editor's chat sends the current YAML + request + the **available datasets' schemas** (column name/type, **no data**) to Claude (`claude-sonnet-4-6`, via the official `anthropic` SDK). Claude replies in text and, when a change is wanted, calls an `update_dashboard` tool with the **complete** new YAML; `run_chat` validates it with `Dashboard.from_yaml` before returning, with a bounded repair loop. Notes:
 
 - The key comes from `ANTHROPIC_API_KEY` (loaded from `.env` via `python-dotenv` at app startup), stays server-side, and gates the feature (`CHAT_ENABLED`). Tests fake the client — never call the live API in the suite.
-- **Dataset context.** The `/chat` route passes `run_chat(..., datasets=_dataset_schemas(request))` — the request-scoped dataset store's `list()` reduced to `{name, columns:[{name,dtype}]}`, never row data — so the assistant builds charts/calcs from real columns and won't invent datasets/columns. `chat.py`'s `_datasets_block` formats it into the user turn (`name: type` per column); the system prompt's **Datasets** section tells the model there's no `datasets:` block and to use only the listed datasets.
+- **Dataset context.** The `/chat` route passes `run_chat(..., datasets=_dataset_schemas(request))` — the request-scoped dataset store's `list()` reduced to `{name, columns:[{name,dtype}]}`, never row data — so the assistant builds charts/calcs from real columns and won't invent datasets/columns. `chat.py`'s `_datasets_block` formats it into the user turn (`name: type` per column); the system prompt's **Datasets** section covers both kinds: use only the listed *managed* datasets, and write an **inline** `datasets:` block when asked to mock up or demo something.
 - **UI.** The assistant is a **left-pane overlay** (`#ff-chat`, reusing the `.ff-docs` shell) toggled by a topbar button (`#ff-chat-btn`), mirroring the docs/calcs overlays on the right; Esc or ✕ closes it. (It replaced the old bottom collapsible panel.)
 - `chat.py` embeds a condensed DSL spec as the (prompt-cached) system prompt. **Keep it in sync** with `architecture.md` and the chart `spec.md` files when the layout or chart rules change.
 - This is editor-only and not part of the library core — same status as the rest of `web/`.

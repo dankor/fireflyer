@@ -88,14 +88,24 @@ def test_gallery_kwargs_empty_outside_paths_mode(paths_mode, monkeypatch):
     assert app_mod._gallery_kwargs(_Req()) == {}
 
 
-def test_seed_demo_path_creates_dashboard_and_dataset(paths_mode):
+def test_seed_demo_path_creates_only_the_dashboard(paths_mode):
+    """The starter dashboard carries its own data in an inline `datasets:`
+    block, so there is nothing to seed alongside it — a fresh install opens on a
+    working example with an empty Datasets tab."""
     app_mod._seed_demo_path()
-    # The starter dashboard lands in the demo path.
     rows = PathDashboardStore(str(paths_mode / "demo")).list()
     assert [r.name for r in rows] == ["Orders overview"]
-    # The dataset it references is seeded in the demo path's isolated blob store.
+
     demo_ds = _dataset_store_for(app_mod._DATA_BASE, "demo")
-    assert demo_ds.get("orders") is not None
+    assert demo_ds.get("orders") is None, "no dataset should be created"
+
+    # ...and it renders anyway, with no store behind it.
+    import fireflyer as ff
+
+    dashboard = ff.Dashboard.from_yaml(PathDashboardStore(
+        str(paths_mode / "demo")
+    ).get(rows[0].id).yaml)
+    assert dashboard.chart_configs
 
 
 def test_seed_demo_path_is_non_destructive(paths_mode):

@@ -10,6 +10,7 @@ import yaml
 
 from fireflyer import filters as filters_mod
 from fireflyer import calcs as calcs_mod
+from fireflyer import inline_data
 from fireflyer.scan import scan
 from fireflyer.chart.bar.chart import Bar
 from fireflyer.chart.map.chart import Map
@@ -224,7 +225,11 @@ class Dashboard:
         if not isinstance(name, str) or not name.strip():
             raise DashboardError("top-level `name` must be a non-empty string")
 
-        resolve = _resolver_from(datasets)
+        try:
+            inline = inline_data.parse_block(config.get("datasets"))
+        except inline_data.InlineDataError as exc:
+            raise DashboardError(str(exc)) from exc
+        resolve = _resolver_from(datasets, inline)
         chart_configs = _parse_charts(config["charts"])
         try:
             calc_sets = calcs_mod.parse_block(config.get("calcs"))
@@ -252,17 +257,24 @@ class Dashboard:
 
     @staticmethod
     def dataset_names(text: str) -> set[str]:
-        """The dataset names a dashboard references (its charts' `dataset:`
-        values). Best-effort — empty set if the YAML doesn't parse. Powers the
-        portal's delete-guard and cascade-rename."""
+        """The **managed** dataset names a dashboard references (its charts'
+        `dataset:` values). Best-effort — empty set if the YAML doesn't parse.
+        Powers the portal's delete-guard and cascade-rename.
+
+        Names defined by the dashboard's own inline `datasets:` block are
+        excluded: those charts read data carried in the file, so they neither
+        pin a stored dataset against deletion nor want renaming when one moves.
+        """
         try:
             dash = Dashboard.from_yaml(text)
-        except DashboardError:
+            inline = inline_data.parse_block(yaml.safe_load(text).get("datasets"))
+        except (DashboardError, inline_data.InlineDataError, AttributeError,
+                yaml.YAMLError):
             return set()
         return {
             cfg.kwargs.get("dataset")
             for cfg in dash.chart_configs.values()
-            if cfg.kwargs.get("dataset")
+            if cfg.kwargs.get("dataset") and cfg.kwargs["dataset"] not in inline
         }
 
     def _tab_context(self, active_tab: int):
@@ -778,16 +790,27 @@ def rename_dataset_ref(text: str, old: str, new: str) -> str:
     )
 
 
-def _resolver_from(datasets):
+def _resolver_from(datasets, inline: dict[str, str] | None = None):
     """Turn the `from_yaml` `datasets` argument into a name -> (uri, options)
-    callable, or None (chart `dataset` is a Parquet path/URI)."""
-    if datasets is None:
-        return None
-    if hasattr(datasets, "source"):  # a DatasetStore
-        return datasets.source
-    if callable(datasets):
-        return datasets
-    raise DashboardError("datasets must be a DatasetStore or a resolver callable")
+    callable, or None (chart `dataset` is a Parquet path/URI).
+
+    A dashboard's own inline `datasets:` block is consulted **first**: it is
+    part of the file being rendered, so it should win over a managed dataset
+    that happens to share its name rather than silently reading someone else's
+    data. Anything it doesn't define falls through to the store, and with no
+    store at all the name is treated as a path, exactly as before.
+    """
+    base = None
+    if datasets is not None:
+        if hasattr(datasets, "source"):  # a DatasetStore
+            base = datasets.source
+        elif callable(datasets):
+            base = datasets
+        else:
+            raise DashboardError(
+                "datasets must be a DatasetStore or a resolver callable"
+            )
+    return inline_data.resolver(inline, base)
 
 
 def _parse_charts(raw) -> dict[str, _ChartConfig]:

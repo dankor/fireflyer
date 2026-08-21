@@ -9,9 +9,6 @@ COPY pyproject.toml LICENSE README.md ./
 COPY fireflyer ./fireflyer
 RUN pip install --no-cache-dir -e ".[test,portal]"
 
-# Sample data the default dashboard references (files/orders.csv).
-COPY files ./files
-
 EXPOSE 8000
 
 # Bind 0.0.0.0 so the editor is reachable from the host. (The local

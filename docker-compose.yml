@@ -21,7 +21,6 @@ services:
       # mounted too so `docker compose run --rm fireflyer pytest` works (it's
       # excluded from the image itself via .dockerignore).
       - ./fireflyer:/app/fireflyer
-      - ./files:/app/files
       - ./tests:/app/tests
       # PATHS: each host folder you map under /paths is a path you can switch
       # between in the UI. Add/remove/repoint one by editing these mappings and
@@ -31,13 +30,9 @@ services:
       #   - /Users/me/team-a:/paths/team-a
       #   - /Users/me/personal:/paths/personal
       - ${FIREFLYER_PATHS_HOST:-./paths}:/paths
-      # Per-path dataset blobs (isolated), kept out of your dashboard folders.
-      # The bundled `orders` sample is seeded here only when it is MISSING, so
-      # your own uploads are never clobbered — which also means a changed
-      # files/orders.csv is not picked up on its own. To take a new one:
-      #   docker compose exec fireflyer rm -f /data/datasets/demo/orders.parquet \
-      #                                       /data/datasets/demo/orders.yaml
-      #   docker compose restart fireflyer
+      # Datasets you upload through the web, per path and isolated from your
+      # dashboard folders. Nothing is seeded here: the starter dashboard carries
+      # its own data inline, so a fresh volume is simply empty.
       - fireflyer-data:/data
     command: >
       uvicorn fireflyer.web.app:app
@@ -99,7 +94,6 @@ services:
       - "8001:8000"
     volumes:
       - ./fireflyer:/app/fireflyer
-      - ./files:/app/files
       - ./tests:/app/tests
       - datasets:/data
     command: python -m fireflyer.portal
