@@ -56,17 +56,13 @@ def test_default_dashboard_parses_and_every_chart_renders():
     stale calc key in it is a broken first impression, and nothing else would
     catch it: the seed swallows exceptions so startup can't crash.
 
-    Rendered against the **bundled sample** it's written for (`files/orders`),
-    not the tiny test fixture — the two have different columns on purpose, and
-    the guide is only true of the one the app actually seeds.
+    Rendered with **no dataset store at all**, which is the point: the starter
+    dashboard carries its own data in an inline `datasets:` block, so a fresh
+    checkout renders with nothing uploaded and nothing seeded.
     """
     import fireflyer as ff
 
-    sample = Path(__file__).resolve().parent.parent / "files" / "orders.parquet"
-    assert sample.exists(), "the bundled sample the starter dashboard needs"
-    dashboard = ff.Dashboard.from_yaml(
-        DEFAULT_YAML, datasets=lambda name: (str(sample), None)
-    )
+    dashboard = ff.Dashboard.from_yaml(DEFAULT_YAML)
     assert dashboard.name
     assert dashboard.tabs, "the guide demonstrates tabs"
 
@@ -81,5 +77,7 @@ def test_default_dashboard_is_commented():
     reformat that drops them defeats the point."""
     comments = [l for l in DEFAULT_YAML.splitlines() if l.strip().startswith("#")]
     assert len(comments) > 40, len(comments)
-    for key in ("calcs", "charts", "layout"):
+    for key in ("calcs", "charts", "layout", "datasets"):
         assert f"{key}:" in DEFAULT_YAML
+    # The data block goes last — the readable parts stay at the top.
+    assert DEFAULT_YAML.index("\ndatasets:") > DEFAULT_YAML.index("\nlayout:")

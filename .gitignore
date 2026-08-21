@@ -20,6 +20,7 @@ __pycache__/
 # Local dataset object store (Parquet + YAML metadata, generated/uploaded)
 /data/
 
-# Local "paths" (your dashboards live here; the demo path is seeded on first
-# run). Keep your own dashboards in their own git repo, not this one.
+# Local "paths" — dashboards you write live here. Keep your own dashboards in
+# their own git repo, not this one. (The `demo` path is the tracked demo/
+# folder, mapped in by compose; it is deliberately NOT ignored.)
 /paths/

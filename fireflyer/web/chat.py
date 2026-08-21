@@ -29,11 +29,11 @@ When the user asks for a change to the datasets, charts, or layout, call the `up
 
 # Dashboard YAML format
 
-A dashboard has these top-level keys: `name`, `charts`, `layout`, and an
-OPTIONAL `calcs` block (see Calcs below). There is NO `datasets:` block —
-datasets are managed separately and referenced by name (see Datasets below).
-`name` is required — a short human-readable title for the whole dashboard.
-Always include it and preserve the existing one unless asked to rename.
+A dashboard has these top-level keys: `name`, `charts`, `layout`, and two
+OPTIONAL blocks — `calcs` (see Calcs) and `datasets` (see Datasets, for CSV
+carried in the file itself). `name` is required — a short human-readable title
+for the whole dashboard. Always include it and preserve the existing one unless
+asked to rename. Keep a `datasets:` block LAST, after `layout:`.
 
 ```
 name: <string>                    # required: the dashboard's display name
@@ -52,13 +52,32 @@ layout:
 
 # Datasets
 
-Datasets are managed outside the dashboard file — you do NOT declare them. The
-available datasets and their column schemas (each column's name and type, no
-data) are listed in every message. Reference one from a chart with
-`dataset: <name>`, and build calcs/filters from that dataset's columns. Only
-use datasets and columns that appear in the provided list — never invent a
-dataset, file path, or column name. If the user asks for something that needs a
-column or dataset that isn't listed, say so instead of guessing.
+A chart names its data with `dataset: <name>`. A name resolves one of two ways.
+
+**Managed datasets** are uploaded outside the dashboard file. The available ones
+and their column schemas (each column's name and type, no data) are listed in
+every message. Never invent a managed dataset, file path, or column name — if a
+request needs a column that isn't listed, say so instead of guessing.
+
+**Inline datasets** are CSV written into the dashboard itself, under an OPTIONAL
+top-level `datasets:` block. The first line is the header; the rest is ordinary
+CSV. Put this block LAST in the file, after `layout:`, so the readable parts
+stay at the top:
+
+```
+datasets:
+  order_data: |
+    id,status,amount
+    1,paid,42
+    2,pending,15
+```
+
+Use inline data when the user asks you to make up, mock, sample or demo
+something, or wants to try an idea before they have real data — invent a
+plausible table and chart it in the same edit, rather than asking them to upload
+a file. Keep it small (tens of rows is plenty to show a chart working) and give
+the columns realistic names and values. An inline name shadows a managed one, so
+avoid reusing an existing dataset's name unless the user means to override it.
 
 ## Chart types and their keys
 

@@ -1,0 +1,441 @@
+# ==========================================================================
+#  Orders overview — a worked tour of what Fireflyer can do.
+#
+#  Everything below is commented. Edit anything; the preview re-renders.
+#  A dashboard has four top-level keys:
+#
+#    name    the dashboard's title
+#    calcs   named values and dimensions (optional)
+#    charts  what to draw
+#    layout  where to put it
+#
+#  Datasets are NOT declared here. Upload a CSV under Datasets and reference
+#  it by name (`dataset: orders`).
+# ==========================================================================
+
+name: Orders overview
+
+# ---- CALCS ---------------------------------------------------------------
+# Named values and dimensions, keyed by DATASET name. A chart references one
+# by key instead of carrying its own aggregation.
+#
+# You never write down which kind a calc is — it's inferred from what it says:
+#
+#   has `agg:`                     -> AGGREGATE, a value reduced per group
+#   formula over other calc keys   -> DERIVED,   a value computed per group
+#   formula over dataset columns   -> COLUMN,    a dimension
+#
+# `name` is what a viewer reads; `description` becomes a tooltip.
+calcs:
+  orders:
+
+    # -- COLUMN calcs: dimensions, usable anywhere a column name goes -------
+
+    # OVERLAY. A column calc keyed like a real column relabels it in place.
+    # Nothing is renamed: `status` is still what charts, filters and
+    # crossfilter clicks refer to — only what you READ changes. The table
+    # header below says "Order status" and explains itself on hover.
+    # (A formula that names its own key means the dataset column.)
+    status:
+      name: Order status
+      description: How far the order got - paid, shipped, refunded, and so on
+      formula: status
+
+    # str2dt() turns text into a real date, so a bar chart gets a proper
+    # chronological axis instead of sorted strings - and with it a grain
+    # picker (Y / Q / M / W / D) under the chart.
+    order_day:
+      name: Order day
+      description: The order date, parsed from the raw text column
+      formula: str2dt(day, YYYY-MM-DD)
+
+    # -- AGGREGATE calcs: values, reduced per group ------------------------
+
+    order_count:
+      name: Orders
+      agg: count              # count is the one agg that needs no formula
+
+    revenue:
+      name: Revenue
+      description: Total value of the orders in this group
+      agg: sum
+      formula: amount         # any row-level expression, e.g. price * qty
+      format: 0.0a $          # `a` abbreviates: 24800 -> 24.8k $
+
+    # A formula is a row-level EXPRESSION, not just a column name. This sums
+    # `unit_price * qty` and lands on the same figure as `revenue` above, which
+    # reads the stored line total - either way works.
+    line_revenue:
+      name: Line revenue
+      description: unit_price x qty, summed - the long way round to Revenue
+      agg: sum
+      formula: unit_price * qty
+      format: 0.0a $
+
+    units:
+      name: Units
+      description: Items sold in this group
+      agg: sum
+      formula: qty
+
+    avg_unit_price:
+      name: Avg unit price
+      agg: avg                # count / sum / dcount / min / max / avg
+      formula: unit_price
+      format: 0.00$
+
+    # `filters:` on a calc is conditional aggregation: this one only ever
+    # sees paid rows, whatever the chart around it is showing.
+    paid_revenue:
+      name: Paid revenue
+      description: Revenue from orders that reached paid
+      agg: sum
+      formula: amount
+      format: 0.0a $
+      filters:
+        - {column: status, op: in, values: [paid]}
+
+    paid_count:
+      name: Paid orders
+      agg: count
+      filters:
+        - {column: status, op: in, values: [paid]}
+
+    biggest_order:
+      name: Biggest order
+      description: Largest single order in this group
+      agg: max
+      formula: amount
+      format: 0$
+
+    # -- DERIVED calcs: a formula over OTHER CALCS -------------------------
+    # Computed per group, after the aggregates - so this is a true per-group
+    # average, not an average of averages.
+
+    avg_order_value:
+      name: Avg order value
+      description: Revenue divided by order count, within each group
+      formula: revenue / order_count
+      format: 0.00$
+
+    paid_rate:
+      name: Paid share
+      description: Share of orders that reached paid
+      # `%` is a literal suffix with no auto-scaling, so scale it here.
+      formula: paid_count / order_count * 100
+      format: 0.0%
+
+# ---- CHARTS --------------------------------------------------------------
+# Every chart needs `type`, `dataset` and `title`. Anything that aggregates
+# names a calc by key. Any chart may take `filters:` to pre-narrow its data.
+charts:
+
+  # NUMBER - one big figure, formatted by its calc's own `format`.
+  # Hover it: a calc with a `description` explains itself and shows the exact,
+  # unrounded number behind the abbreviation.
+  total_orders:
+    type: number
+    dataset: orders
+    title: Total orders
+    calc: order_count
+
+  revenue_kpi:
+    type: number
+    dataset: orders
+    title: Revenue (paid)
+    calc: paid_revenue
+
+  avg_order:
+    type: number
+    dataset: orders
+    title: Avg order amount
+    calc: avg_order_value
+
+  paid_share:
+    type: number
+    dataset: orders
+    title: Paid share
+    calc: paid_rate
+
+  # PIE - `column` groups, `calc` sizes each slice. Click a slice to
+  # crossfilter every other chart; click it again to clear.
+  status_pie:
+    type: pie
+    dataset: orders
+    title: Revenue by status
+    column: status
+    calc: revenue
+
+  # BAR - `x` makes the bar groups, `y` (optional) stacks them.
+  # A temporal `x` picks its own grain and windows a long axis for you.
+  by_day:
+    type: bar
+    dataset: orders
+    title: Orders by day, stacked by status
+    x: order_day
+    y: status
+    calc: order_count
+
+  # Drop `y` for plain one-bar-per-category, and use `top` to keep only the
+  # biggest N. `direction: vertical` turns the bars sideways, which suits long
+  # category labels.
+  top_days:
+    type: bar
+    dataset: orders
+    title: Top 3 days by revenue
+    x: order_day
+    calc: revenue
+    top: 3
+    direction: vertical
+
+  # A chart may be placed only ONCE in the layout, so this is a second pie
+  # rather than a reuse - sized by order count instead of revenue, which is a
+  # different question about the same column.
+  status_share:
+    type: pie
+    dataset: orders
+    title: Orders by status
+    column: status
+    calc: order_count
+
+  # There are eight channels and a legend shows six at a time, so this one
+  # gets a pager beside its legend. Every slice is still drawn - only the
+  # legend pages.
+  by_channel:
+    type: pie
+    dataset: orders
+    title: Revenue by channel
+    column: channel
+    calc: revenue
+
+  # MAP - a hex heatmap of lat/lng points, weighted by a count or sum calc.
+  density:
+    type: map
+    dataset: orders
+    title: Order density (Kyiv)
+    lat: lat
+    lng: lng
+    grid_size: 16
+    calc: order_count
+
+  # TABLE, raw mode - no `measures`, so one row per record.
+  # `columns` picks which columns to show, in order; `sort` orders them.
+  recent_orders:
+    type: table
+    dataset: orders
+    title: Orders, newest first
+    columns: [order_day, status, amount]
+    sort: ['-order_day', '-amount']
+    pagination: 8
+
+  # TABLE, grouped mode - `measures` turns `columns` into GROUPING keys and
+  # gives one aggregated column per measure. Hover any measure cell for the
+  # exact figure; click a row to crossfilter on that whole combination.
+  by_status:
+    type: table
+    dataset: orders
+    title: By status
+    columns: [status]
+    measures: [order_count, revenue, avg_order_value, biggest_order]
+    sort: ['-revenue']         # `-` descending, `+` or bare ascending
+    pagination: 0              # 0 = no pager, show every group
+    search: false
+
+  # `segment` has gaps in it. A null grouping key is ONE group and shows as a
+  # blank cell - not a row per missing value, and not quietly dropped. (Its row
+  # isn't clickable: "is null" isn't something a filter can say.)
+  by_segment:
+    type: table
+    dataset: orders
+    title: By segment
+    columns: [segment]
+    measures: [order_count, revenue, units, avg_unit_price]
+    sort: ['-revenue']
+    pagination: 0
+    search: false
+
+  # `measures` with no `columns` = one row of grand totals.
+  totals:
+    type: table
+    dataset: orders
+    title: Everything, totalled
+    measures: [order_count, revenue, line_revenue, paid_revenue, avg_order_value, paid_rate]
+    pagination: 0
+    search: false
+
+  all_orders:
+    type: table
+    dataset: orders
+    title: All orders
+    pagination: 25
+
+# ---- LAYOUT --------------------------------------------------------------
+# A list of rows, top to bottom. Each row is:
+#
+#   ["@<height>", "<chart id>:<width>", ...]
+#
+# `@30` is the row height; `:60` / `:40` are relative widths that share the
+# row. A bare id with no `:width` fills whatever is left. Two extras: a
+# quoted string on its own is a HEADER, and "-" is a horizontal RULE.
+#
+# Give `layout` named keys instead of a plain list and each one becomes a TAB.
+layout:
+
+  Overview:
+    - "How the business is doing"
+    - ["@22", "total_orders", "revenue_kpi", "avg_order", "paid_share"]
+    - ["@40", "by_day:60", "status_pie:40"]
+    - "-"
+    - "Where the orders are"
+    - ["@90", "density"]
+
+  Tables:
+    - "One row per order"
+    - ["@34", "recent_orders"]
+    - "-"
+    - "Grouped, with measures"
+    - ["@30", "by_status:60", "totals:40"]
+    - ["@26", "by_segment"]
+
+  More charts:
+    - ["@36", "top_days:40", "status_share:60"]
+    - "-"
+    - ["@36", "by_channel"]
+    - ["@50", "all_orders"]
+
+# ---- DATA ----------------------------------------------------------------
+# The dashboard carries its own data. `datasets:` is a mapping of name -> CSV
+# text: first line the header, the rest ordinary rows. A chart names one with
+# `dataset: orders`, exactly as it would a dataset you uploaded.
+#
+# This is for prototyping without leaving the editor - invent a table, chart it,
+# iterate, and the whole thing stays one file you can paste to someone. Ask the
+# assistant for sample data and it will write a block like this. For real or
+# large data, upload it under Datasets instead and drop this block: a name
+# defined here overrides an uploaded one.
+#
+# It sits at the end because it is the least interesting part to read - edit
+# these rows like any other text.
+datasets:
+  orders: |
+    id,day,status,channel,segment,qty,unit_price,amount,lat,lng
+    1,2026-04-06,pending,wholesale,enterprise,2,31.69,63.38,50.514622,30.47396
+    2,2026-04-06,shipped,partner,business,4,69.25,277.0,50.424105,30.497742
+    3,2026-04-06,paid,mobile app,,1,22.62,22.62,50.436325,30.503082
+    4,2026-04-07,shipped,partner,consumer,3,66.54,199.62,50.511851,30.561561
+    5,2026-04-08,shipped,wholesale,consumer,2,62.78,125.56,50.469298,30.555402
+    6,2026-04-08,paid,partner,,1,8.88,8.88,50.412343,30.636681
+    7,2026-04-09,cancelled,referral,enterprise,4,72.38,289.52,50.414505,30.450244
+    8,2026-04-09,pending,wholesale,business,1,27.63,27.63,50.426878,30.492299
+    9,2026-04-09,refunded,partner,business,2,20.75,41.5,50.47905,30.466574
+    10,2026-04-10,paid,web,,1,79.36,79.36,50.410702,30.364388
+    11,2026-04-11,refunded,mobile app,business,1,79.67,79.67,50.435517,30.557719
+    12,2026-04-11,paid,mobile app,business,1,77.28,77.28,50.468706,30.536808
+    13,2026-04-11,shipped,retail,consumer,3,25.94,77.82,50.438043,30.509055
+    14,2026-04-11,shipped,partner,consumer,3,56.85,170.55,50.442767,30.498301
+    15,2026-04-12,pending,partner,,3,87.06,261.18,50.493714,30.57738
+    16,2026-04-12,shipped,wholesale,consumer,3,51.63,154.89,50.527239,30.655275
+    17,2026-04-13,cancelled,marketplace,consumer,1,35.4,35.4,50.488861,30.614526
+    18,2026-04-14,paid,referral,business,1,17.89,17.89,50.442627,30.506183
+    19,2026-04-15,paid,retail,consumer,3,52.09,156.27,50.404261,30.528246
+    20,2026-04-16,shipped,partner,enterprise,4,27.18,108.72,50.403286,30.568775
+    21,2026-04-17,paid,partner,consumer,2,86.94,173.88,50.497505,30.504119
+    22,2026-04-17,shipped,phone,consumer,1,66.48,66.48,50.424385,30.518512
+    23,2026-04-18,shipped,mobile app,business,4,20.64,82.56,50.456815,30.47264
+    24,2026-04-18,refunded,mobile app,consumer,5,13.21,66.05,50.461677,30.474148
+    25,2026-04-20,pending,retail,consumer,3,87.15,261.45,50.457448,30.51422
+    26,2026-04-23,pending,mobile app,enterprise,5,15.22,76.1,50.492648,30.574639
+    27,2026-04-24,shipped,wholesale,,3,59.19,177.57,50.455281,30.413182
+    28,2026-04-25,refunded,web,business,1,83.22,83.22,50.455084,30.548336
+    29,2026-04-25,pending,phone,business,3,67.86,203.58,50.453793,30.533732
+    30,2026-04-25,paid,retail,business,4,23.69,94.76,50.529539,30.569363
+    31,2026-04-25,paid,mobile app,business,1,17.47,17.47,50.474079,30.564899
+    32,2026-04-25,refunded,phone,consumer,5,76.08,380.4,50.374242,30.446518
+    33,2026-04-26,paid,mobile app,enterprise,1,9.64,9.64,50.477878,30.5663
+    34,2026-04-27,shipped,marketplace,enterprise,4,69.48,277.92,50.34116,30.50405
+    35,2026-04-27,shipped,web,consumer,1,16.75,16.75,50.443166,30.57788
+    36,2026-04-27,cancelled,referral,,5,88.61,443.05,50.515363,30.497129
+    37,2026-04-28,paid,wholesale,enterprise,2,54.97,109.94,50.417481,30.72118
+    38,2026-04-29,paid,marketplace,consumer,3,17.35,52.05,50.501154,30.531599
+    39,2026-04-29,shipped,web,,4,20.43,81.72,50.494053,30.487521
+    40,2026-04-29,refunded,mobile app,enterprise,2,81.29,162.58,50.358787,30.457863
+    41,2026-04-30,shipped,mobile app,business,2,87.49,174.98,50.469282,30.424195
+    42,2026-04-30,pending,retail,enterprise,5,23.14,115.7,50.435124,30.655469
+    43,2026-05-02,paid,wholesale,consumer,2,89.02,178.04,50.481987,30.512355
+    44,2026-05-02,pending,wholesale,,1,71.25,71.25,50.422678,30.576613
+    45,2026-05-02,paid,referral,business,1,13.22,13.22,50.457052,30.600079
+    46,2026-05-03,shipped,phone,enterprise,5,43.64,218.2,50.472243,30.498255
+    47,2026-05-04,paid,partner,,2,22.94,45.88,50.453988,30.479782
+    48,2026-05-04,pending,partner,enterprise,4,52.66,210.64,50.482693,30.639391
+    49,2026-05-04,shipped,referral,business,5,74.91,374.55,50.392719,30.425561
+    50,2026-05-04,refunded,partner,enterprise,1,84.45,84.45,50.495401,30.503456
+    51,2026-05-05,refunded,wholesale,,3,6.23,18.69,50.444037,30.551654
+    52,2026-05-05,paid,retail,business,1,72.98,72.98,50.395371,30.531942
+    53,2026-05-05,pending,marketplace,consumer,1,27.9,27.9,50.517658,30.432512
+    54,2026-05-05,pending,partner,business,5,61.3,306.5,50.40261,30.443559
+    55,2026-05-06,paid,mobile app,business,1,12.19,12.19,50.472602,30.521657
+    56,2026-05-07,cancelled,marketplace,enterprise,1,66.13,66.13,50.429836,30.454864
+    57,2026-05-09,shipped,phone,business,2,60.66,121.32,50.419476,30.497705
+    58,2026-05-09,pending,wholesale,consumer,1,86.36,86.36,50.490263,30.647008
+    59,2026-05-09,paid,referral,consumer,2,84.54,169.08,50.445935,30.621777
+    60,2026-05-09,paid,web,enterprise,1,78.12,78.12,50.482445,30.342715
+    61,2026-05-11,cancelled,mobile app,business,5,60.49,302.45,50.481262,30.595727
+    62,2026-05-11,shipped,marketplace,enterprise,1,47.38,47.38,50.479405,30.495547
+    63,2026-05-11,pending,retail,business,3,20.93,62.79,50.435088,30.594094
+    64,2026-05-13,shipped,phone,business,1,53.61,53.61,50.407522,30.521978
+    65,2026-05-13,paid,web,enterprise,4,33.39,133.56,50.562065,30.489311
+    66,2026-05-13,paid,wholesale,business,4,26.52,106.08,50.514435,30.520154
+    67,2026-05-13,shipped,phone,consumer,2,30.27,60.54,50.422659,30.590034
+    68,2026-05-14,shipped,partner,enterprise,3,7.52,22.56,50.356795,30.582245
+    69,2026-05-14,pending,mobile app,consumer,2,71.8,143.6,50.453368,30.608357
+    70,2026-05-15,refunded,phone,enterprise,2,84.99,169.98,50.462959,30.705777
+    71,2026-05-15,cancelled,phone,business,1,89.22,89.22,50.358975,30.51476
+    72,2026-05-15,shipped,referral,business,2,75.45,150.9,50.480311,30.458413
+    73,2026-05-15,pending,mobile app,business,1,84.46,84.46,50.404028,30.573867
+    74,2026-05-16,paid,wholesale,consumer,3,37.08,111.24,50.382297,30.50985
+    75,2026-05-17,paid,wholesale,consumer,1,13.2,13.2,50.33684,30.610687
+    76,2026-05-17,shipped,marketplace,,2,19.62,39.24,50.469336,30.520496
+    77,2026-05-18,shipped,mobile app,consumer,2,64.53,129.06,50.421872,30.526292
+    78,2026-05-18,paid,web,business,2,33.25,66.5,50.460045,30.554011
+    79,2026-05-18,shipped,phone,business,2,31.24,62.48,50.417152,30.518017
+    80,2026-05-20,shipped,phone,business,2,60.22,120.44,50.425571,30.520492
+    81,2026-05-22,paid,retail,business,1,35.84,35.84,50.428034,30.572555
+    82,2026-05-22,cancelled,retail,consumer,5,29.0,145.0,50.468267,30.526529
+    83,2026-05-23,refunded,marketplace,business,1,18.6,18.6,50.418496,30.536452
+    84,2026-05-24,shipped,web,business,3,88.19,264.57,50.438205,30.51865
+    85,2026-05-24,refunded,marketplace,business,2,75.6,151.2,50.500859,30.552371
+    86,2026-05-24,shipped,referral,business,1,71.87,71.87,50.490302,30.589213
+    87,2026-05-24,shipped,web,consumer,2,38.52,77.04,50.51845,30.480088
+    88,2026-05-25,paid,phone,business,1,6.07,6.07,50.501988,30.480386
+    89,2026-05-27,shipped,wholesale,enterprise,2,80.62,161.24,50.471501,30.492252
+    90,2026-05-27,refunded,partner,enterprise,2,61.04,122.08,50.45366,30.560615
+    91,2026-05-28,shipped,mobile app,business,1,35.55,35.55,50.431164,30.633676
+    92,2026-05-30,paid,marketplace,business,1,11.4,11.4,50.432564,30.559327
+    93,2026-05-30,shipped,referral,business,1,66.36,66.36,50.523788,30.451367
+    94,2026-05-31,paid,referral,,1,48.96,48.96,50.448173,30.447391
+    95,2026-06-01,shipped,web,business,1,60.43,60.43,50.473805,30.531194
+    96,2026-06-01,refunded,marketplace,,1,23.76,23.76,50.47105,30.423138
+    97,2026-06-02,pending,mobile app,consumer,1,69.0,69.0,50.456113,30.512493
+    98,2026-06-02,paid,wholesale,enterprise,3,50.71,152.13,50.405561,30.507132
+    99,2026-06-03,refunded,mobile app,consumer,1,69.15,69.15,50.406048,30.495127
+    100,2026-06-03,shipped,referral,,3,63.12,189.36,50.512429,30.563916
+    101,2026-06-03,refunded,retail,consumer,3,72.96,218.88,50.456787,30.534148
+    102,2026-06-03,refunded,retail,,2,61.72,123.44,50.50917,30.513061
+    103,2026-06-04,shipped,phone,business,3,66.45,199.35,50.483585,30.563888
+    104,2026-06-04,refunded,web,business,1,46.87,46.87,50.369797,30.623822
+    105,2026-06-04,shipped,marketplace,,1,52.72,52.72,50.395165,30.5573
+    106,2026-06-05,pending,partner,business,1,26.86,26.86,50.459272,30.523891
+    107,2026-06-05,refunded,partner,consumer,4,19.42,77.68,50.453124,30.516923
+    108,2026-06-05,cancelled,phone,,1,17.25,17.25,50.487567,30.503846
+    109,2026-06-07,shipped,referral,enterprise,3,27.83,83.49,50.449004,30.507966
+    110,2026-06-07,shipped,mobile app,,1,66.8,66.8,50.419049,30.401447
+    111,2026-06-08,pending,mobile app,consumer,1,13.75,13.75,50.413747,30.516756
+    112,2026-06-08,paid,referral,business,5,36.98,184.9,50.497008,30.580199
+    113,2026-06-10,paid,mobile app,,5,39.37,196.85,50.418761,30.470602
+    114,2026-06-11,shipped,marketplace,enterprise,1,34.17,34.17,50.391045,30.438169
+    115,2026-06-11,pending,referral,consumer,2,21.18,42.36,50.399066,30.52526
+    116,2026-06-13,shipped,partner,enterprise,1,32.49,32.49,50.432476,30.502238
+    117,2026-06-13,shipped,phone,business,1,40.33,40.33,50.41336,30.580718
+    118,2026-06-13,pending,referral,enterprise,1,66.2,66.2,50.441513,30.461491
+    119,2026-06-14,paid,mobile app,consumer,1,52.35,52.35,50.378372,30.53615
+    120,2026-06-14,pending,marketplace,consumer,5,27.05,135.25,50.548595,30.500813

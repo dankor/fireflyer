@@ -19,6 +19,7 @@ from html import escape
 import yaml
 
 from fireflyer import calcs as calcs_mod
+from fireflyer import inline_data
 from fireflyer.dashboard import CHART_TYPES, DashboardError
 from fireflyer.params import ParamContext
 from fireflyer.scan import scan
@@ -68,6 +69,15 @@ def _context(config: dict, cfg: dict, resolve=None) -> ParamContext:
     # are values, so they're what the calc dropdown offers.
     dataset = cfg.get("dataset")
     column_keys, value_keys = _calc_keys(config, dataset)
+    # Same precedence the dashboard uses, so the dropdown lists the columns the
+    # chart will actually read — a chart on an inline dataset would otherwise
+    # offer nothing, since the store has never heard of it.
+    try:
+        resolve = inline_data.resolver(
+            inline_data.parse_block(config.get("datasets")), resolve
+        )
+    except inline_data.InlineDataError:
+        pass                                  # a broken block reports itself at render
     return ParamContext(
         datasets={},
         dataset_id=dataset,
