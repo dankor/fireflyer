@@ -7,10 +7,9 @@ WORKDIR /app
 # them present at build time.
 COPY pyproject.toml LICENSE README.md ./
 COPY fireflyer ./fireflyer
+# The starter dashboard, so the image has one without the compose mount.
+COPY demo ./demo
 RUN pip install --no-cache-dir -e ".[test,portal]"
-
-# Sample data the default dashboard references (files/orders.csv).
-COPY files ./files
 
 EXPOSE 8000
 

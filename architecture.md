@@ -31,24 +31,36 @@ The MVP is expected to be rewritten.
 
 # Vision
 
-Fireflyer provides a simple way to visualize CSV files using Python.
+Fireflyer turns tabular data into an HTML dashboard described by a single YAML
+file. CSV is how data gets *in* — uploaded as a dataset, or written straight
+into the dashboard's own `datasets:` block. It is converted to Parquet on the
+way, and that is what a chart reads.
 
 Example:
 
-```python
-import fireflyer as ff
+```yaml
+name: Orders
 
-chart = ff.chart.table(
-    dataset="files/orders.csv",
-    title="Orders",
-)
+charts:
+  orders:
+    type: table
+    dataset: orders
+    title: "Orders"
 
-chart
+layout:
+  - ["@40", "orders"]
+
+datasets:
+  orders: |
+    id,status,amount
+    1,paid,42
+    2,pending,15
 ```
 
-The user writes Python code.
-
-Fireflyer reads the CSV file, generates HTML, and displays the result.
+Fireflyer reads the data, generates HTML, and displays the result. The chart
+classes are also importable (`ff.chart.table(dataset="orders.parquet", ...)`)
+for ad-hoc rendering in a notebook or the editor, where `dataset` is a Parquet
+path rather than a name.
 
 The user does not interact with Polars directly.
 
@@ -118,17 +130,7 @@ Avoid introducing additional layers unless absolutely necessary.
 
 # Charts
 
-A chart describes how a CSV file should be visualized.
-
-Examples:
-
-```python
-ff.chart.table(...)
-```
-
-```python
-ff.chart.pie(...)
-```
+A chart describes how data should be visualized.
 
 All charts must have:
 
@@ -139,21 +141,18 @@ Common optional parameter on every chart: `filters` (see Filters below).
 
 Additional parameters are chart-specific.
 
-Examples:
+```yaml
+charts:
+  orders:
+    type: table
+    dataset: orders
+    title: "Orders"
 
-```python
-ff.chart.table(
-    dataset="files/orders.csv",
-    title="Orders",
-)
-```
-
-```python
-ff.chart.pie(
-    dataset="files/orders.csv",
-    title="Orders by Status",
-    column="status",
-)
+  by_status:
+    type: pie
+    dataset: orders
+    title: "Orders by Status"
+    column: status
 ```
 
 Charts are declarations.
@@ -200,20 +199,6 @@ A filter is a small declarative shape:
 
 ## Declared filters
 
-In Python:
-
-```python
-ff.chart.table(
-    dataset="files/orders.csv",
-    title="Open orders",
-    filters=[
-        {"column": "status", "op": "in", "values": ["open", "pending"]},
-    ],
-)
-```
-
-In YAML, the same shape:
-
 ```yaml
 charts:
   open_orders:
@@ -256,7 +241,8 @@ The Python API (`ff.chart.table(...)`, `ff.chart.pie(...)`) stays for ad-hoc ren
 
 ## File shape
 
-A dashboard YAML has three top-level sections, plus an optional `calcs` block:
+A dashboard YAML has three required top-level sections, plus two optional
+blocks — `calcs` and `datasets`:
 
 ```yaml
 name: <string>
@@ -271,6 +257,11 @@ charts:
 layout:
   - <layout item>
   - <layout item>
+
+datasets:           # optional; inline CSV (see Datasets). Kept last by
+  <name>: |         # convention — it is the least interesting part to read.
+    <header row>
+    <rows...>
 ```
 
 * `name` — required. A short human-readable title for the whole dashboard,
@@ -281,21 +272,64 @@ layout:
 * `charts` — mapping of chart id → chart config.
 * `layout` — the page layout (the layout DSL, below). Either a flat list of
   layout items, or a mapping of tab name → layout list (see **Tabs**).
+* `datasets` — optional. CSV carried in the file itself, keyed by dataset name
+  (see **Datasets**). Inline only — never a path — and it overrides a managed
+  dataset of the same name.
 
 Chart ids are local to the file. There is no cross-file inclusion in the MVP.
 
 ## Datasets
 
-Datasets are **managed, named entities** — not inline paths. A CSV is uploaded,
-converted to **Parquet**, and stored in an object store; a chart references a
-dataset by its **unique name** (`dataset: orders`). There is **no `datasets:`
-block** in the dashboard YAML.
+A chart names its data with `dataset: orders` and never a file path. That name
+resolves one of two ways.
+
+**Managed** — the default, and the home for real or large data. A CSV is
+uploaded, converted to **Parquet**, and stored in an object store; the dashboard
+refers to it by its **unique name**.
+
+**Inline** — CSV carried in the dashboard's own optional `datasets:` block:
+
+```yaml
+datasets:
+  order_data: |
+    id,status,amount
+    1,paid,42
+    2,pending,15
+```
+
+The first line is the header, the rest ordinary rows. The block holds **CSV and
+nothing else** — no paths, no URIs; a single line is rejected, since it is
+either a mistaken path or a header with no rows, and both would otherwise parse
+as a valid one-column, zero-row table and fail much later complaining about a
+missing column. Convention is to put the block **last**, after `layout:`, so the
+readable parts of the file stay at the top.
+
+Inline exists for prototyping without leaving the editor — invent a table, chart
+it, iterate — and it makes a dashboard a single self-contained file you can hand
+to someone. It is also what lets the assistant answer "mock me up some sales
+data and chart it" in one turn. The starter dashboard uses it, so a fresh
+checkout renders with nothing uploaded and nothing seeded.
+
+An inline name **overrides** a managed one. The block is part of the file being
+rendered, so quietly reading someone else's stored data instead would be the
+surprising choice; anything the block doesn't define falls through to the store.
+
+Each block is converted to Parquet **once** and cached by content checksum
+(`inline_data.py`, in the system temp dir): an unchanged block costs a `stat`,
+an edit lands on a fresh path, and two dashboards carrying the same sample data
+share a file. The write is a temp-file rename, which is atomic, so concurrent
+renders can't read a half-written Parquet. The cache is derived data — safe to
+delete at any time, rebuilt on demand.
 
 `Dashboard.from_yaml(text, datasets=<store>)` resolves each chart's dataset name
 to its Parquet `(uri, storage_options)` at render time; charts read via lazy
 `scan_parquet` with projection + predicate pushdown, so only the columns and
 row-groups a chart needs are read. Without a resolver (standalone use, tests), a
 chart's `dataset` is taken as a Parquet path/URI directly.
+
+`Dashboard.dataset_names()` reports only the **managed** names: a chart on
+inline data neither pins a stored dataset against deletion nor wants renaming
+when one moves, so the portal's delete-guard and cascade-rename skip it.
 
 The dataset entity (Parquet + a small YAML metadata sidecar: schema, row count,
 description, delimiter, author) lives in an `ObjectStore` — a local folder for
@@ -704,6 +738,11 @@ charts:
     title: "Orders by Status"
     column: status
 
+  total_orders:
+    type: number
+    dataset: orders
+    title: "Total orders"
+
 layout:
   - Overview
   - ["@40", "orders_table:60", "status_pie:40"]
@@ -711,7 +750,7 @@ layout:
   - "-"
 
   - Detail
-  - ["@30", "orders_table:100"]
+  - ["@30", "total_orders:100"]
 ```
 
 ## Implementation guidance

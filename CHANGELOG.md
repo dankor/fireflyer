@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-21
+
+### Added
+
+- **Inline datasets — CSV carried in the dashboard YAML itself.** An optional
+  top-level `datasets:` block maps a name to CSV text (first line the header),
+  and a chart references it exactly as it would an uploaded one:
+
+  ```yaml
+  datasets:
+    order_data: |
+      id,status,amount
+      1,paid,42
+  ```
+
+  The point is prototyping without leaving the editor — invent a table, chart
+  it, iterate — and a dashboard that carries its own data is a single file you
+  can paste to someone. The assistant's prompt now tells it to write such a
+  block when asked to mock up or demo something, so "make me some sample sales
+  data and chart it" is one turn.
+
+  Each block is converted to Parquet once and cached **by content checksum** in
+  the temp dir: an unchanged block costs a `stat`, an edited one lands on a
+  fresh path, and two dashboards with the same sample data share a file. The
+  write is a rename, so concurrent renders can't read a half-written file. A
+  name defined inline **shadows** a managed one — the block is part of the file
+  being rendered, so reading someone else's stored data would be a surprise —
+  and anything not defined inline falls through to the store as before.
+  `Dashboard.dataset_names()` excludes inline names, so a chart reading inline
+  data doesn't hold a stored dataset against deletion in the portal's guard.
+  Managed datasets are unchanged and remain the home for real or large data.
+
+  The block holds **CSV and nothing else** — a path or a header-only line is
+  rejected with a message saying so, because either would otherwise parse as a
+  valid one-column, zero-row table and fail much later complaining about a
+  column the chart names.
+
+### Changed
+
+- **The starter dashboard is a file, not a string.** It lived as a 440-line
+  literal in `app.py`; it now sits in `demo/dashboards/orders-overview.yaml` and
+  is read at import, taking ~440 lines out of that module. docker-compose maps
+  the folder in as the `demo` path (`./demo:/paths/demo`), so what you open in
+  the browser **is** the file in git — nothing is copied or seeded, and
+  `_seed_demo_path` is gone. Editing the demo in the UI edits that file;
+  `git checkout demo/` undoes it. The path is hardcoded and the file is required
+  — missing it is a broken checkout, so the import fails and says so rather than
+  quietly serving a blank dashboard.
+
+- **The starter dashboard carries its own data**, so a fresh checkout renders
+  with nothing uploaded and nothing seeded. `files/orders.parquet` is gone (a
+  derived binary in git), and the `orders` dataset is no longer seeded at
+  startup in either local or paths mode. **`files/` is gone entirely** — the
+  sample data now lives in the dashboard that uses it, so a CSV on disk, a
+  generator to produce it, the Dockerfile `COPY` and the compose bind-mounts
+  were all machinery around a file nothing read any more.
+- **The route tests carry their own data too.** They had leaned on that seeded
+  dataset — which meant they were passing off a leftover file on the
+  developer's disk and would have failed on a clean checkout. The suite now
+  runs with no dataset store present at all.
+
+
 ## [0.10.0] - 2026-08-21
 
 ### Changed
@@ -693,7 +755,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/dankor/fireflyer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/dankor/fireflyer/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/dankor/fireflyer/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/dankor/fireflyer/compare/v0.8.0...v0.9.0

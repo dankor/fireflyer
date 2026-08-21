@@ -52,7 +52,7 @@ cd fireflyer
 docker compose up --build
 ```
 
-Open <http://127.0.0.1:8000>. You land on a **gallery** — the compose file turns on [local paths](#local-paths-many-dashboards-gitops) and maps `./paths` from your host as the place your dashboards live, pre-seeded with a **demo** dashboard and its dataset. Open one and you get the two-pane editor: YAML on the left, live render on the right; toggle **Hide YAML** for view-only.
+Open <http://127.0.0.1:8000>. You land on a **gallery** — the compose file turns on [local paths](#local-paths-many-dashboards-gitops) and maps `./paths` from your host as the place your dashboards live, plus a **demo** path mapped straight to the repo's `demo/` folder. The demo dashboard carries its own data in an inline `datasets:` block, so there is nothing to upload before it renders. Open one and you get the two-pane editor: YAML on the left, live render on the right; toggle **Hide YAML** for view-only.
 
 Source is mounted with `--reload`, so your edits hot-reload live. Your dashboards are written to `./paths/<path>/dashboards/*.yaml` on the host — commit them like any other code. Stop with `Ctrl-C` (or `docker compose down`).
 
@@ -68,18 +68,6 @@ pip install -e ".[test]"
 python -m fireflyer.web        # editor at http://127.0.0.1:8000
 ```
 
-### Use it as a library
-
-```python
-import fireflyer as ff
-
-chart = ff.chart.table(dataset="files/orders.csv", title="Orders")
-chart  # renders inline in Jupyter via _repr_html_
-
-# or grab the HTML string
-html = chart.to_html()
-```
-
 Polars does the data work under the hood — you never touch it directly.
 
 ---
@@ -88,10 +76,25 @@ Polars does the data work under the hood — you never touch it directly.
 
 A handful of chart types — tables, pie, bar, and more. Every chart takes a `dataset` and a `title`; the rest is a couple of chart-specific fields.
 
-```python
-ff.chart.table(dataset="files/orders.csv", title="Orders")
-ff.chart.pie(dataset="files/orders.csv", title="Orders by Status", column="status")
-ff.chart.bar(dataset="files/orders.csv", title="Orders by Day", x="day", y="status")
+```yaml
+charts:
+  orders:
+    type: table
+    dataset: orders
+    title: "Orders"
+
+  by_status:
+    type: pie
+    dataset: orders
+    title: "Orders by Status"
+    column: status
+
+  by_day:
+    type: bar
+    dataset: orders
+    title: "Orders by Day"
+    x: day
+    y: status
 ```
 
 Each chart's full options live in its spec: [`fireflyer/chart/<name>/spec.md`](fireflyer/chart).
@@ -100,7 +103,7 @@ Each chart's full options live in its spec: [`fireflyer/chart/<name>/spec.md`](f
 
 ## Dashboards
 
-A dashboard is **one YAML file** that declares its name, its charts, and how they lay out on a page. Charts reference datasets **by name** — the data itself is uploaded separately (see [Local paths](#local-paths-many-dashboards-gitops)), so a dashboard file is self-contained layout with no paths in it:
+A dashboard is **one YAML file** that declares its name, its charts, and how they lay out on a page. Charts reference datasets **by name**, never by file path — either a dataset you uploaded (see [Local paths](#local-paths-many-dashboards-gitops)) or one written straight into the file, below:
 
 ```yaml
 name: Orders overview
@@ -117,14 +120,27 @@ charts:
     title: Orders by Status
     column: status
 
+  total_orders:
+    type: number
+    dataset: orders
+    title: Total orders
+
 layout:
   - Overview                                    # a header
   - ["@40", "orders_table:60", "status_pie:40"] # a row: @height, then chart:width (proportion)
   - "-"                                         # a separator
-  - ["@30", "orders_table:100"]
+  - ["@30", "total_orders:100"]
+
+datasets:                    # optional: CSV carried in the file itself
+  orders: |
+    id,status,amount
+    1,paid,42
+    2,pending,15
 ```
 
-Rows read as `["@<height>", "<chart>:<width>", ...]`, where widths are simple proportions — `1:1:1` is equal thirds. Render it with `ff.Dashboard.from_yaml(text).to_html()`, or just paste it into the web editor.
+Rows read as `["@<height>", "<chart>:<width>", ...]`, where widths are simple proportions — `1:1:1` is equal thirds. Paste it into the web editor and it renders.
+
+That `datasets:` block is optional and made for prototyping: invent a table, chart it, iterate, without leaving the editor — and the dashboard stays one file you can hand to someone. Ask the assistant for sample data and it writes one. For real data, upload it instead and drop the block.
 
 **Crossfiltering** comes for free: click a pie slice and every other chart narrows to match — no page reload. You can also declare fixed `filters` on any chart.
 
@@ -144,7 +160,7 @@ volumes:
   - /Users/me/personal:/paths/personal
 ```
 
-Add, remove, or repoint a path by editing these mappings and restarting (`docker compose up`) — there's no in-app path management by design. A path's dashboards live in `<path>/dashboards/*.yaml` (files you own and commit); its datasets are uploaded through the web and stored separately, isolated per path. On first run a **`demo` path is seeded** with the starter dashboard and its `orders` dataset, so you land on a working example.
+Add, remove, or repoint a path by editing these mappings and restarting (`docker compose up`) — there's no in-app path management by design. A path's dashboards live in `<path>/dashboards/*.yaml` (files you own and commit); its datasets are uploaded through the web and stored separately, isolated per path. The **`demo` path is the repo's `demo/` folder** (`./demo:/paths/demo`), so you land on a working example with nothing copied or seeded — the dashboard you open is the file in git, and it carries its own data inline.
 
 **Why files?** Because a dashboard is just YAML with no data in it, it's **code you can put in git**. Author a path locally, review changes as diffs and pull requests, and — with the command-line tool and API (coming soon) — **deploy dashboards to a running instance on merge**: a GitOps workflow of your own design. Datasets aren't part of that push; they live on the target environment and dashboards reference them by name, so the same YAML deploys anywhere the data already exists.
 
