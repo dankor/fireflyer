@@ -147,3 +147,27 @@ def test_upsert_column_calc_round_trips():
     assert yaml.safe_load(out)["calcs"]["orders"]["order_day"] == {
         "formula": "str2dt(day, YYYY-MM-DD)",
     }
+
+
+def test_every_calcs_button_is_an_icon():
+    """Project UI style: icons over text, with the meaning in title/aria-label.
+    A text label in among them reads as an oversight."""
+    import re
+
+    from fireflyer import calcs_edit
+
+    yaml = (
+        "name: T\ncalcs:\n  orders:\n"
+        "    n: {agg: count, filters: [{column: s, op: in, values: [a]}]}\n"
+        "charts: {}\nlayout: []\n"
+    )
+    for html in (calcs_edit.render_manager(yaml),
+                 calcs_edit.render_form(yaml, "orders", "n")):
+        buttons = re.findall(r"<button[^>]*>(.*?)</button>", html, re.S)
+        assert buttons
+        for inner in buttons:
+            assert "<svg" in inner, inner[:60]
+            assert not re.sub(r"<[^>]+>", "", inner).strip(), "no text beside the icon"
+        # Every icon button says what it does, for tooltip and screen reader.
+        for tag in re.findall(r"<button[^>]*>", html):
+            assert "title=" in tag and "aria-label=" in tag, tag

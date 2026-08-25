@@ -227,17 +227,33 @@ INDEX = f"""<!DOCTYPE html>
   /* Documentation overlay — covers the output pane; a chart reference from each
      chart's spec.md. z-index clears the dashboard content (sticky tab bar z:10,
      up to z:20) and the refresh overlay, but stays under modals (z:50). */
-  #ff-docs-btn, #ff-calcs-btn, #ff-chat-btn {{ display: inline-flex; align-items: center; padding: 5px 9px; }}
-  #ff-docs-btn svg, #ff-calcs-btn svg, #ff-chat-btn svg {{ width: 16px; height: 16px; display: block; }}
-  .ff-docs {{ position: absolute; inset: 0; z-index: 40; background: var(--panel);
-    display: flex; flex-direction: column; }}
+  /* The shared panel shell: a titled, closable column. Positioning comes from
+     `.ff-panel` so the same shell works for the YAML, chat, docs and calcs. */
+  .ff-docs {{ background: var(--panel); display: flex; flex-direction: column; }}
   .ff-docs[hidden] {{ display: none; }}
-  .ff-docs-head {{ display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; }}
-  .ff-docs-title {{ font-weight: 600; font-size: 14px; }}
-  .ff-docs-close {{ background: none; border: 0; color: var(--muted); cursor: pointer;
-    font-size: 15px; line-height: 1; padding: 3px 7px; border-radius: 4px; }}
-  .ff-docs-close:hover {{ color: var(--text); background: var(--bg); }}
+  /* Every panel sits *beside* the dashboard, never over it — you are changing
+     or reading about the dashboard while looking at it. */
+  .ff-panel {{ border-right: 1px solid var(--border); min-width: 0; }}
+  /* The split exists only while a panel is open; otherwise the dashboard has
+     the window to itself. Keyed off one class rather than each mode, so adding
+     a mode cannot leave a stale column behind. */
+  .layout.panel-open {{
+    display: grid;
+    /* `--panel-w` is the dragged width, restored from the last session. */
+    grid-template-columns: var(--panel-w, 38vw) 5px 1fr;
+    grid-template-rows: 100%;
+  }}
+  /* Drag handle between the panel and the dashboard. Only a split has one. */
+  .ff-split {{ display: none; }}
+  .layout.panel-open .ff-split {{
+    display: block; grid-area: 1 / 2; background: var(--border); cursor: col-resize;
+  }}
+  .layout.panel-open .ff-split:hover, .ff-split.dragging {{ background: var(--accent); }}
+  /* Row *and* column, on both items. The panels follow the output pane in the
+     DOM and grid auto-placement never goes backwards, so a column alone put the
+     panel in a row of its own below the dashboard. */
+  .layout.panel-open .ff-panel:not([hidden]) {{ grid-area: 1 / 1; }}
+  .layout.panel-open #output-pane {{ grid-area: 1 / 3; }}
   .ff-docs-body {{ flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 24px; }}
   .ff-docs-chart {{ border-bottom: 1px solid var(--border); }}
   .ff-docs-chart > summary {{ cursor: pointer; font-weight: 600; font-size: 14px;
@@ -262,11 +278,21 @@ INDEX = f"""<!DOCTYPE html>
   .ff-calcs-ds-head {{ display: flex; align-items: center; justify-content: space-between;
     border-bottom: 1px solid var(--border); padding: 6px 2px; }}
   .ff-calcs-ds-name {{ font-weight: 600; font-size: 13px; }}
-  .ff-calcs-add, .ff-calcs-edit, .ff-calcs-del, .ff-calcs-cancel {{
+  /* Icon buttons: a square target with the glyph centred, rather than a text
+     pill. Meaning lives in the title/aria-label. */
+  .ff-calcs-add, .ff-calcs-edit, .ff-calcs-del,
+  .ff-calcs-cancel, .ff-calcs-save {{
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0;
     background: none; border: 1px solid var(--border); color: var(--text);
-    border-radius: 5px; padding: 2px 8px; font-size: 12px; cursor: pointer; }}
+    border-radius: 5px; cursor: pointer; }}
+  .ff-calcs-add svg, .ff-calcs-edit svg, .ff-calcs-del svg,
+  .ff-calcs-cancel svg, .ff-calcs-save svg {{ width: 14px; height: 14px; display: block; }}
   .ff-calcs-add:hover, .ff-calcs-edit:hover, .ff-calcs-cancel:hover {{ background: var(--bg); }}
   .ff-calcs-del:hover {{ color: var(--error); border-color: var(--error); }}
+  /* Save is the affirmative action, so it keeps the accent the text button had. */
+  .ff-calcs-save {{ background: var(--accent); border-color: var(--accent); color: #fff; }}
+  .ff-calcs-save:hover {{ filter: brightness(1.08); }}
   .ff-calcs-row {{ display: flex; align-items: center; gap: 10px; padding: 6px 2px;
     border-bottom: 1px solid var(--border); }}
   .ff-calcs-key {{ font-weight: 600; font-size: 13px; min-width: 120px; }}
@@ -281,26 +307,19 @@ INDEX = f"""<!DOCTYPE html>
   .ff-toast {{ position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
     background: var(--error); color: #fff; padding: 9px 16px; border-radius: 6px;
     font-size: 13px; z-index: 50; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }}
-  .layout {{
-    display: grid; grid-template-columns: 1fr 5px 1fr;
-    background: var(--border);
-    height: calc(100vh - 44px);
-  }}
-  /* Draggable divider between the editor and output panes. */
-  .pane-resizer {{ background: var(--border); cursor: col-resize; }}
-  .pane-resizer:hover, .pane-resizer.dragging {{ background: var(--accent); }}
-  /* Editor hidden: single column, left pane + divider removed from the grid. */
-  .layout.editor-hidden {{ grid-template-columns: 1fr; }}
-  .layout.editor-hidden .pane.editor,
-  .layout.editor-hidden .pane-resizer {{ display: none; }}
-  /* View-only mode: resizing edits the (now hidden) YAML, so suppress the
-     handles entirely. The JS also bails, but hiding them removes the affordance. */
-  .layout.editor-hidden .fireflyer-resize-handle,
-  .layout.editor-hidden .fireflyer-resize-col-handle,
-  .layout.editor-hidden .fireflyer-chart-tools,
-  .layout.editor-hidden .fireflyer-add-row,
-  .layout.editor-hidden .fireflyer-add-cell {{ display: none; }}
-  .pane {{ display: flex; flex-direction: column; background: var(--panel); min-height: 0; }}
+  /* The dashboard is the page: one column, full width, whatever the mode. The
+     YAML, chat, docs and calcs are panels over it rather than a second column,
+     so a dashboard is never squeezed into half a screen to be looked at. */
+  .layout {{ position: relative; height: calc(100vh - 44px); background: var(--panel); }}
+  /* On-canvas editing belongs to edit mode alone. Everywhere else the handles
+     would rewrite YAML you cannot see. The JS bails too; this removes the
+     affordance so nothing invites the click. */
+  .layout:not(.mode-edit) .fireflyer-resize-handle,
+  .layout:not(.mode-edit) .fireflyer-resize-col-handle,
+  .layout:not(.mode-edit) .fireflyer-chart-tools,
+  .layout:not(.mode-edit) .fireflyer-add-row,
+  .layout:not(.mode-edit) .fireflyer-add-cell {{ display: none; }}
+  .pane {{ display: flex; flex-direction: column; background: var(--panel); min-height: 0; height: 100%; }}
   .pane-body {{ flex: 1; overflow: auto; min-height: 0; }}
   #code {{
     width: 100%; height: 100%; border: 0; outline: 0; resize: none;
@@ -383,15 +402,19 @@ INDEX = f"""<!DOCTYPE html>
     align-items: center;
   }}
   .ff-filter-del {{
-    border: 0; background: transparent; color: var(--muted); font-size: 18px;
-    cursor: pointer; line-height: 1; padding: 0 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; background: transparent; color: var(--muted);
+    cursor: pointer; padding: 0 4px;
   }}
+  .ff-filter-del svg {{ width: 14px; height: 14px; display: block; }}
   .ff-filter-del:hover {{ color: var(--error); }}
   .ff-filter-add {{
-    align-self: flex-start; background: var(--bg); border: 1px solid var(--border);
-    border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer;
-    color: var(--text);
+    display: inline-flex; align-items: center; justify-content: center;
+    align-self: flex-start; width: 26px; height: 26px; padding: 0;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; cursor: pointer; color: var(--text);
   }}
+  .ff-filter-add svg {{ width: 14px; height: 14px; display: block; }}
   .ff-modal-error {{
     margin: 0 16px; padding: 8px 10px; background: rgba(224,67,85,0.12); color: var(--error);
     border-radius: 4px; font-size: 12px;
@@ -437,56 +460,47 @@ INDEX = f"""<!DOCTYPE html>
 <header class="topbar">
   <div class="topbar-left">
     __FF_NAV__
+    __FF_MODES__
     __FF_DASH_NAME__
   </div>
   <div class="topbar-right">
     __FF_PATHDD__
     __FF_SAVE__
-    <button type="button" class="toggle" id="ff-chat-btn" title="AI assistant" aria-label="AI assistant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg></button>
-    <button type="button" class="toggle" id="ff-calcs-btn" title="Calcs" aria-label="Calcs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5H6l6 7-6 7h12"/></svg></button>
-    <button type="button" class="toggle" id="ff-docs-btn" title="Chart documentation" aria-label="Chart documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></button>
-    <button class="toggle" id="toggle">Preview</button>
     __FF_THEME__
     __FF_USER_MENU__
   </div>
   <button type="button" class="ff-move-discard" id="ff-move-cancel" hidden title="Cancel move (Esc)" aria-label="Cancel move (Esc)">✕ (Esc)</button>
 </header>
-<div class="layout" id="layout">
-  <section class="pane editor">
-    <div class="pane-body">
-      <textarea id="code" spellcheck="false" autocomplete="off">__FF_YAML_CONTENT__</textarea>
-    </div>
-    <!-- AI assistant: a left-pane overlay toggled from the topbar, like the
-         docs/calcs overlays on the right. Knows the YAML + dataset schemas. -->
-    <aside class="ff-docs ff-chat" id="ff-chat" hidden>
-      <div class="ff-docs-head">
-        <span class="ff-docs-title">AI assistant</span>
-        <button type="button" class="ff-docs-close" id="ff-chat-close" title="Close (Esc)" aria-label="Close">✕</button>
-      </div>{CHAT_PANEL}
-    </aside>
-  </section>
-  <div class="pane-resizer" id="pane-resizer" title="Drag to resize"></div>
+<div class="layout mode-view" id="layout">
   <section class="pane output" id="output-pane">
     <div class="pane-body"><div id="output"></div></div>
     <!-- Shown (over a greyed-out, stale preview) only after a manual YAML edit. -->
     <button type="button" class="ff-refresh" id="refresh" title="Refresh preview (⌘/Ctrl+Enter)">↻ Refresh</button>
-    <!-- Chart reference: overlaps the output pane; lists each chart's spec.md. -->
-    <aside class="ff-docs" id="ff-docs" hidden>
-      <div class="ff-docs-head">
-        <span class="ff-docs-title">Chart reference</span>
-        <button type="button" class="ff-docs-close" id="ff-docs-close" title="Close (Esc)" aria-label="Close">✕</button>
-      </div>
-      <div class="ff-docs-body">__FF_DOCS__</div>
-    </aside>
-    <!-- Calcs manager: overlaps the output pane; add/edit/delete calcs. -->
-    <aside class="ff-docs" id="ff-calcs" hidden>
-      <div class="ff-docs-head">
-        <span class="ff-docs-title">Calcs</span>
-        <button type="button" class="ff-docs-close" id="ff-calcs-close" title="Close (Esc)" aria-label="Close">✕</button>
-      </div>
-      <div class="ff-docs-body" id="ff-calcs-body"></div>
-    </aside>
   </section>
+  <!-- The panels. One per mode, all the same shell, all over the canvas. -->
+  <!-- The dashboard's source. Every control reads and writes it — the chart
+       modals, the calcs manager, chat, save — and `code` mode is where you
+       read and edit it by hand. -->
+  <div class="ff-split" id="ff-split" title="Drag to resize"></div>
+  <!-- No header: the lit segment already says this is the YAML, and the pane is
+       unmistakably a text editor. The other panels keep theirs — their contents
+       are not self-describing. -->
+  <aside class="ff-docs ff-panel" id="ff-yaml" hidden>
+    <div class="pane-body">
+      <textarea id="code" spellcheck="false" autocomplete="off">__FF_YAML_CONTENT__</textarea>
+    </div>
+  </aside>
+  <!-- AI assistant: knows the YAML + the dataset schemas. -->
+  <aside class="ff-docs ff-panel ff-chat" id="ff-chat" hidden>{CHAT_PANEL}
+  </aside>
+  <!-- Chart reference: each chart's spec.md. -->
+  <aside class="ff-docs ff-panel" id="ff-docs" hidden>
+    <div class="ff-docs-body">__FF_DOCS__</div>
+  </aside>
+  <!-- Calcs manager: add/edit/delete calcs. -->
+  <aside class="ff-docs ff-panel" id="ff-calcs" hidden>
+    <div class="ff-docs-body" id="ff-calcs-body"></div>
+  </aside>
 </div>
 <div class="ff-modal-overlay" id="ff-modal-overlay">
   <div class="ff-modal" id="ff-modal"></div>
@@ -564,7 +578,11 @@ async function run() {{
     outEl.innerHTML = '<pre class="error">' + e + '</pre>';
   }} finally {{
     refreshBtn.disabled = false;
-    updateSaveState();  // config-edit ops change the YAML then run() — refresh Save
+    // Every path that rewrites the YAML — a chart modal, the calcs manager,
+    // chat — sets `codeEl.value` and calls run(). Setting `.value` fires no
+    // `input` event, so this is where the topbar has to catch up.
+    updateSaveState();
+    syncNameFromYaml();
   }}
 }}
 
@@ -667,23 +685,12 @@ codeEl.addEventListener('keydown', e => {{
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {{ e.preventDefault(); run(); }}
 }});
 
-// Documentation overlay: toggles a chart reference (each chart's spec.md) over
-// the output pane.
-const docsPanel = document.getElementById('ff-docs');
-document.getElementById('ff-docs-btn').addEventListener('click', () => {{
-  docsPanel.hidden = !docsPanel.hidden;
-}});
-document.getElementById('ff-docs-close').addEventListener('click', () => {{
-  docsPanel.hidden = true;
-}});
-document.addEventListener('keydown', e => {{
-  if (e.key === 'Escape' && !docsPanel.hidden) docsPanel.hidden = true;
-}});
+// Each panel's ✕ returns to the dashboard; the mode switch opens them. See
+// `setMode`, which owns every show/hide.
 
 // Calcs manager overlay: lists a dashboard's calcs per dataset and
 // add/edit/deletes them. Server-rendered (like docs); each mutation swaps the
 // editor YAML and re-runs, then reloads the list.
-const calcsPanel = document.getElementById('ff-calcs');
 const calcsBody = document.getElementById('ff-calcs-body');
 
 async function loadCalcs() {{
@@ -692,16 +699,6 @@ async function loadCalcs() {{
   const res = await fetch('/calcs/manager', {{ method: 'POST', body: fd }});
   calcsBody.innerHTML = await res.text();
 }}
-function openCalcs() {{ calcsPanel.hidden = false; loadCalcs(); }}
-function closeCalcs() {{ calcsPanel.hidden = true; }}
-
-document.getElementById('ff-calcs-btn').addEventListener('click', () => {{
-  if (calcsPanel.hidden) openCalcs(); else closeCalcs();
-}});
-document.getElementById('ff-calcs-close').addEventListener('click', closeCalcs);
-document.addEventListener('keydown', e => {{
-  if (e.key === 'Escape' && !calcsPanel.hidden) closeCalcs();
-}});
 
 async function openCalcForm(dataset, key) {{
   const fd = new FormData();
@@ -767,64 +764,112 @@ calcsBody.addEventListener('submit', async e => {{
 }});
 
 const layoutEl = document.getElementById('layout');
-const toggleBtn = document.getElementById('toggle');
-// The editor:output split, kept so Preview can drop to one column and Edit can
-// restore the ratio the user dragged to. Inline style wins over the CSS class,
-// so we set it explicitly on each toggle.
-const PANE_GUTTER = 5;
-let paneSplit = '1fr ' + PANE_GUTTER + 'px 1fr';
-toggleBtn.addEventListener('click', () => {{
-  const hidden = layoutEl.classList.toggle('editor-hidden');
-  toggleBtn.textContent = hidden ? 'Edit' : 'Preview';
-  layoutEl.style.gridTemplateColumns = hidden ? '1fr' : paneSplit;
+// --- Mode switch -----------------------------------------------------------
+// One segmented control drives the whole editor. Exactly one mode is active, so
+// the lit icon always says what the screen is showing:
+//
+//   view   the dashboard, nothing else
+//   edit   the same dashboard, plus on-canvas editing — no panel, so nothing
+//          covers what you are rearranging
+//   code / chat / docs / calcs
+//                          a panel *beside* the dashboard — every one of them
+//                          is used while looking at it, so none overlap
+//
+// The dashboard itself is full width in every mode; a panel floats over it
+// rather than halving it. Mode is a class on `.layout`, so the CSS can hide the
+// editing affordances without the JS touching each one.
+const MODES = {{ view: null, edit: null, code: 'ff-yaml', chat: 'ff-chat', docs: 'ff-docs', calcs: 'ff-calcs' }};
+const modeSwitch = document.getElementById('ff-modes');
+let currentMode = 'view';
+
+function setMode(mode) {{
+  if (!(mode in MODES)) return;
+  currentMode = mode;
+  // The server always renders the editor chrome; the mode class decides whether
+  // it is shown, so switching costs no re-render.
+  // Derived from MODES, not a written-out list: `code` was added to the switch
+  // and missed here, so leaving code mode left `.mode-code` behind and the
+  // dashboard stayed pinned in a column beside an empty one.
+  for (const name of Object.keys(MODES)) layoutEl.classList.remove('mode-' + name);
+  layoutEl.classList.add('mode-' + mode);
+  layoutEl.classList.toggle('panel-open', MODES[mode] !== null);
+  for (const [name, panelId] of Object.entries(MODES)) {{
+    if (!panelId) continue;
+    document.getElementById(panelId).hidden = name !== mode;
+  }}
+  for (const b of modeSwitch.querySelectorAll('button')) {{
+    b.classList.toggle('active', b.dataset.mode === mode);
+  }}
+  if (mode === 'calcs') loadCalcs();
+  if (mode === 'code') codeEl.focus();
+  if (mode === 'chat') {{
+    const t = document.getElementById('chat-text');
+    if (t) t.focus();
+  }}
+}}
+
+modeSwitch.addEventListener('click', e => {{
+  const btn = e.target.closest('button');
+  // Clicking the active mode again drops its panel and goes back to the
+  // dashboard — the same "click it off" the old toggles had.
+  if (btn) setMode(btn.dataset.mode === currentMode && currentMode !== 'view' ? 'view' : btn.dataset.mode);
 }});
 
-// Drag the divider to change the editor/output proportion.
-const paneResizer = document.getElementById('pane-resizer');
-let paneDrag = null;
-paneResizer.addEventListener('mousedown', e => {{
-  e.preventDefault();
-  paneDrag = layoutEl.getBoundingClientRect();
-  paneResizer.classList.add('dragging');
+// Esc leaves any panel. Move mode and the modal handle their own Esc first.
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape' && currentMode !== 'view' && !inMove()) setMode('view');
+}});
+
+// --- panel width -----------------------------------------------------------
+// Drag the divider to resize the panel; the width is remembered across
+// sessions, because how much room you want for YAML or the assistant is a
+// preference, not a per-visit decision. It lives in localStorage (per browser,
+// per origin) rather than in the dashboard, which is shared.
+const PANEL_WIDTH_KEY = 'ff-panel-width';
+const splitEl = document.getElementById('ff-split');
+
+function setPanelWidth(px, remember) {{
+  // Both panes stay usable: the panel can't collapse to nothing, and it can't
+  // squeeze the dashboard out of the window.
+  const width = Math.round(Math.max(240, Math.min(window.innerWidth - 320, px)));
+  layoutEl.style.setProperty('--panel-w', width + 'px');
+  if (remember) {{
+    try {{ localStorage.setItem(PANEL_WIDTH_KEY, String(width)); }} catch (err) {{}}
+  }}
+}}
+
+// Restore before first paint of a panel. A blocked or empty store just leaves
+// the CSS default in place.
+try {{
+  const saved = parseInt(localStorage.getItem(PANEL_WIDTH_KEY), 10);
+  if (saved > 0) setPanelWidth(saved, false);
+}} catch (err) {{}}
+
+let splitDragging = false;
+splitEl.addEventListener('mousedown', e => {{
+  e.preventDefault();                  // no text selection while dragging
+  splitDragging = true;
+  splitEl.classList.add('dragging');
   document.body.style.userSelect = 'none';
 }});
 window.addEventListener('mousemove', e => {{
-  if (!paneDrag) return;
-  const total = paneDrag.width - PANE_GUTTER;
-  const left = Math.max(160, Math.min(total - 160, e.clientX - paneDrag.left));
-  paneSplit = left + 'fr ' + PANE_GUTTER + 'px ' + (total - left) + 'fr';
-  layoutEl.style.gridTemplateColumns = paneSplit;
+  if (splitDragging) setPanelWidth(e.clientX - layoutEl.getBoundingClientRect().left, false);
 }});
 window.addEventListener('mouseup', () => {{
-  if (!paneDrag) return;
-  paneDrag = null;
-  paneResizer.classList.remove('dragging');
+  if (!splitDragging) return;
+  splitDragging = false;
+  splitEl.classList.remove('dragging');
   document.body.style.userSelect = '';
+  // Store once, on release, rather than on every mousemove.
+  const current = parseInt(layoutEl.style.getPropertyValue('--panel-w'), 10);
+  if (current > 0) setPanelWidth(current, true);
 }});
 
-// --- Resize -----------------------------------------------------------------
-// Handles render in the output only while editing. Dragging one updates the
-// grid live, then rewrites the YAML and re-runs. Suppressed in "Hide YAML"
-// (view-only) mode — there's nothing to edit into.
-//   Rows: drag the bottom edge to change height. 1 unit = 8px, matching
-//   HEIGHT_UNIT_PX in dashboard.py.
-//   Columns: drag an interior boundary of the (union) column grid to rebalance
-//   the two adjacent fine columns; snaps to 10% steps. On release the server
-//   (`config_edit.resize_columns`) recomputes each cell's width from the fine
-//   columns it spans — so every row those columns belong to is updated (even a
-//   drag started on an inherited/lower row) and spanning cells stay bare.
-const HEIGHT_UNIT_PX = 8;
-const COL_STEP = 10;   // column widths snap to 10% increments while dragging
-let resize = null;
+// The dashboard, full width, is what you land on. Run it so the switch lights
+// its segment rather than starting with none of them active.
+setMode('view');
 
-function gcd(a, b) {{ a = Math.abs(a); b = Math.abs(b); while (b) {{ [a, b] = [b, a % b]; }} return a || 1; }}
-// Reduce a width vector to its smallest whole-number ratio: [80,20] -> [4,1].
-function reduceRatio(nums) {{
-  const g = nums.reduce((acc, n) => gcd(acc, n), 0) || 1;
-  return nums.map(n => Math.round(n / g));
-}}
-
-const editingDisabled = () => layoutEl.classList.contains('editor-hidden');
+const editingDisabled = () => currentMode !== 'edit';
 
 // Rewrite the Nth @<height> token in the `layout:` section. `@<n>` is the
 // row-height indicator and rows carry exactly one each in order, so the Nth
@@ -943,20 +988,6 @@ async function commitColumnResize(ordinals, widths) {{
 // The assistant lives in a left-pane overlay toggled from the topbar, mirroring
 // the docs/calcs overlays on the right. It stays available whether or not a
 // key is configured (a disabled build shows a setup notice inside).
-const chatPanel = document.getElementById('ff-chat');
-function openChat() {{
-  chatPanel.hidden = false;
-  const t = document.getElementById('chat-text');
-  if (t) t.focus();
-}}
-function closeChat() {{ chatPanel.hidden = true; }}
-document.getElementById('ff-chat-btn').addEventListener('click', () => {{
-  if (chatPanel.hidden) openChat(); else closeChat();
-}});
-document.getElementById('ff-chat-close').addEventListener('click', closeChat);
-document.addEventListener('keydown', e => {{
-  if (e.key === 'Escape' && !chatPanel.hidden) closeChat();
-}});
 
 const chatForm = document.getElementById('chat-form');
 const chatLog = document.getElementById('chat-log');
@@ -1779,6 +1810,49 @@ _THEME_ICONS = {
 }
 
 
+# The editor's mode switch: one segmented control where a row of separate
+# toggles used to be. Exactly one mode is active, so the icon that is lit always
+# says what the screen is showing. Icons only, per the project's UI style — the
+# title/aria-label carry the meaning.
+_MODE_LABELS = {
+    "view": "View",
+    "edit": "Edit — drag, add and rearrange charts",
+    "code": "YAML",
+    "chat": "AI assistant",
+    "docs": "Chart reference",
+    "calcs": "Calcs",
+}
+# One <svg> shape, filled in per mode.
+_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{}</svg>'
+
+_MODE_ICONS = {
+    # Inline SVG, `stroke=currentColor` so an icon follows its segment colour.
+    "view": _ICON.format('<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>'),
+    "edit": _ICON.format('<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
+    "code": _ICON.format('<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>'),
+    "chat": _ICON.format(
+        '<rect x="4" y="9" width="16" height="11" rx="2"/>'      # head
+        '<path d="M12 4.5V9"/><circle cx="12" cy="3.5" r="1.2"/>'  # antenna
+        '<path d="M9 13.5v1.5"/><path d="M15 13.5v1.5"/>'          # eyes
+        '<path d="M2 13.5v2"/><path d="M22 13.5v2"/>'              # ears
+    ),
+    "docs": _ICON.format('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'),
+    "calcs": _ICON.format('<path d="M18 5H6l6 7-6 7h12"/>'),
+}
+
+
+def _mode_switch() -> str:
+    buttons = "".join(
+        f'<button type="button" data-mode="{mode}" title="{_MODE_LABELS[mode]}"'
+        f' aria-label="{_MODE_LABELS[mode]}">{_MODE_ICONS[mode]}</button>'
+        for mode in ("view", "edit", "code", "chat", "calcs", "docs")
+    )
+    return (
+        '<div class="ff-theme ff-modes" id="ff-modes" role="group" '
+        f'aria-label="Editor mode">{buttons}</div>'
+    )
+
+
 def _theme_switch() -> str:
     labels = {"auto": "Auto (follow OS)", "light": "Light", "dark": "Dark"}
     buttons = "".join(
@@ -1878,6 +1952,7 @@ def render_editor_page(
     return (
         INDEX.replace("__FF_YAML_CONTENT__", escape(yaml_text))
         .replace("__FF_NAV__", nav)
+        .replace("__FF_MODES__", _mode_switch())
         .replace("__FF_DASH_NAME__", dash_name)
         .replace("__FF_PATHDD__", path_dropdown)
         .replace("__FF_SAVE__", save)

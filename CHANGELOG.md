@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-25
+
+### Changed
+
+- **The editor is one mode switch instead of a row of toggles.** Six icon
+  segments — **view / edit / code / chat / calcs / docs** — sit at the left of
+  the topbar, before the dashboard name, with exactly one active, so the lit
+  icon always says what the screen is showing. It replaces the Preview button
+  and the three separate panel toggles.
+- **The dashboard is full width by default.** The two-column split with its
+  draggable divider is gone: `view` is where you land and the dashboard has the
+  window to itself. `edit` keeps it full width and switches on the on-canvas
+  affordances — drag-to-resize, chart toolbars, add buttons — so nothing covers
+  what you are rearranging.
+- **Panels open beside the dashboard, never over it** (`code`, `chat`, `calcs`,
+  `docs`), because every one of them is used *while* looking at the dashboard.
+  The split is **draggable and the width is remembered** across sessions in
+  `localStorage` — how much room you want for YAML is a property of you, not of
+  a dashboard you share. It clamps so neither pane can be dragged away.
+- **Chrome removed**: panels have no close buttons (the switch is the only way
+  in or out, with Esc as a shortcut) and no headers.
+- **Every button in the calcs manager is an icon** — add, edit, delete, save,
+  cancel, and the filter builder's add/remove, which the chart edit modal shares.
+  Meaning moved to `title`/`aria-label`, per the project's icon-first style.
+- The pencil icon lost its underline stroke, so the one in the mode switch, the
+  calcs manager and the gallery all match the chart toolbars', which never had
+  it. The assistant's speech bubble became a robot.
+
+### Fixed
+
+- **Leaving `code` mode left its column behind.** `setMode` removed the mode
+  classes from a hand-written list that `code` was never added to, so the grid
+  survived: the dashboard stayed pinned in a column beside an empty one. The
+  list is derived from `MODES` now, and the split is keyed off a single
+  `panel-open` class rather than per-mode rules, so neither can drift again.
+- **The panels were nested inside the output pane**, where `grid-area` could not
+  place them — the split silently did nothing and the YAML rendered below the
+  dashboard. They are direct children of `.layout` now, asserted against the
+  parsed DOM rather than the CSS, which cannot catch a structural mismatch.
+- **A programmatic YAML change left the topbar stale.** `syncNameFromYaml` ran
+  only from the textarea's `input` event, which setting `.value` never fires —
+  so renaming a dashboard through chat kept the old name in the topbar. `run()`
+  now refreshes it alongside Save state, which every rewrite path passes through.
+
+
 ## [0.11.0] - 2026-08-21
 
 ### Added
@@ -755,7 +800,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/dankor/fireflyer/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/dankor/fireflyer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/dankor/fireflyer/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/dankor/fireflyer/compare/v0.9.0...v0.9.1

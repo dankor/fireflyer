@@ -52,7 +52,7 @@ cd fireflyer
 docker compose up --build
 ```
 
-Open <http://127.0.0.1:8000>. You land on a **gallery** — the compose file turns on [local paths](#local-paths-many-dashboards-gitops) and maps `./paths` from your host as the place your dashboards live, plus a **demo** path mapped straight to the repo's `demo/` folder. The demo dashboard carries its own data in an inline `datasets:` block, so there is nothing to upload before it renders. Open one and you get the two-pane editor: YAML on the left, live render on the right; toggle **Hide YAML** for view-only.
+Open <http://127.0.0.1:8000>. You land on a **gallery** — the compose file turns on [local paths](#local-paths-many-dashboards-gitops) and maps `./paths` from your host as the place your dashboards live, plus a **demo** path mapped straight to the repo's `demo/` folder. The demo dashboard carries its own data in an inline `datasets:` block, so there is nothing to upload before it renders. Open one and the dashboard fills the window. A mode switch in the topbar picks what you are doing — **view**, **edit** (the same full-width dashboard, plus drag-to-resize, chart toolbars and add buttons — nothing covers what you are rearranging), or **code** (raw YAML), **chat**, **docs** and **calcs**, each of which opens beside the dashboard.
 
 Source is mounted with `--reload`, so your edits hot-reload live. Your dashboards are written to `./paths/<path>/dashboards/*.yaml` on the host — commit them like any other code. Stop with `Ctrl-C` (or `docker compose down`).
 
