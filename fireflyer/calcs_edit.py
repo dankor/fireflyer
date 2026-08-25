@@ -19,7 +19,7 @@ import yaml
 
 from fireflyer import calcs as calcs_mod
 from fireflyer import filters as filters_mod
-from fireflyer.params import FilterListParam, ParamContext
+from fireflyer.params import FilterListParam, ParamContext, icon
 
 
 class CalcsEditError(ValueError):
@@ -254,6 +254,7 @@ AGGS = calcs_mod.AGGS
 # unit-test without the web stack, mirroring `config_edit.build_form`.
 
 
+
 def _summary(definition: dict) -> str:
     """A one-line human description of a calc, e.g. `sum(amount)` or
     `= revenue / orders_count`."""
@@ -291,8 +292,9 @@ def render_manager(text: str) -> str:
         out.append(
             '<div class="ff-calcs-ds-head">'
             f'<span class="ff-calcs-ds-name">{escape(ds)}</span>'
-            f'<button type="button" class="ff-calcs-add" data-dataset="{ds_attr}">'
-            '+ calc</button></div>'
+            f'<button type="button" class="ff-calcs-add" data-dataset="{ds_attr}"'
+            f' title="Add a calc to {ds_attr}" aria-label="Add a calc to {ds_attr}">'
+            f'{icon("plus")}</button></div>'
         )
         if not entries:
             out.append('<p class="ff-calcs-empty">No calcs yet.</p>')
@@ -304,9 +306,11 @@ def render_manager(text: str) -> str:
                 f'<span class="ff-calcs-sum">{escape(_summary(definition or {}))}</span>'
                 '<span class="ff-calcs-acts">'
                 f'<button type="button" class="ff-calcs-edit" '
-                f'data-dataset="{ds_attr}" data-key="{k_attr}">Edit</button>'
+                f'data-dataset="{ds_attr}" data-key="{k_attr}" '
+                f'title="Edit {k_attr}" aria-label="Edit {k_attr}">{icon("pencil")}</button>'
                 f'<button type="button" class="ff-calcs-del" '
-                f'data-dataset="{ds_attr}" data-key="{k_attr}">Delete</button>'
+                f'data-dataset="{ds_attr}" data-key="{k_attr}" '
+                f'title="Delete {k_attr}" aria-label="Delete {k_attr}">{icon("trash")}</button>'
                 '</span></div>'
             )
         out.append('</section>')
@@ -374,7 +378,9 @@ def render_form(text: str, dataset: str, key: str = "", columns=None) -> str:
         + "".join(fields)
         + '<div class="ff-modal-error" hidden></div>'
         '<div class="ff-calcs-form-foot">'
-        '<button type="button" class="ff-calcs-cancel">Cancel</button>'
-        '<button type="submit" class="run">Save</button>'
+        '<button type="button" class="ff-calcs-cancel" title="Cancel"'
+        f' aria-label="Cancel">{icon("close")}</button>'
+        '<button type="submit" class="ff-calcs-save" title="Save"'
+        f' aria-label="Save">{icon("check")}</button>'
         '</div></form>'
     )

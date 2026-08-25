@@ -22,6 +22,27 @@ from html import escape
 from fireflyer import filters as filters_mod
 
 
+# Icon buttons, matching the portal gallery's vocabulary (`web/portal.py`
+# `_icon`). Spelled out again rather than imported: nothing under `fireflyer/`
+# imports from `fireflyer/web/`, and one small dict is cheaper than inverting
+# that. Keep the shapes in step if the gallery's change.
+ICONS = {
+    "plus": '<path d="M12 5v14"/><path d="M5 12h14"/>',
+    "pencil": '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+    "trash": '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'
+             '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
+    "check": '<path d="M20 6L9 17l-5-5"/>',
+    "close": '<path d="M18 6L6 18"/><path d="M6 6l12 12"/>',
+}
+
+
+def icon(name: str) -> str:
+    return (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"'
+        f' stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>'
+    )
+
+
 @dataclass
 class ParamContext:
     """What a widget needs to render without reaching into chart code."""
@@ -285,8 +306,8 @@ class FilterListParam(Param):
             f'<select class="ff-input" name="filter_op">{_options(self.OPS, op)}</select>'
             f'<input class="ff-input" type="text" name="filter_values" '
             f'value="{escape(values_text, quote=True)}" placeholder="comma, separated">'
-            '<button type="button" class="ff-filter-del" aria-label="Remove filter">'
-            '&times;</button>'
+            '<button type="button" class="ff-filter-del" title="Remove filter"'
+            f' aria-label="Remove filter">{icon("close")}</button>'
             '</div>'
         )
 
@@ -299,7 +320,8 @@ class FilterListParam(Param):
         return self._wrap(
             f'<div class="ff-filters">'
             f'<div class="ff-filter-rows">{"".join(rows)}</div>'
-            f'<button type="button" class="ff-filter-add">+ add filter</button>'
+            '<button type="button" class="ff-filter-add" title="Add a filter"'
+            f' aria-label="Add a filter">{icon("plus")}</button>'
             f'<template class="ff-filter-tpl">{template}</template>'
             f'</div>'
         )
