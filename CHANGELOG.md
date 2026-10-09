@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-09
+
+### Added
+
+- **A logo.** Three columns of glowing dots rising like fireflies
+  (`fireflyer/web/static/logo.svg`), at the top of the README.
+- **A favicon.** Every page — the editor, the dashboards / datasets gallery and
+  the login page — uses the logo SVG as its tab icon. Just the one file: no PNG
+  copies.
+- **A GitHub social preview** (`.github/social-preview.png`, 1280×640) — set it
+  under the repository's *Settings → Social preview*; GitHub doesn't read it
+  from the repo.
+
 ## [0.13.0] - 2026-10-09
 
 ### Added
@@ -843,7 +856,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/dankor/fireflyer/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/dankor/fireflyer/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/dankor/fireflyer/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/dankor/fireflyer/compare/v0.10.0...v0.11.0

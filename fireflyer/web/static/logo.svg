@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 120 120" role="img" aria-label="Fireflyer">
+  <defs>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#F5C542" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#F5C542" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="120" height="120" fill="#000000"/>
+  <circle cx="32" cy="70" r="11" fill="url(#glow)"/>
+  <circle cx="60" cy="44" r="12" fill="url(#glow)"/>
+  <circle cx="88" cy="18" r="14" fill="url(#glow)"/>
+  <g fill="#F5C542">
+    <circle cx="32" cy="96" r="3.4" opacity="0.35"/>
+    <circle cx="32" cy="83" r="3.4" opacity="0.6"/>
+    <circle cx="32" cy="70" r="4"/>
+    <circle cx="60" cy="96" r="3.4" opacity="0.25"/>
+    <circle cx="60" cy="83" r="3.4" opacity="0.4"/>
+    <circle cx="60" cy="70" r="3.4" opacity="0.55"/>
+    <circle cx="60" cy="57" r="3.4" opacity="0.75"/>
+    <circle cx="60" cy="44" r="4.4"/>
+    <circle cx="88" cy="96" r="3.4" opacity="0.2"/>
+    <circle cx="88" cy="83" r="3.4" opacity="0.3"/>
+    <circle cx="88" cy="70" r="3.4" opacity="0.42"/>
+    <circle cx="88" cy="57" r="3.4" opacity="0.55"/>
+    <circle cx="88" cy="44" r="3.4" opacity="0.7"/>
+    <circle cx="88" cy="31" r="3.6" opacity="0.85"/>
+    <circle cx="88" cy="18" r="5"/>
+  </g>
+</svg>

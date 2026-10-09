@@ -134,6 +134,7 @@ def login_page(error: str = "", title: str = "Fireflyer Portal") -> HTMLResponse
 <head>
 <meta charset="utf-8">
 <title>Sign in · {escape(title)}</title>
+{assets.favicons()}
 {assets.stylesheets("login.css")}
 </head>
 <body>

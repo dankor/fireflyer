@@ -299,6 +299,7 @@ def _shell(
 <head>
 <meta charset="utf-8">
 <title>{escape(title)}</title>
+{assets.favicons()}
 {assets.stylesheets("gallery.css", "nav.css", "profile.css")}
 {assets.script("gallery.js")}
 </head>
