@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-09
+
 ### Added
 
 - **Global quick filters.** Every chart's filter panel ends in a **+** row —
@@ -841,7 +843,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/dankor/fireflyer/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/dankor/fireflyer/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/dankor/fireflyer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/dankor/fireflyer/compare/v0.9.1...v0.10.0
