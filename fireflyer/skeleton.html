@@ -35,7 +35,10 @@
 </div>
 {%- endmacro -%}
 <style>{{ css|safe }}</style>
-<div id="fireflyer-dashboard" class="fireflyer-dashboard"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
+{#- hx-history="false": the filters write the page URL (HX-Replace-Url), and
+    htmx would first snapshot the whole page into localStorage — this
+    dashboard's YAML, inline data and all. This opts out; the URL still updates. -#}
+<div id="fireflyer-dashboard" class="fireflyer-dashboard" hx-history="false"{% if ff_theme %} data-ff-theme="{{ ff_theme }}"{% endif %}>
   <input type="hidden" name="yaml_text" value="{{ yaml_source }}">
   {%- if editing %}
   <input type="hidden" name="editing" value="1">
@@ -91,7 +94,7 @@
     <button type="button" class="fireflyer-add-cell" data-row="{{ item.tracks[0].ordinal }}" title="Add a chart to this row">+</button>
     {%- endif %}
     {%- for cell in item.cells %}
-    <div class="fireflyer-dashboard-cell fireflyer-cell-loading" style="grid-column: {{ cell.grid_column }}; grid-row: {{ cell.grid_row }};" hx-post="/dashboard/cell" hx-trigger="load" hx-target="this" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"cid": "{{ cell.cid }}", "col": "{{ cell.grid_column }}", "row": "{{ cell.grid_row }}"}'>
+    <div class="fireflyer-dashboard-cell fireflyer-cell-loading" style="grid-column: {{ cell.grid_column }}; grid-row: {{ cell.grid_row }};" hx-post="/dashboard/cell" hx-trigger="load" hx-target="this" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"cid": "{{ cell.cid }}", "col": "{{ cell.grid_column }}", "row": "{{ cell.grid_row }}"{% if cell.cid == open_filter %}, "open_filter": "1"{% endif %}}'>
       <div class="fireflyer-cell-spinner" aria-label="Loading {{ cell.cid }}"></div>
     </div>
     {%- endfor %}

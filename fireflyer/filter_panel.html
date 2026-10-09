@@ -1,0 +1,65 @@
+{%- set state = 'is-emitter' if emitted else ('has-filters' if applied else '') %}
+{#- The badge counts every filter in play for this chart: the ones narrowing it
+    plus the ones it emits. A chart is exempt from its own crossfilter, so an
+    emitter's `applied` is short by exactly what it emits — counting one or the
+    other made the red badges read lower than their blue neighbours for the same
+    dashboard state. The two lists are disjoint, so the sum is the real total. -#}
+{%- set total = applied|length + emitted|length %}
+{#- A click-to-open disclosure, not a hover card: a panel you have to keep the
+    pointer inside is hard to read and impossible on a touch screen. `<details>`
+    gives the toggle natively, so this stays JS-free and works in `to_html()`
+    output as well as the editor. The shared `name` makes the badges an
+    exclusive group: opening one closes whichever other panel is open.
+    Rendered once per cell by `Dashboard._render_chart`, and dropped into both
+    `cell.html` and `dashboard.html` so the two serving paths can't drift. -#}
+<details class="fireflyer-filter-indicator{% if state %} {{ state }}{% endif %}" name="fireflyer-filter"{% if is_open %} open{% endif %}>
+  <summary aria-label="{{ total }} active filter{% if total != 1 %}s{% endif %}{% if emitted %}, {{ emitted|length }} emitted by this chart{% endif %}">{{ total }}</summary>
+  <div class="fireflyer-filter-panel">
+    <div class="fireflyer-filter-ds">
+      <span class="ds-name">{{ dataset.name }}</span>
+      <span class="ds-updated">{% if dataset.inline %}inline data{% elif dataset.updated %}updated {{ dataset.updated }}{% else %}—{% endif %}</span>
+    </div>
+    {%- if rows %}
+    <table class="fireflyer-filter-table">
+      <thead><tr><th>Source</th><th>Column</th><th>Op</th><th>Values</th><th></th></tr></thead>
+      <tbody>
+      {%- for r in rows %}
+      <tr class="src-{{ r.source.role }}">
+        <td class="src" title="{{ r.source.name }}">{% if r.source.glyph %}{{ r.source.glyph|safe }}{% endif %}<span>{{ r.source.name }}</span></td>
+        <td class="col" title="{{ r.column }}">{{ r.type|safe }}{{ r.column }}</td>
+        <td class="op">{{ r.op }}</td>
+        <td class="vals" title="{{ r.vals }}">{{ r.vals }}</td>
+        <td class="rm">
+          {%- if r.edit %}
+          {#- A global filter was typed, so it can be retyped: loads it into the
+              row below, where ✓ replaces it in place. -#}
+          <button type="button" class="fireflyer-filter-edit" title="Edit filter" aria-label="Edit filter on {{ r.column }}" hx-post="{{ edit_endpoint }}" hx-target="#{{ form_id }}" hx-swap="innerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals='{{ {"token": r.edit, "filter_dataset": dataset.name, "cid": cid}|tojson }}'>
+            <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M11.1 1.9a1.5 1.5 0 0 1 2.1 0l.9.9a1.5 1.5 0 0 1 0 2.1l-8 8-3.4.9.9-3.4 7.5-8.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          </button>
+          {%- endif %}
+          {%- if r.remove %}
+          {#- Every filter but a declared one can be removed right here, rather
+              than hunting for the chart and the exact slice that set it. It
+              drops the tokens behind the row (`filters.tokens_behind`). -#}
+          <button type="button" class="fireflyer-filter-remove" title="Remove filter" aria-label="Remove filter on {{ r.column }}" hx-post="{{ hx.endpoint }}" hx-target="{{ hx.target }}" hx-swap="outerHTML" hx-include="{{ hx.include }}" hx-vals='{{ {"remove": r.remove, "open_filter": cid}|tojson }}'>
+            <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    {%- else %}
+    <div class="fireflyer-filter-tooltip-empty">No active filters</div>
+    {%- endif %}
+    {#- A global quick filter: the chart builder's own filter fields, so the
+        two can't drift. It applies to every chart whose data has the column —
+        the crossfilter contract — and lives only in this viewer's page state. -#}
+    {#- `open_filter` keeps this panel open through the re-render (both here and
+        on a row's ✕). -#}
+    <form class="fireflyer-filter-add" id="{{ form_id }}" hx-post="{{ hx.endpoint }}" hx-target="{{ hx.target }}" hx-swap="outerHTML" hx-include="{{ hx.include }}" hx-vals='{{ {"open_filter": cid}|tojson }}'>
+      {{ add_body|safe }}
+    </form>
+  </div>
+</details>

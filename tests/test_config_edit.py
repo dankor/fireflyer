@@ -1,5 +1,7 @@
 """Tests for the surgical chart-config edit (build form / emit / replace / apply)."""
 
+import re
+
 import pytest
 import yaml
 
@@ -17,6 +19,15 @@ class FakeForm:
 
     def getlist(self, key):
         return self._multi.get(key, [])
+
+    def multi_items(self):
+        """Fields in document order, as a browser submits them: parallel lists
+        interleave, so each filter row's column, op and values stay together."""
+        items = list(self._single.items())
+        longest = max((len(v) for v in self._multi.values()), default=0)
+        for i in range(longest):
+            items += [(k, v[i]) for k, v in self._multi.items() if i < len(v)]
+        return items
 
 
 def _doc(orders_parquet: str) -> str:
@@ -98,6 +109,18 @@ def test_build_form_has_type_dropdown_with_all_types(orders_parquet):
     assert "data-type-select" in html
     for t in ("number", "pie", "bar", "map", "table"):
         assert f'value="{t}"' in html
+
+
+def test_type_dropdown_shows_each_charts_icon(orders_parquet):
+    """The picker is a customizable select: every option leads with its chart's
+    icon, and `<selectedcontent>` mirrors the picked one into the closed control."""
+    from fireflyer.dashboard import CHART_TYPES
+
+    html = ce.build_form(_doc(orders_parquet), "revenue")
+    assert "<button><selectedcontent></selectedcontent></button>" in html
+    for t, cls in CHART_TYPES.items():
+        assert f'value="{t}"' in html
+        assert f'>{cls.ICON}<span>{t}</span></option>' in html
     assert 'value="number" selected' in html   # revenue is a number chart
 
 
@@ -633,3 +656,74 @@ def test_apply_edit_invalid_value_raises(orders_parquet):
     )
     with pytest.raises(ff.DashboardError, match="unknown calc"):
         ce.apply_edit(text, "revenue", form)
+
+
+# --- filter value picker ------------------------------------------------------
+
+
+def test_the_builder_lists_an_existing_filters_values_to_tick(orders_parquet):
+    doc = _doc(orders_parquet).replace(
+        "  revenue:\n    type: number\n",
+        "  revenue:\n    type: number\n    filters: [{column: status, op: in, values: [paid]}]\n",
+    )
+    html = ce.build_form(doc, "revenue")
+    assert 'value="paid" checked' in html
+    assert 'value="pending">' in html and 'value="cancelled">' in html
+
+
+def test_switching_column_refetches_its_values_and_drops_the_old_ones(orders_parquet):
+    html = ce.filter_fields_for(
+        _doc(orders_parquet), orders_parquet, column="status", op="ni", values=["42"]
+    )
+    assert re.findall(r'name="filter_value" value="([^"]+)"', html) == [
+        "cancelled", "paid", "pending",
+    ]
+    assert "checked" not in html            # `42` belonged to the previous column
+
+
+def test_a_column_with_many_values_lists_a_page_and_offers_search(orders_parquet, monkeypatch):
+    """Too many to list is no reason to fall back to typing: the first page
+    shows, a note says there's more, and the search box narrows it."""
+    monkeypatch.setattr(ce, "VALUE_LIST_LIMIT", 2)
+    html = ce.filter_fields_for(_doc(orders_parquet), orders_parquet, column="status")
+    assert re.findall(r'name="filter_value" value="([^"]+)"', html) == ["cancelled", "paid"]
+    assert "more values — search to narrow" in html
+    assert 'name="filter_q"' in html and 'name="filter_values"' not in html
+
+
+def test_a_search_narrows_the_list_but_keeps_what_is_ticked(orders_parquet):
+    """Case-insensitive substring; ticked values stay, ticked, matching or not."""
+    html = ce.filter_values_for(
+        _doc(orders_parquet), orders_parquet, "status", query="PEN", selected=["paid"]
+    )
+    assert re.findall(r'name="filter_value" value="([^"]+)"( checked)?', html) == [
+        ("paid", " checked"), ("pending", ""),
+    ]
+    none = ce.filter_values_for(_doc(orders_parquet), orders_parquet, "status", query="zzz")
+    assert "no matches" in none
+
+
+def test_a_ticked_value_past_the_first_page_survives_an_op_change(orders_parquet, monkeypatch):
+    """Whether a ticked value belongs to the column is asked of the data, not of
+    the page the picker happens to list."""
+    monkeypatch.setattr(ce, "VALUE_LIST_LIMIT", 1)               # lists only "cancelled"
+    html = ce.filter_fields_for(
+        _doc(orders_parquet), orders_parquet, column="status", op="ni", values=["pending"]
+    )
+    assert 'value="pending" checked' in html
+
+
+def test_a_calc_relabelling_a_column_is_listed_once(orders_parquet):
+    """A column calc may share a raw column's name; the picker offers it once."""
+    doc = _doc(orders_parquet).replace(
+        "charts:", f"calcs:\n  {orders_parquet}:\n    status: {{name: Order status, formula: status}}\n\ncharts:", 1
+    )
+    html = ce.filter_fields_for(doc, orders_parquet, column="status")
+    assert html.count('<option value="status"') == 1
+
+
+def test_values_sort_by_the_columns_own_type(orders_parquet):
+    """As text `10` sorts before `2`; a number column lists in number order."""
+    html = ce.filter_fields_for(_doc(orders_parquet), orders_parquet, column="amount")
+    listed = [int(v) for v in re.findall(r'name="filter_value" value="([^"]+)"', html)]
+    assert listed == sorted(listed) and len(listed) > 1

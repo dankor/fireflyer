@@ -11,8 +11,12 @@ every date in June, which no list of exact values can express (see the bar
 chart's spec). Half-open is what makes adjacent buckets tile without overlap.
 """
 
+import base64
+import json
 import re
+import zlib
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any, Iterable
 
 import polars as pl
@@ -40,11 +44,19 @@ class Filter:
         """The values as the filter indicator shows them. A `between` reads as
         `low–high` with a midnight time trimmed off each bound: a bucket edge is
         midnight by construction, so `2026-02-01 00:00:00+00:00` says nothing the
-        date doesn't, and two of them overflowed the tooltip. Display only — the
-        stored values still round-trip exactly in the crossfilter token."""
-        if self.op == "between":
+        date doesn't, and two of them overflowed the tooltip.
+
+        Whole days read as the days they cover — `2026-02-01–2026-02-28`, not
+        the exclusive `…–2026-03-01` the model stores — matching the inclusive
+        "to" of the date picker that sets them; a single day reads as itself.
+        Display only — the stored values still round-trip exactly."""
+        if self.op != "between":
+            return ", ".join(str(v) for v in self.values)
+        days = day_range(self.values)
+        if days is None:
             return "–".join(_drop_midnight(v) for v in self.values)
-        return ", ".join(str(v) for v in self.values)
+        first, last = days
+        return first if first == last else f"{first}–{last}"
 
 
 # A time of exactly midnight, optionally UTC. A non-UTC offset is left alone:
@@ -54,6 +66,42 @@ _MIDNIGHT_RE = re.compile(r"[ T]00:00:00(\.0+)?(\+00:00|Z)?$")
 
 def _drop_midnight(value) -> str:
     return _MIDNIGHT_RE.sub("", str(value))
+
+
+# --- whole-day ranges ---------------------------------------------------------
+#
+# `between` is half-open, which is right for the model (adjacent ranges tile)
+# and wrong for a person: "June" is 1–30 June, not 1 June up to 1 July. A date
+# picker therefore takes an inclusive last day, and these convert at the edge.
+
+_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def day_range(values) -> tuple[str, str] | None:
+    """Inclusive `(first_day, last_day)` for a half-open `between` whose bounds
+    are whole days (a midnight time is allowed), or None when they aren't — a
+    range with a real time in it has no day-picker form."""
+    if len(values) != 2:
+        return None
+    low, high = (_drop_midnight(v) for v in values)
+    if not (_DAY_RE.match(low) and _DAY_RE.match(high)):
+        return None
+    try:
+        last = date.fromisoformat(high) - timedelta(days=1)
+    except ValueError:
+        return None
+    return low, last.isoformat()
+
+
+def day_bounds(first: str, last: str) -> list[str] | None:
+    """The half-open `[first, last + 1 day)` bounds for an inclusive pair of
+    picked days, or None when either isn't a date."""
+    try:
+        date.fromisoformat(first)
+        end = date.fromisoformat(last) + timedelta(days=1)
+    except ValueError:
+        return None
+    return [first, end.isoformat()]
 
 
 def normalize(raw) -> list[Filter]:
@@ -165,9 +213,17 @@ def _is_number(value: str) -> bool:
 # A part is an `in` filter when it contains `=`, since the `between` parts we
 # generate are dates and never do. That order matters: a *value* may contain
 # `~` (`status=a~b`), so `=` has to be tested first.
+#
+# **Global quick filters** ride the same channel under the reserved emitter `*`,
+# which no chart id can be. Their part is the whole filter as JSON instead:
+# they are typed, not clicked, so they need `ni` and arbitrary value text that
+# the click syntax can't carry. A global filter is never exempted from any
+# chart (no chart is its emitter), and it is never merged into another
+# source's `in` filter — it ANDs with them, as a filter you typed should.
 
 _IN_SEP = "="
 _RANGE_SEP = "~"
+GLOBAL = "*"
 
 
 def _parts(token: str, emitter_filter=None) -> list[tuple[str, str, tuple]]:
@@ -179,6 +235,8 @@ def _parts(token: str, emitter_filter=None) -> list[tuple[str, str, tuple]]:
     emitter, _, rest = token.partition("|")
     if emitter_filter is not None and not emitter_filter(emitter):
         return []
+    if emitter == GLOBAL:
+        return _global_parts(rest)
     out = []
     for part in rest.split("|"):
         if _IN_SEP in part:
@@ -193,26 +251,92 @@ def _parts(token: str, emitter_filter=None) -> list[tuple[str, str, tuple]]:
     return out
 
 
+def _global_parts(payload: str) -> list[tuple[str, str, tuple]]:
+    """The one filter a global token carries, or [] when it doesn't parse — a
+    hand-edited URL must not take the dashboard down."""
+    try:
+        (f,) = normalize([json.loads(payload)])
+    except (ValueError, FilterError):
+        return []
+    return [(f.column, f.op, f.values)]
+
+
 def _collect(tokens: Iterable[str], emitter_filter) -> list[Filter]:
-    """Parts → Filters. `in` parts on one column merge into a single multi-value
-    filter (so separate clicks accumulate); `between` parts stay separate, since
-    two ranges are an OR the model can't express and shouldn't silently fake."""
+    """Parts → Filters. Clicked `in` parts on one column merge into a single
+    multi-value filter (so separate clicks accumulate); `between` parts stay
+    separate, since two ranges are an OR the model can't express and shouldn't
+    silently fake. Global filters stay separate too (see the token notes)."""
     merged: dict[str, list[str]] = {}
-    ranges: list[Filter] = []
+    separate: list[Filter] = []
     for token in tokens:
+        is_global = token.partition("|")[0] == GLOBAL
         for column, op, values in _parts(token, emitter_filter):
-            if op == "between":
-                ranges.append(Filter(column=column, op="between", values=values))
-            else:
+            if op == "in" and not is_global:
                 merged.setdefault(column, []).extend(values)
+            else:
+                separate.append(Filter(column=column, op=op, values=values))
     return [
         Filter(column=c, op="in", values=tuple(vs)) for c, vs in merged.items()
-    ] + ranges
+    ] + separate
 
 
 def decode_tokens(tokens: Iterable[str], exclude_emitter: str | None = None) -> list[Filter]:
     """Tokens → Filter list. Drops tokens emitted by `exclude_emitter`."""
     return _collect(tokens, lambda e: e != exclude_emitter)
+
+
+def global_token(column: str, op: str, values) -> str:
+    """The token for a global quick filter typed into a filter panel."""
+    payload = {"column": column, "op": op, "values": [str(v) for v in values]}
+    return GLOBAL + "|" + json.dumps(payload, separators=(",", ":"))
+
+
+def global_filters(tokens: Iterable[str]) -> list[tuple[str, Filter]]:
+    """`(token, filter)` for each global quick filter. The token comes along
+    because removing one means toggling exactly that token off."""
+    out = []
+    for token in tokens:
+        if token.partition("|")[0] == GLOBAL:
+            out += [(token, Filter(c, op, vs)) for c, op, vs in _parts(token)]
+    return out
+
+
+def by_emitter(tokens: Iterable[str]) -> list[tuple[str, Filter]]:
+    """`(emitter, filter)` pairs — who set each filter, not just what it says.
+
+    `decode_tokens` throws the emitter away, which is right for *applying* a
+    filter (the chart doesn't care where it came from) and wrong for showing
+    one: a viewer looking at a narrowed chart needs to know which chart to click
+    to undo it. Grouped per emitter first, so one chart's repeated clicks on a
+    column still merge into a single multi-value filter.
+    """
+    groups: dict[str, list[str]] = {}
+    for token in tokens:
+        groups.setdefault(token.partition("|")[0], []).append(token)
+    return [
+        (emitter, f)
+        for emitter, group in groups.items()
+        for f in _collect(group, lambda _: True)
+    ]
+
+
+def tokens_behind(tokens: Iterable[str], emitter: str, f: Filter) -> list[str]:
+    """The tokens that make up `f` as `by_emitter` reported it — what removing
+    that filter has to drop. Clicked `in` values on a column merge across
+    clicks, so that is every token of `emitter` with an `in` part on the
+    column; anything else (a range, a global filter) is one exact part. A
+    multi-part token goes whole: it is one selection, the same unit a second
+    click on it would clear."""
+    def builds(column, op, values):
+        if column != f.column or op != f.op:
+            return False
+        merged = op == "in" and emitter != GLOBAL
+        return merged or values == f.values
+
+    return [
+        t for t in tokens
+        if t.partition("|")[0] == emitter and any(builds(*p) for p in _parts(t))
+    ]
 
 
 def emitted_by(tokens: Iterable[str], emitter: str) -> list[Filter]:
@@ -260,3 +384,37 @@ def range_part(column: str, low, high) -> str:
 def value_part(column: str, value) -> str:
     """An `in` token part."""
     return f"{column}{_IN_SEP}{value}"
+
+
+# --- URL state -------------------------------------------------------------------
+#
+# Every token in play — crossfilter clicks and global filters alike — rides in the
+# page URL as one `f` query parameter, so a reload or a shared link reopens the
+# same view. A global filter's JSON quoted into a URL grows fast, and browsers and
+# proxies cut long URLs off, so the list is always compressed: JSON → zlib →
+# base64url. One format, reversible, no length threshold to get wrong.
+
+
+def encode_state(tokens: Iterable[str]) -> str:
+    """The `f` parameter for `tokens`; "" when there are none."""
+    tokens = list(tokens)
+    if not tokens:
+        return ""
+    packed = zlib.compress(json.dumps(tokens, separators=(",", ":")).encode(), 9)
+    return base64.urlsafe_b64encode(packed).decode().rstrip("=")
+
+
+def decode_state(text: str) -> list[str]:
+    """Tokens from an `f` parameter. Anything that doesn't decode is an empty
+    state — a truncated or hand-edited link opens the dashboard unfiltered
+    rather than not at all."""
+    if not text:
+        return []
+    try:
+        packed = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+        tokens = json.loads(zlib.decompress(packed))
+    except (ValueError, zlib.error):
+        return []
+    if not isinstance(tokens, list):
+        return []
+    return [t for t in tokens if isinstance(t, str)]

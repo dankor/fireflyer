@@ -1,0 +1,20 @@
+{#- The filter panel's bottom row: the chart builder's own filter fields, then
+    + to add a global filter. Editing one (a Global row's pencil) re-renders
+    this with that filter filled in and `replace` set: + becomes ✓, which swaps
+    the old filter for the new one in place, and ✕ cancels back to a blank row.
+    Rendered by `dashboard.filter_add_body`, for the panel and `/filter/edit`. -#}
+{{ fields|safe }}
+{%- if replace %}
+{#- Not `type="hidden"`, which every crossfilter click sweeps up. -#}
+<input name="replace" value="{{ replace }}" hidden>
+<button type="submit" title="Save filter" aria-label="Save filter">
+  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</button>
+<button type="button" class="fireflyer-filter-cancel" title="Cancel edit" aria-label="Cancel edit" hx-post="{{ edit_endpoint }}" hx-target="#{{ form_id }}" hx-swap="innerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals='{{ {"filter_dataset": dataset, "cid": cid}|tojson }}'>
+  <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+</button>
+{%- else %}
+<button type="submit" title="Add a global filter" aria-label="Add a global filter">
+  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+</button>
+{%- endif %}

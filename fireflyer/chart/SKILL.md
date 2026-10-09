@@ -34,6 +34,7 @@ fireflyer/chart/<name>/
 ├── chart.py       # @dataclass <Class>: reads CSV, aggregates, renders _TEMPLATE
 ├── chart.html     # Jinja2 (autoescaped). First line: <style>{{ css|safe }}</style>
 ├── chart.css      # namespaced under .fireflyer-<name>; includes the card chrome
+├── icon.svg       # REQUIRED: 16×16 viewBox, fill="none" stroke="currentColor"
 └── spec.md        # source of truth for this chart's behavior — update it every change
 ```
 
@@ -54,6 +55,9 @@ _TEMPLATE = jinja2.Template((_DIR / "chart.html").read_text(), autoescape=True)
 class <Class>:
     dataset: str
     title: str
+    # Not a field (unannotated): names the chart in the filter panel and the
+    # editor's type picker. tests/test_chart_icons.py fails without it.
+    ICON = (_DIR / "icon.svg").read_text().strip()
     # ...chart-specific params, with defaults last...
     filters: list = field(default_factory=list)
 
@@ -368,10 +372,35 @@ python -m pytest -q --ignore=tests/test_chat.py   # full suite (test_chat needs 
 UPDATE_SNAPSHOTS=1 pytest                          # regenerate after an intentional render change — review the diff
 ```
 
+## The icon (`icon.svg`)
+
+Every chart type ships one; `tests/test_chart_icons.py` fails without it. It
+names the chart wherever its type is shown — the filter panel's source column
+(12px) and the editor's chart-type picker (16px) — so it is drawn to be
+recognised at a glance, not to be literal: a pie is a wedge, a bar is bars.
+
+```svg
+<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none"
+     stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+     stroke-linejoin="round"><path d="M3 13V7M8 13V3M13 13v-4"/></svg>
+```
+
+- **16×16 `viewBox`, outline only** (`fill="none"`, `stroke-width="1.4"`), so the
+  set reads as one family. Copy an existing chart's file and change the shapes.
+- **`stroke="currentColor"`, never a colour.** The icon takes the colour of the
+  text around it — red for the emitting chart, accent in the picker — and so
+  follows light/dark for free.
+- **Size in the file is a default;** each place that shows it sets its own
+  `width`/`height` in CSS.
+- The class loads it as `ICON = (_DIR / "icon.svg").read_text().strip()`
+  (unannotated, so not a dataclass field). It is inserted raw (`|safe`), which
+  is fine because it is a file in the repo, never user data.
+
 ## Definition of done
 
 - [ ] `fireflyer/chart/<name>/` has `__init__.py`, `chart.py`, `chart.html`,
-      `chart.css`, `spec.md`.
+      `chart.css`, `icon.svg`, `spec.md`; the class sets `ICON` from `icon.svg`
+      (`tests/test_chart_icons.py` passes).
 - [ ] Wired into `chart/__init__.py`, `dashboard.py` `CHART_TYPES`, `chat.py` DSL,
       `app.py` `DEFAULT_YAML` (with examples).
 - [ ] `PARAMS` declared (one per constructor field); sync-guard test passes.

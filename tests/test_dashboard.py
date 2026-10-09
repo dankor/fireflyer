@@ -1,4 +1,7 @@
+import html as html_mod
+import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -75,6 +78,13 @@ def test_dashboard_crossfilter_yaml_round_trips(orders_parquet):
     assert "status_pie" in html
 
 
+def _badge_counts(html):
+    """The numbers on the filter badges. The badge is a `<summary>` whose text
+    *is* the count — there is no icon and no separate `.count` span."""
+    return re.findall(
+        r'<summary aria-label="[^"]*">(\d+)</summary>', html
+    )
+
 def test_dashboard_filter_indicator_always_present(orders_parquet):
     """Every cell carries the filter indicator — even with zero filters."""
     dashboard = ff.Dashboard.from_yaml(_smart_yaml(orders_parquet))
@@ -82,7 +92,7 @@ def test_dashboard_filter_indicator_always_present(orders_parquet):
     # Three cells in _smart_yaml (orders_table × 2 + status_pie × 1).
     assert html.count('class="fireflyer-filter-indicator') == 3
     # All show count 0.
-    assert html.count('<span class="count">0</span>') == 3
+    assert _badge_counts(html).count("0") == 3
     # No cell is highlighted (no `.has-filters` modifier yet).
     assert 'indicator has-filters"' not in html
 
@@ -96,11 +106,13 @@ def test_dashboard_filter_indicator_highlights_filtered_cells(orders_parquet):
     assert html.count('class="fireflyer-filter-indicator') == 3
     assert html.count('class="fireflyer-filter-indicator has-filters"') == 2
     assert html.count('class="fireflyer-filter-indicator is-emitter"') == 1
-    assert html.count('<span class="count">1</span>') == 3
-    assert html.count('<span class="count">0</span>') == 0
+    assert _badge_counts(html).count("1") == 3
+    assert _badge_counts(html).count("0") == 0
     # Tooltip surfaces the filter detail.
-    assert '<span class="col">status</span>' in html
-    assert '<span class="vals">paid</span>' in html
+    from fireflyer.params import type_glyph
+
+    assert f'<td class="col" title="status">{type_glyph("text")}status</td>' in html
+    assert '<td class="vals" title="paid">paid</td>' in html
 
 
 def test_dashboard_emitter_chart_indicator_is_red(orders_parquet):
@@ -110,8 +122,10 @@ def test_dashboard_emitter_chart_indicator_is_red(orders_parquet):
     # The pie cell uses the is-emitter modifier; downstream tables use has-filters.
     assert 'class="fireflyer-filter-indicator is-emitter"' in html
     assert html.count('class="fireflyer-filter-indicator has-filters"') == 2
-    # Emitter tooltip uses the "Filtering others by" label.
-    assert ">Filtering others by<" in html
+    # The section labels are gone: each row names its source instead, and the
+    # emitting chart's own row is marked as the emitter.
+    assert '<tr class="src-emitter">' in html
+    assert '<tr class="src-incoming">' in html
 
 
 def test_render_skeleton_emits_cell_placeholders(orders_parquet):
@@ -158,7 +172,7 @@ def test_render_cell_emitter_state_passes_through(orders_parquet):
         "status_pie", cf_tokens=["status_pie|status=paid"]
     )
     assert 'class="fireflyer-filter-indicator is-emitter"' in html
-    assert ">Filtering others by<" in html
+    assert '<tr class="src-emitter">' in html
 
 
 def test_render_cell_unknown_id_errors(orders_parquet):
@@ -289,7 +303,7 @@ layout:
     # Indicator is present but count is 0 — the bogus column was dropped.
     assert 'class="fireflyer-filter-indicator' in html
     assert 'indicator has-filters"' not in html
-    assert '<span class="count">0</span>' in html
+    assert "0" in _badge_counts(html)
 
 
 def test_dashboard_widths_are_proportions(orders_parquet):
@@ -322,7 +336,10 @@ layout:
 """
         html = ff.Dashboard.from_yaml(yaml).to_html()
         import re
-        return re.search(r"grid-template-columns: ([^;]+);", html).group(1)
+        # The row's inline style — not a grid rule in the dashboard's stylesheet.
+        return re.search(
+            r'class="fireflyer-dashboard-row" style="grid-template-columns: ([^;]+);', html
+        ).group(1)
 
     assert cols(1, 4) == "1fr 4fr"
     assert cols(20, 80) == "20fr 80fr"  # same 20/80 split, just a different scale
@@ -513,10 +530,13 @@ layout:
   - ["@20", "t"]
 """
     html = ff.Dashboard.from_yaml(yaml).to_html()
-    row = re.search(r'<div class="fireflyer-filter-row">(.*?)</div>\s*</div>',
+    row = re.search(r'<tr class="src-\w+">(.*?)</tr>',
                     html, re.S).group(1)
-    text = " ".join(re.sub(r"<[^>]+>", " ", row).split())
-    assert text == "day between 2026-06-01\u20132026-06-03"
+    # Past the source cell — the row now leads with where the filter came from.
+    row = re.sub(r'<span class="ff-type-glyph"[^>]*>[^<]*</span>', "", row)     # type glyph
+    text = " ".join(re.sub(r"<[^>]+>", " ", row.split("</td>", 1)[1]).split())
+    # Half-open [06-01, 06-03) covers the 1st and 2nd — shown as the days it covers.
+    assert text == "day between 2026-06-01\u20132026-06-02"
     assert "not in" not in text
 
 
@@ -541,7 +561,7 @@ layout:
   - ["@20", "t"]
 """
     html = ff_mod.Dashboard.from_yaml(yaml).to_html()
-    assert '<span class="count">1</span>' in html      # not 0
+    assert "1" in _badge_counts(html)      # not 0
     assert "order_day" in html
 
 
@@ -563,7 +583,7 @@ layout:
 
     def counts(tokens):
         html = dash.to_html(cf_tokens=tokens)
-        return re.findall(r'<span class="count">(\d+)</span>', html)
+        return _badge_counts(html)
 
     assert counts([]) == ["0", "0", "0"]
     assert counts(["pie1|status=paid"]) == ["1", "1", "1"]          # one is red
@@ -586,12 +606,14 @@ layout:
     )
     # pie1's tooltip: emits status, receives day.
     tip = re.search(
-        r'<div class="fireflyer-filter-tooltip" role="tooltip">(.*?)</div>\s*</div>',
+        r'<div class="fireflyer-filter-panel">(.*?)</div>\s*</details>',
         html, re.S,
     ).group(1)
-    assert "Filtering others by" in tip
-    assert "Active filters" in tip
-    assert tip.count('class="fireflyer-filter-row"') == 2
+    # Both directions appear, told apart by their source rather than by a
+    # section heading: what this chart emits, and what reaches it from another.
+    assert '<tr class="src-emitter">' in tip
+    assert '<tr class="src-incoming">' in tip
+    assert tip.count('<tr class="src-') == 2
 
 
 def test_open_tooltip_is_lifted_above_other_badges(orders_parquet):
@@ -599,14 +621,267 @@ def test_open_tooltip_is_lifted_above_other_badges(orders_parquet):
     ordered against that badge's siblings — another cell's badge at the same
     z-index drew over it. The badge is raised while the tooltip is open."""
     html = ff.Dashboard.from_yaml(_smart_yaml(orders_parquet)).to_html()
-    rule = re.search(
-        r"\.fireflyer-filter-indicator:hover,\s*"
-        r"\.fireflyer-filter-indicator:focus-within \{([^}]*)\}",
-        html,
-    )
+    rule = re.search(r"\.fireflyer-filter-indicator\[open\] \{([^}]*)\}", html)
     assert rule and "z-index" in rule.group(1)
     lifted = int(re.search(r"z-index:\s*(\d+)", rule.group(1)).group(1))
     base = int(re.search(
         r"\.fireflyer-filter-indicator \{[^}]*z-index:\s*(\d+)", html, re.S
     ).group(1))
     assert lifted > base
+
+
+# --- the filter badge -----------------------------------------------------
+
+
+def test_the_badge_is_a_number_you_click(orders_parquet):
+    """It was a filter icon with a hover card. A card you have to keep the
+    pointer inside is hard to read and unusable on a touch screen, so it is a
+    `<details>` now — click to open, stays open. Native, so no JS ships in
+    `to_html()` output."""
+    html = ff.Dashboard.from_yaml(_smart_yaml(orders_parquet)).to_html()
+
+    assert "<details class=\"fireflyer-filter-indicator" in html
+    assert "<summary" in html
+    # The number is the badge: no icon, no separate label beside it.
+    assert 'class="count"' not in html
+    assert "M1 3h14l-5 6.5V14" not in html, "the filter icon should be gone"
+    assert _badge_counts(html), "the count still renders"
+
+    # Opening is a state, not a hover.
+    assert ".fireflyer-filter-indicator[open]" in html
+    assert ".fireflyer-filter-indicator:hover .fireflyer-filter" not in html
+
+
+def test_the_badge_names_the_dataset_and_when_it_changed():
+    """Which data a chart is built on, and how stale it might be, are the two
+    questions the badge is opened to answer."""
+    import tempfile
+
+    from fireflyer.datasets import DatasetStore
+    from fireflyer.storage import make_object_store
+
+    store = DatasetStore(make_object_store({"base": tempfile.mkdtemp()}))
+    store.create("orders", b"region,amount\nnorth,10\n", description="d")
+    yaml = (
+        "name: T\ncharts:\n  a: {type: table, dataset: orders, title: A}\n"
+        'layout:\n  - ["@30", "a"]\n'
+    )
+    html = ff.Dashboard.from_yaml(yaml, datasets=store).to_html()
+    found = re.search(
+        r'ds-name">([^<]*)</span>\s*<span class="ds-updated">([^<]*)<', html
+    )
+    assert found.group(1) == "orders"
+    assert found.group(2).startswith("updated 20")
+
+
+def test_inline_data_is_labelled_rather_than_dated():
+    """Inline CSV has no update time of its own — it changes when the dashboard
+    does — so a date would be invented."""
+    yaml = (
+        "name: T\ncharts:\n  a: {type: table, dataset: sales, title: A}\n"
+        'layout:\n  - ["@30", "a"]\n'
+        "datasets:\n  sales: |\n    region,amount\n    north,10\n"
+    )
+    html = ff.Dashboard.from_yaml(yaml).to_html()
+    found = re.search(
+        r'ds-name">([^<]*)</span>\s*<span class="ds-updated">([^<]*)<', html
+    )
+    assert found.group(1) == "sales"
+    assert found.group(2) == "inline data"
+
+
+def test_a_dataset_with_no_metadata_costs_the_date_not_the_render(orders_parquet):
+    """Standalone and in tests the resolver is a bare callable with nothing to
+    ask about update times."""
+    yaml = (
+        f"name: T\ncharts:\n  a: {{type: table, dataset: {orders_parquet}, title: A}}\n"
+        'layout:\n  - ["@30", "a"]\n'
+    )
+    html = ff.Dashboard.from_yaml(yaml).to_html()
+    assert 'class="ds-updated">—<' in html
+
+
+def test_the_panel_says_which_chart_set_each_filter():
+    """A narrowed chart is no use if you can't tell which chart to click to undo
+    it — the old two-section list never said. Each row now leads with its
+    source: the emitting chart, by icon and title."""
+    yaml = (
+        "name: T\ncharts:\n"
+        "  a: {type: pie, dataset: sales, title: By region, column: region}\n"
+        "  b: {type: table, dataset: sales, title: Rows,"
+        " filters: [{column: region, op: ni, values: [east]}]}\n"
+        'layout:\n  - ["@30", "a", "b"]\n'
+        "datasets:\n  sales: |\n    region,amount\n    north,10\n    south,5\n"
+    )
+    dashboard = ff.Dashboard.from_yaml(yaml)
+
+    def rows(cid):
+        html = dashboard.render_cell(cid, cf_tokens=["a|region=north"])
+        out = []
+        html = re.sub(r'<span class="ff-type-glyph"[^>]*>[^<]*</span>', "", html)
+        for m in re.finditer(r'<tr class="src-(\w+)">(.*?)</tr>', html, re.S):
+            cells = [
+                " ".join(re.sub(r"<[^>]+>", " ", c).split())
+                for c in re.findall(r"<td[^>]*>(.*?)</td>", m.group(2), re.S)
+            ][:4]                  # source, column, op, values — not the remove cell
+            out.append((m.group(1), cells))
+        return out
+
+    # The emitting chart lists what it is doing to everyone else...
+    assert rows("a") == [("emitter", ["By region", "region", "in", "north"])]
+    # ...and the chart on the receiving end names the chart that narrowed it,
+    # alongside the filter its own YAML declares.
+    assert rows("b") == [
+        ("declared", ["declared", "region", "not in", "east"]),
+        ("incoming", ["By region", "region", "in", "north"]),
+    ]
+
+
+def test_the_source_carries_its_chart_type_icon():
+    """Recognisable before it is read; and a declared filter comes from the
+    definition, not a chart, so it gets no glyph."""
+    yaml = (
+        "name: T\ncharts:\n"
+        "  a: {type: bar, dataset: sales, title: By region, x: region}\n"
+        "  b: {type: table, dataset: sales, title: Rows,"
+        " filters: [{column: region, op: ni, values: [east]}]}\n"
+        'layout:\n  - ["@30", "a", "b"]\n'
+        "datasets:\n  sales: |\n    region,amount\n    north,10\n"
+    )
+    html = ff.Dashboard.from_yaml(yaml).render_cell("b", cf_tokens=["a|region=north"])
+
+    incoming = re.search(r'<tr class="src-incoming">(.*?)</tr>', html, re.S).group(1)
+    assert "<svg" in incoming, "a chart source shows its type"
+    assert 'd="M3 13V7M8 13V3M13 13v-4"' in incoming, "the bar glyph"
+
+    declared = re.search(r'<tr class="src-declared">(.*?)</tr>', html, re.S).group(1)
+    source = declared.split("</td>", 1)[0]             # past it: the column's type icon
+    assert "<svg" not in source, "a declared filter has no chart to show"
+
+
+def test_the_filter_panel_columns_add_up():
+    """Auto table layout ignores `max-width` on a cell, so a long chart title
+    took the width it wanted and the other three columns wrapped — `Order
+    status` over two lines, `refunded` split mid-word. The table is fixed-layout
+    with declared widths now, which only works if they actually fit: the values
+    column absorbs the remainder, so the others must leave it enough for a date
+    range. (The fifth is a global filter's remove button.)
+    """
+    css = (Path(__file__).resolve().parent.parent / "fireflyer" / "dashboard.css").read_text()
+
+    assert "table-layout: fixed" in css, "auto layout ignores per-cell widths"
+    panel_width = int(re.search(r"width: min\((\d+)px", css).group(1))
+    widths = dict(
+        (int(n), int(w))
+        for n, w in re.findall(r"th:nth-child\((\d)\) \{ width: (\d+)px", css)
+    )
+    assert sorted(widths) == [1, 2, 3, 5], "the values column takes what is left"
+    declared = [widths[n] for n in sorted(widths)]
+
+    panel_padding, cell_gaps = 20, 32            # 8px 10px panel, 8px per gap
+    remainder = panel_width - panel_padding - sum(declared) - cell_gaps
+    # Roughly 6px per character at this font size.
+    assert remainder >= len("2026-06-01–2026-06-08") * 6, remainder
+    assert declared[1] >= len("Order status") * 6, "a column name should not wrap"
+
+
+_GLOBAL_YAML = (
+    "name: T\ncharts:\n"
+    "  a: {type: pie, dataset: sales, title: By region, column: region}\n"
+    "  b: {type: table, dataset: sales, title: Rows}\n"
+    "  c: {type: table, dataset: other, title: Other}\n"
+    'layout:\n  - ["@30", "a", "b", "c"]\n'
+    "datasets:\n"
+    "  sales: |\n    region,amount\n    north,10\n    south,5\n"
+    "  other: |\n    city\n    Kyiv\n"
+)
+
+
+def test_a_global_filter_shows_as_global_with_a_remove_button():
+    """It has no chart to click to undo it, so its row says Global and carries
+    its own remove — a toggle of exactly its token."""
+    from fireflyer import filters as filters_mod
+
+    token = filters_mod.global_token("region", "ni", ["south"])
+    html = ff.Dashboard.from_yaml(_GLOBAL_YAML).render_cell("b", cf_tokens=[token])
+    row = re.search(r'<tr class="src-global">(.*?)</tr>', html, re.S).group(1)
+    assert "<span>Global</span>" in row
+    assert '<td class="op">not in</td>' in row
+    remove = re.search(r'class="fireflyer-filter-remove"[^>]*hx-vals=\'([^\']*)\'', row).group(1)
+    assert json.loads(html_mod.unescape(remove)) == {"remove": [token], "open_filter": "b"}
+    # It narrows the chart: the badge is blue and counts it.
+    assert 'class="fireflyer-filter-indicator has-filters"' in html
+
+
+def test_a_global_filter_skips_a_chart_without_its_column():
+    """The crossfilter contract: a chart whose data lacks the column ignores it,
+    and its panel doesn't claim otherwise."""
+    from fireflyer import filters as filters_mod
+
+    token = filters_mod.global_token("region", "in", ["north"])
+    html = ff.Dashboard.from_yaml(_GLOBAL_YAML).render_cell("c", cf_tokens=[token])
+    assert 'class="src-global"' not in html
+    assert 'class="fireflyer-filter-indicator"' in html
+
+
+def test_every_panel_offers_the_builders_filter_fields_for_its_columns():
+    """The + form is the chart builder's own fields, offering this chart's
+    columns — so a filter typed here reads like one written in the builder."""
+    from fireflyer.params import filter_fields
+
+    html = ff.Dashboard.from_yaml(_GLOBAL_YAML).render_cell("b")
+    form = re.search(r'<form class="fireflyer-filter-add"(.*?)</form>', html, re.S).group(0)
+    types = {"region": "text", "amount": "number"}
+    assert filter_fields(list(types), types=types, live="sales") in form
+    assert 'hx-post="/dashboard"' in form
+    # The full page (`to_html`) has the same panel, so both paths agree.
+    page = ff.Dashboard.from_yaml(_GLOBAL_YAML).to_html()
+    assert filter_fields(["city"], types={"city": "text"}, live="other") in page
+
+
+def test_every_filter_but_a_declared_one_has_a_remove_button():
+    """Declared filters are the chart's definition; the rest are viewer state
+    and can be cleared from the panel, without finding the slice that set them."""
+    from fireflyer import filters as filters_mod
+
+    yaml = _GLOBAL_YAML.replace(
+        "  b: {type: table, dataset: sales, title: Rows}\n",
+        "  b: {type: table, dataset: sales, title: Rows,"
+        " filters: [{column: amount, op: ni, values: ['0']}]}\n",
+    )
+    tokens = ["a|region=north", "a|region=south"]
+    html = ff.Dashboard.from_yaml(yaml).render_cell("b", cf_tokens=tokens)
+    rows = dict(re.findall(r'<tr class="src-(\w+)">(.*?)</tr>', html, re.S))
+    assert "fireflyer-filter-remove" not in rows["declared"]
+    remove = re.search(r"hx-vals='([^']*)'", rows["incoming"]).group(1)
+    assert json.loads(html_mod.unescape(remove)) == {"remove": tokens, "open_filter": "b"}
+
+
+def test_the_panel_just_used_comes_back_open():
+    """A filter change re-renders the dashboard; the panel the viewer was using
+    must not snap shut under their pointer. Only that one — and only for this
+    response, not as state a later click would carry."""
+    dash = ff.Dashboard.from_yaml(_GLOBAL_YAML)
+    skeleton = dash.render_skeleton(open_filter="b")
+    vals = re.findall(r"hx-vals='(\{\"cid\"[^']*)'", skeleton)
+    assert [json.loads(v).get("open_filter") for v in vals] == [None, "1", None]
+    assert 'name="open_filter"' not in skeleton          # not a hidden input
+
+    assert re.search(r'<details [^>]*name="fireflyer-filter" open>', dash.render_cell("b", open_filter=True))
+    assert not re.search(r'<details [^>]*\bopen>', dash.render_cell("b"))
+
+
+def test_only_a_global_filter_can_be_edited():
+    """A typed filter can be retyped; a click filter is undone by clicking."""
+    from fireflyer import filters as filters_mod
+
+    token = filters_mod.global_token("region", "in", ["north"])
+    html = ff.Dashboard.from_yaml(_GLOBAL_YAML).render_cell(
+        "b", cf_tokens=[token, "a|region=south"]
+    )
+    rows = dict(re.findall(r'<tr class="src-(\w+)">(.*?)</tr>', html, re.S))
+    edit = re.search(r'class="fireflyer-filter-edit"[^>]*>', rows["global"]).group(0)
+    assert 'hx-target="#ff-add-b"' in edit and 'hx-post="/filter/edit"' in edit
+    assert json.loads(html_mod.unescape(re.search(r"hx-vals='([^']*)'", edit).group(1)))["token"] == token
+    assert "fireflyer-filter-edit" not in rows["incoming"]
+    assert '<form class="fireflyer-filter-add" id="ff-add-b"' in html

@@ -25,7 +25,8 @@ from urllib.parse import quote
 
 from fireflyer.dashboard import Dashboard
 from fireflyer.datasets import Dataset
-from fireflyer.web import auth as auth_mod
+from fireflyer.params import COLUMN_TYPES, column_type, type_icon_svg
+from fireflyer.web import assets
 
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS dashboards ("
@@ -164,109 +165,10 @@ def make_store(dsn: str | None):
 
 
 # --- gallery page -----------------------------------------------------------
-# Editor chrome, not chart output, so the same escaped-f-string style as
-# app.py's INDEX is fine here (the no-f-string rule is for chart HTML). User
-# input — dashboard names — is escape()'d; ids are UUIDs and timestamps are
-# machine-generated, so they're safe.
-
-_GALLERY_CSS = """
-  * { box-sizing: border-box; }
-  :root { color-scheme: light; --bg:#f5f6f8; --panel:#fff; --border:#e0e0e0;
-    --text:#20242b; --muted:#5e6975; --accent:#20a7c9; --accent-hover:#1a8aa6;
-    --danger:#e04355; }
-  @media (prefers-color-scheme: dark) { :root { color-scheme: dark;
-    --bg:#0f1620; --panel:#1b2635; --border:#2c384a; --text:#e6e8ec;
-    --muted:#a3adbd; --accent:#20a7c9; --accent-hover:#48c4e0; --danger:#e5646f; } }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
-    font-family:-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
-  .topbar { height:54px; display:flex; align-items:center; padding:0 16px;
-    background:var(--panel); border-bottom:1px solid var(--border); }
-  .gallery { max-width:960px; margin:0 auto; padding:28px 20px; }
-  /* Right-side topbar group: the detail action group + profile. */
-  .topbar-right { margin-left:auto; display:inline-flex; align-items:center; gap:14px; }
-  .detail-actions { display:inline-flex; gap:4px; }   /* icons close together */
-  .detail-actions .act { margin-left:0; }
-  /* Detail topbar lead: back button (+ switch/path dropdown in local mode) +
-     the name block, evenly spaced. */
-  .topbar-lead { display:inline-flex; align-items:center; gap:14px; }
-  /* Detail context in the topbar: name + small description under it. */
-  .topbar-title { display:flex; flex-direction:column; line-height:1.2; }
-  .topbar-title .tname { font-weight:600; font-size:15px; }
-  .topbar-title .tdesc { font-size:12px; color:var(--muted); }
-  /* Column type icon: a small monospaced glyph badge. */
-  .type-icon { display:inline-flex; align-items:center; justify-content:center;
-    width:18px; height:18px; border-radius:4px; font-size:11px; font-weight:700;
-    font-family:ui-monospace,Menlo,monospace; background:var(--bg);
-    border:1px solid var(--border); color:var(--muted); margin-right:8px; }
-  .preview-wrap { overflow:auto; border:1px solid var(--border); border-radius:8px; }
-  table.preview { border-collapse:collapse; width:100%; font-size:13px; }
-  .preview th, .preview td { padding:7px 12px; border-bottom:1px solid var(--border);
-    text-align:left; white-space:nowrap; }
-  .preview thead th { color:var(--muted); font-weight:600; background:var(--panel);
-    position:sticky; top:0; }
-  table.dash-table { width:100%; border-collapse:collapse; background:var(--panel);
-    border:1px solid var(--border); border-radius:8px; overflow:hidden; }
-  .dash-table th, .dash-table td { text-align:left; padding:11px 14px;
-    border-bottom:1px solid var(--border); font-size:14px; }
-  .dash-table thead th { font-size:12px; color:var(--muted); font-weight:600;
-    text-transform:uppercase; letter-spacing:.03em; }
-  .dash-table tbody tr:last-child td { border-bottom:0; }
-  .dash-table tbody tr:hover { background:var(--bg); }
-  .dash-table a.name { color:var(--text); font-weight:600; text-decoration:none; }
-  .dash-table a.name:hover { color:var(--accent); }
-  .dash-table td.muted { color:var(--muted); }
-  td.actions { text-align:right; white-space:nowrap; }
-  td.actions form { display:inline; margin:0; }
-  /* Actions are icon buttons — minimal text; meaning lives in the title tooltip. */
-  .act { display:inline-flex; align-items:center; justify-content:center; gap:4px;
-    background:transparent; border:1px solid var(--border); color:var(--text);
-    border-radius:4px; padding:6px 7px; font-size:12px; cursor:pointer;
-    text-decoration:none; margin-left:6px; }
-  .act svg { width:15px; height:15px; display:block; }
-  .act:hover { border-color:var(--accent); color:var(--accent); }
-  .act-danger:hover { border-color:var(--danger); color:var(--danger); }
-  .act .badge { font-weight:600; }
-  .link-list { list-style:none; padding:0; margin:0; }
-  .link-list li { border-bottom:1px solid var(--border); }
-  .link-list li:last-child { border-bottom:0; }
-  .link-list a { display:block; padding:9px 4px; color:var(--text);
-    text-decoration:none; font-size:14px; }
-  .link-list a:hover { color:var(--accent); }
-  .empty { color:var(--muted); text-align:center; padding:44px 0;
-    background:var(--panel); border:1px solid var(--border); border-radius:8px; }
-  dialog { border:1px solid var(--border); border-radius:10px; padding:0;
-    background:var(--panel); color:var(--text); width:340px; }
-  dialog::backdrop { background:rgba(0,0,0,.4); }
-  dialog form { padding:22px; margin:0; }
-  dialog h3 { margin:0 0 14px; font-size:16px; }
-  dialog input, dialog textarea, dialog select { width:100%; padding:8px 10px;
-    border:1px solid var(--border); border-radius:4px; background:var(--bg);
-    color:var(--text); font-size:14px; font-family:inherit; }
-  dialog.wide { width:420px; }
-  dialog label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
-  dialog textarea { resize:vertical; min-height:52px; }
-  .dialog-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
-  .dialog-actions .cancel { background:transparent; border:1px solid var(--border);
-    color:var(--text); padding:7px 13px; }
-  .dialog-actions .ok { background:var(--accent); border:0; color:#fff;
-    padding:7px 15px; font-weight:500; }
-"""
-
-# Minimal vanilla JS — the portal gallery is editor chrome (dev tool), exempt
-# from the no-JS rule. Native <dialog>; clone reuses one dialog, its form action
-# and default name set from the clicked row's data-* attributes.
-_GALLERY_JS = """
-<script>
-function openAdd(){ document.getElementById('add-dialog').showModal(); }
-function openClone(btn){
-  var d = document.getElementById('clone-dialog');
-  document.getElementById('clone-form').action = '/d/' + btn.dataset.id + '/clone';
-  var input = document.getElementById('clone-name');
-  input.value = btn.dataset.name + ' (copy)';
-  d.showModal(); input.select();
-}
-</script>"""
-
+# Editor chrome, not chart output, so f-strings are fine here (the no-f-string
+# rule is for chart HTML). User input — dashboard names — is escape()'d; ids are
+# UUIDs and timestamps are machine-generated, so they're safe. The styles and
+# the dialog openers live in static/ (gallery.css, nav.css, gallery.js).
 
 # Inline-SVG action icons (stroke=currentColor so they follow the button colour).
 _ICONS = {
@@ -327,41 +229,6 @@ def _dialog(dialog_id: str, form_id: str, action: str, heading: str, ok_label: s
 </dialog>"""
 
 
-# Topbar nav CSS shared by the gallery `_shell` and the editor INDEX (which have
-# separate <style> blocks — no shared base stylesheet), so the Dashboards |
-# Datasets switch and the path dropdown look identical in both.
-NAV_CSS = """
-  /* Back button — one shared style for the dataset detail and the editor. */
-  .ff-back { display:inline-flex; align-items:center; justify-content:center;
-    background:transparent; border:1px solid var(--border); color:var(--text);
-    border-radius:4px; padding:6px 7px; text-decoration:none; }
-  .ff-back svg { width:15px; height:15px; display:block; }
-  .ff-back:hover { border-color:var(--accent); color:var(--accent); }
-  /* Left-nav group: switch + path dropdown share one gap. */
-  /* Dashboards | Datasets segmented switch. */
-  .ff-switch { display:inline-flex; border:1px solid var(--border);
-    border-radius:7px; overflow:hidden; }
-  .ff-switch-seg { padding:6px 14px; font-size:13px; color:var(--muted);
-    text-decoration:none; }
-  .ff-switch-seg + .ff-switch-seg { border-left:1px solid var(--border); }
-  .ff-switch-seg:hover { background:var(--bg); color:var(--text); }
-  .ff-switch-seg.active { background:var(--accent); color:#fff; }
-  /* Path dropdown: a labelled <details> showing the active path. */
-  .ff-pathdd { position:relative; }
-  .ff-pathdd summary { list-style:none; cursor:pointer; display:inline-flex;
-    align-items:center; gap:5px; padding:5px 10px; border:1px solid var(--border);
-    border-radius:7px; font-size:13px; color:var(--text); }
-  .ff-pathdd summary::-webkit-details-marker { display:none; }
-  .ff-pathdd summary svg { width:11px; height:11px; opacity:.7; }
-  .ff-pathdd summary:hover, .ff-pathdd[open] summary { background:var(--bg); }
-  .ff-pathdd-menu { position:absolute; right:0; top:calc(100% + 6px);
-    min-width:160px; background:var(--panel); border:1px solid var(--border);
-    border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,.18); padding:6px; z-index:30; }
-  .ff-pathdd-menu a { display:block; padding:8px 10px; border-radius:4px;
-    color:var(--text); text-decoration:none; font-size:14px; }
-  .ff-pathdd-menu a:hover { background:var(--bg); }
-  .ff-pathdd-menu a.active { color:var(--accent); font-weight:600; }
-"""
 
 _CHEVRON = (
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"'
@@ -432,7 +299,8 @@ def _shell(
 <head>
 <meta charset="utf-8">
 <title>{escape(title)}</title>
-<style>{_GALLERY_CSS}{NAV_CSS}{auth_mod.PROFILE_CSS}</style>
+{assets.stylesheets("gallery.css", "nav.css", "profile.css")}
+{assets.script("gallery.js")}
 </head>
 <body>
 <header class="topbar">{nav}{topbar_left}{right_html}</header>
@@ -461,7 +329,7 @@ def render_gallery(
     clone_dialog = clone_dialog.replace('id="clone-form-name"', 'id="clone-name"')
     return _shell(
         title, user_menu, "dashboards", body_table,
-        extra=add_dialog + clone_dialog + _GALLERY_JS,
+        extra=add_dialog + clone_dialog,
         topbar_right=f'<button class="act" type="button" title="New dashboard"'
                      f' onclick="openAdd()">{_icon("plus")}</button>',
         paths=paths, active_path=active_path,
@@ -470,34 +338,16 @@ def render_gallery(
 
 # --- datasets gallery -------------------------------------------------------
 
-_DATASETS_JS = """
-<script>
-function openUpload(){ document.getElementById('upload-dialog').showModal(); }
-function openDsRename(btn){
-  var f = document.getElementById('ds-rename-form');
-  f.action = '/datasets/' + encodeURIComponent(btn.dataset.name) + '/rename';
-  var i = document.getElementById('ds-rename-name');
-  i.value = btn.dataset.name;
-  document.getElementById('ds-rename-desc').value = btn.dataset.desc || '';
-  document.getElementById('ds-rename-dialog').showModal(); i.select();
-}
-</script>"""
 
 
 def _type_icon(dtype: str) -> str:
-    """A small badge glyph for a Parquet column type."""
-    d = dtype.lower()
-    if any(x in d for x in ("int", "float", "decimal")):
-        glyph, name = "#", "number"
-    elif "bool" in d:
-        glyph, name = "✓", "boolean"
-    elif any(x in d for x in ("date", "time")):
-        glyph, name = "◷", "date / time"
-    elif "str" in d or "utf" in d:
-        glyph, name = "T", "text"
-    else:
-        glyph, name = "?", dtype
-    return f'<span class="type-icon" title="{escape(name)}">{glyph}</span>'
+    """A small badge glyph for a Parquet column type — the same classification
+    the filter fields show (`params.column_type`)."""
+    kind = column_type(dtype)
+    _, name = COLUMN_TYPES[kind]
+    if kind == "other":
+        name = dtype
+    return f'<span class="type-icon" title="{escape(name)}">{type_icon_svg(kind)}</span>'
 
 
 def _upload_dialog(action: str, heading: str, ok_label: str, dialog_id: str, name_field: bool) -> str:
@@ -585,7 +435,6 @@ def render_datasets(
     extra = (
         _upload_dialog("/datasets/new", "New dataset", "Upload", "upload-dialog", True)
         + _rename_dialog()
-        + _DATASETS_JS
     )
     return _shell(
         title, user_menu, "datasets", table,
@@ -677,7 +526,7 @@ def render_dataset_detail(
     )
     return _shell(
         title, user_menu, "datasets", body,
-        extra=replace + _rename_dialog() + usage_dialog + _DATASETS_JS,
+        extra=replace + _rename_dialog() + usage_dialog,
         topbar_left=topbar_left, topbar_right=topbar_right,
         paths=paths, active_path=active_path, detail=True,
     )

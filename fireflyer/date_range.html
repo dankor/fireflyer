@@ -1,0 +1,60 @@
+{#- One-field date-range picker; see date_range.py. Every button is an htmx GET
+    carrying the picker's whole state. `hx-include="this"` + `hx-params` keep it
+    to that state: inside the dashboard's filter panel the buttons would
+    otherwise inherit the panel form's include — every hidden input on the
+    dashboard, its YAML among them — into the URL.
+
+    `hx-params` names exactly what the element sends — its `hx-vals` keys, plus
+    its own field for a typed date — and nothing more: htmx sends a listed name
+    it doesn't have as the string "undefined", which the server then took for a
+    typed date and every calendar click was lost. -#}
+{%- macro hx(vals, own="") -%}
+hx-get="{{ endpoint }}" hx-vals='{{ vals|tojson }}' hx-include="this" hx-params="{{ (vals|list + ([own] if own else []))|join(',') }}" hx-target="closest .ff-range" hx-swap="outerHTML"
+{%- endmacro -%}
+{#- A typeable end of the range. Outside the form (`form` names none), like the
+    value search: Enter re-renders the picker instead of submitting the panel's
+    +, and the text itself is never submitted — `filter_from` / `filter_to` are.
+    Sent on change (blur) or Enter, with the picker's state. -#}
+{%- macro typed(name, label, value) -%}
+<label class="ff-cal-typed"><span>{{ label }}</span><input class="ff-input" name="{{ name }}" value="{{ value }}" form="ff-none" placeholder="YYYY-MM-DD" inputmode="numeric" autocomplete="off" aria-label="{{ label }} date" hx-trigger="change, keyup[key=='Enter']" {{ hx(state, name) }}></label>
+{%- endmacro -%}
+<details class="ff-range{% if complete %} is-complete{% elif picking %} is-picking{% endif %}"{% if is_open %} open{% endif %}>
+  <summary class="ff-input ff-range-field" aria-label="Date range">
+    {%- if label %}<span class="ff-range-label">{{ label }}</span>{% else %}<span class="ff-placeholder">Pick dates</span>{% endif -%}
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><path d="M2.5 7h11M5.5 2v3M10.5 2v3"/></svg>
+  </summary>
+  {#- Submitted, so not `type="hidden"`: those are what every crossfilter click
+      sweeps up from the dashboard. A `hidden` text field also still takes part
+      in validation, so `required` holds the panel's + back until both are set. -#}
+  <input name="filter_from" value="{{ first }}" hidden{% if required %} required{% endif %}>
+  <input name="filter_to" value="{{ last }}" hidden{% if required %} required{% endif %}>
+  <div class="ff-cal" role="group" aria-label="Choose a date range">
+    <div class="ff-cal-inputs">
+      {{ typed("typed_from", "Start", first) }}
+      <span class="ff-cal-dash" aria-hidden="true">–</span>
+      {{ typed("typed_to", "End", last) }}
+    </div>
+    <div class="ff-cal-head">
+      <button type="button" class="ff-cal-nav" aria-label="Previous month" {{ hx(prev) }}>
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span class="ff-cal-hint">{{ hint }}</span>
+      <button type="button" class="ff-cal-nav" aria-label="Next month" {{ hx(next) }}>
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div class="ff-cal-months">
+      {%- for m in months %}
+      <div class="ff-cal-month">
+        <div class="ff-cal-title">{{ m.title }}</div>
+        <div class="ff-cal-grid">
+          {%- for w in weekdays %}<span class="ff-cal-wd">{{ w }}</span>{% endfor %}
+          {%- for d in m.days %}
+          {%- if d %}<button type="button" class="ff-cal-day{% if d.classes %} {{ d.classes }}{% endif %}" aria-label="{{ d.label }}" {{ hx(d.vals) }}>{{ d.num }}</button>{% else %}<span class="ff-cal-pad"></span>{% endif %}
+          {%- endfor %}
+        </div>
+      </div>
+      {%- endfor %}
+    </div>
+  </div>
+</details>

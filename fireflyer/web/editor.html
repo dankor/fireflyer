@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fireflyer</title>
+<!-- Pinned htmx. Loaded once here so charts embedded via innerHTML can use
+     hx-* attributes without each chart shipping its own script. -->
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+__FF_STYLES__
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-left">
+    __FF_NAV__
+    __FF_MODES__
+    __FF_DASH_NAME__
+  </div>
+  <div class="topbar-right">
+    __FF_PATHDD__
+    __FF_SAVE__
+    __FF_THEME__
+    __FF_USER_MENU__
+  </div>
+  <button type="button" class="ff-move-discard" id="ff-move-cancel" hidden title="Cancel move (Esc)" aria-label="Cancel move (Esc)">✕ (Esc)</button>
+</header>
+<div class="layout mode-view" id="layout">
+  <section class="pane output" id="output-pane">
+    <div class="pane-body"><div id="output"></div></div>
+    <!-- Shown (over a greyed-out, stale preview) only after a manual YAML edit. -->
+    <button type="button" class="ff-refresh" id="refresh" title="Refresh preview (⌘/Ctrl+Enter)">↻ Refresh</button>
+  </section>
+  <!-- The panels. One per mode, all the same shell, all over the canvas. -->
+  <!-- The dashboard's source. Every control reads and writes it — the chart
+       modals, the calcs manager, chat, save — and `code` mode is where you
+       read and edit it by hand. -->
+  <div class="ff-split" id="ff-split" title="Drag to resize"></div>
+  <!-- No header: the lit segment already says this is the YAML, and the pane is
+       unmistakably a text editor. The other panels keep theirs — their contents
+       are not self-describing. -->
+  <aside class="ff-docs ff-panel" id="ff-yaml" hidden>
+    <div class="pane-body">
+      <textarea id="code" spellcheck="false" autocomplete="off">__FF_YAML_CONTENT__</textarea>
+    </div>
+  </aside>
+  <!-- AI assistant: knows the YAML + the dataset schemas. -->
+  <aside class="ff-docs ff-panel ff-chat" id="ff-chat" hidden>__FF_CHAT__
+  </aside>
+  <!-- Chart reference: each chart's spec.md. -->
+  <aside class="ff-docs ff-panel" id="ff-docs" hidden>
+    <div class="ff-docs-body">__FF_DOCS__</div>
+  </aside>
+  <!-- Calcs manager: add/edit/delete calcs. -->
+  <aside class="ff-docs ff-panel" id="ff-calcs" hidden>
+    <div class="ff-docs-body" id="ff-calcs-body"></div>
+  </aside>
+</div>
+<div class="ff-modal-overlay" id="ff-modal-overlay">
+  <div class="ff-modal" id="ff-modal"></div>
+</div>
+<div class="ff-addmenu" id="ff-addmenu" hidden>
+  <button type="button" data-add-kind="chart">Chart…</button>
+  <button type="button" data-add-kind="header">Header</button>
+  <button type="button" data-add-kind="separator">Separator</button>
+  <button type="button" data-add-kind="tab">Tab</button>
+</div>
+<!-- Transient error toast (replaces the old topbar status text). -->
+<div class="ff-toast" id="ff-toast" hidden></div>
+__FF_SCRIPT__
+</body>
+</html>

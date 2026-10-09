@@ -1,0 +1,16 @@
+.ff-profile { position: relative; }
+.ff-profile > summary { list-style: none; cursor: pointer; display: inline-flex;
+  align-items: center; gap: 5px; font-size: 13px; color: var(--text);
+  background: var(--panel); border: 1px solid var(--border); padding: 5px 10px;
+  border-radius: 4px; }
+.ff-profile > summary::-webkit-details-marker { display: none; }
+.ff-profile > summary:hover, .ff-profile[open] > summary { background: var(--bg); }
+.ff-profile-menu { position: absolute; right: 0; top: calc(100% + 6px);
+  min-width: 168px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; z-index: 30; }
+.ff-profile-name { font-size: 12px; color: var(--muted); padding: 6px 8px 8px; }
+.ff-profile-theme { display: flex; justify-content: center; padding: 8px 8px 4px; }
+.ff-profile-item { display: block; width: 100%; text-align: left; background: transparent;
+  border: 0; color: var(--text); font-size: 13px; padding: 7px 8px; border-radius: 4px;
+  cursor: pointer; }
+.ff-profile-item:hover { background: var(--bg); }

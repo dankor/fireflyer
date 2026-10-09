@@ -28,6 +28,8 @@ from typing import Protocol, runtime_checkable
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 
+from fireflyer.web import assets
+
 _COOKIE = "ff_session"
 
 
@@ -104,36 +106,14 @@ def default_authenticator() -> PasswordAuthenticator:
 
 
 # --- rendered chrome --------------------------------------------------------
-# Editor chrome, not chart output, so the escaped-string style matches app.py.
-
-
-# Profile dropdown styles, injected into both the editor page and the gallery
-# (no shared stylesheet by design, so callers include this next to their CSS).
-PROFILE_CSS = """
-  .ff-profile { position: relative; }
-  .ff-profile > summary { list-style: none; cursor: pointer; display: inline-flex;
-    align-items: center; gap: 5px; font-size: 13px; color: var(--text);
-    background: var(--panel); border: 1px solid var(--border); padding: 5px 10px;
-    border-radius: 4px; }
-  .ff-profile > summary::-webkit-details-marker { display: none; }
-  .ff-profile > summary:hover, .ff-profile[open] > summary { background: var(--bg); }
-  .ff-profile-menu { position: absolute; right: 0; top: calc(100% + 6px);
-    min-width: 168px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; z-index: 30; }
-  .ff-profile-name { font-size: 12px; color: var(--muted); padding: 6px 8px 8px; }
-  .ff-profile-theme { display: flex; justify-content: center; padding: 8px 8px 4px; }
-  .ff-profile-item { display: block; width: 100%; text-align: left; background: transparent;
-    border: 0; color: var(--text); font-size: 13px; padding: 7px 8px; border-radius: 4px;
-    cursor: pointer; }
-  .ff-profile-item:hover { background: var(--bg); }
-"""
+# Editor chrome, not chart output, so f-strings are fine. Styles in static/.
 
 
 def user_menu(identity: str, extra: str = "") -> str:
     """The profile button — a native `<details>` dropdown showing the username,
     any `extra` menu content (e.g. the theme switch), and a logout action.
-    Positioning is left to the caller. Styled by `PROFILE_CSS`, which the caller
-    must include."""
+    Positioning is left to the caller. Styled by static/profile.css, which the
+    caller must link."""
     ident = escape(identity)
     return (
         '<details class="ff-profile">'
@@ -147,31 +127,6 @@ def user_menu(identity: str, extra: str = "") -> str:
     )
 
 
-_LOGIN_CSS = """
-  * { box-sizing: border-box; }
-  :root { color-scheme: light; --bg:#f5f6f8; --panel:#fff; --border:#e0e0e0;
-    --text:#20242b; --muted:#5e6975; --accent:#20a7c9; --accent-hover:#1a8aa6;
-    --error:#e04355; }
-  @media (prefers-color-scheme: dark) { :root { color-scheme: dark;
-    --bg:#0f1620; --panel:#1b2635; --border:#2c384a; --text:#e6e8ec;
-    --muted:#a3adbd; --accent:#20a7c9; --accent-hover:#48c4e0; } }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
-    font-family:-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
-  .wrap { min-height:100%; display:flex; align-items:center; justify-content:center; }
-  form.login { background:var(--panel); border:1px solid var(--border);
-    border-radius:10px; padding:28px 26px; width:320px; }
-  form.login h1 { font-size:18px; margin:0 0 18px; }
-  form.login label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
-  form.login input { width:100%; padding:8px 10px; border:1px solid var(--border);
-    border-radius:4px; background:var(--bg); color:var(--text); font-size:14px; }
-  form.login button { width:100%; margin-top:18px; padding:9px; border:0;
-    border-radius:4px; background:var(--accent); color:#fff; font-size:14px;
-    font-weight:500; cursor:pointer; }
-  form.login button:hover { background:var(--accent-hover); }
-  .err { color:var(--error); font-size:13px; margin-top:12px; }
-"""
-
-
 def login_page(error: str = "", title: str = "Fireflyer Portal") -> HTMLResponse:
     err_html = f'<div class="err">{escape(error)}</div>' if error else ""
     html = f"""<!DOCTYPE html>
@@ -179,7 +134,7 @@ def login_page(error: str = "", title: str = "Fireflyer Portal") -> HTMLResponse
 <head>
 <meta charset="utf-8">
 <title>Sign in · {escape(title)}</title>
-<style>{_LOGIN_CSS}</style>
+{assets.stylesheets("login.css")}
 </head>
 <body>
 <div class="wrap">

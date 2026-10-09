@@ -11,6 +11,7 @@ import yaml
 from fireflyer import filters as filters_mod
 from fireflyer import calcs as calcs_mod
 from fireflyer import inline_data
+from fireflyer.params import column_type, filter_fields, type_glyph
 from fireflyer.scan import scan
 from fireflyer.chart.bar.chart import Bar
 from fireflyer.chart.map.chart import Map
@@ -101,6 +102,37 @@ _CELL_TEMPLATE = jinja2.Template(
     (_DIR / "cell.html").read_text(),
     autoescape=True,
 )
+# The filter badge + panel, shared by both serving paths above.
+_FILTER_PANEL_TEMPLATE = jinja2.Template(
+    (_DIR / "filter_panel.html").read_text(),
+    autoescape=True,
+)
+# The panel's bottom row (add / edit a global filter), also re-rendered alone.
+_FILTER_ADD_TEMPLATE = jinja2.Template(
+    (_DIR / "filter_add.html").read_text(),
+    autoescape=True,
+)
+# Loads a global filter into a panel's bottom row for editing (or, with no
+# filter, puts back a blank row).
+FILTER_EDIT_ENDPOINT = "/filter/edit"
+
+
+def filter_form_id(cid: str) -> str:
+    """The id of a chart's panel form — what the edit / cancel buttons target."""
+    return f"ff-add-{cid}"
+
+
+def filter_add_body(cid: str, dataset: str, fields: str, replace: str = "") -> str:
+    """The panel's bottom row: `fields` (from `params.filter_fields`), then +;
+    or, with `replace` (the global filter's token being edited), ✓ and ✕."""
+    return _FILTER_ADD_TEMPLATE.render(
+        fields=fields,
+        replace=replace,
+        cid=cid,
+        dataset=dataset,
+        form_id=filter_form_id(cid),
+        edit_endpoint=FILTER_EDIT_ENDPOINT,
+    )
 
 _ROW_HEIGHT_RE = re.compile(r"^@(\d+(?:\.\d+)?)$")
 # A widget token is `<chart_id>` or `<chart_id>:<width>`. The width is optional
@@ -201,6 +233,12 @@ class Dashboard:
     # the `datasets` argument (a DatasetStore or a callable); None means a
     # chart's `dataset` is a Parquet path/URI directly. Not a dataclass field.
     _resolve = None
+    # `store.get(name) -> Dataset | None` when a real DatasetStore was passed,
+    # for the "last updated" the cell's filter panel shows. A bare resolver
+    # callable (standalone, tests) has no metadata, so this stays None.
+    _dataset_meta = None
+    # Names the dashboard defines inline; those have no separate update time.
+    _inline_names = frozenset()
 
     @classmethod
     def from_yaml(cls, text: str, datasets=None) -> "Dashboard":
@@ -253,6 +291,9 @@ class Dashboard:
             dash = cls(chart_configs=chart_configs, calc_sets=calc_sets,
                        items=items, yaml_source=text, name=name)
         dash._resolve = resolve
+        dash._inline_names = frozenset(inline)
+        if datasets is not None and hasattr(datasets, "get"):
+            dash._dataset_meta = datasets.get
         return dash
 
     @staticmethod
@@ -318,6 +359,7 @@ class Dashboard:
         active_tab: int = 0,
         theme: str | None = None,
         grain_tokens: list[str] | None = None,
+        open_filter: str = "",
     ) -> str:
         """Layout-only render: cells are placeholders that hx-trigger on load.
 
@@ -334,6 +376,12 @@ class Dashboard:
         (htmx lazy-loads a tab's charts on switch), but the header/item counters
         advance across **all** tabs so the emitted `before`/`index` values stay
         document-global — matching how `config_edit` scans the YAML.
+
+        `open_filter` names the chart whose filter panel was just used (its +
+        or a row's ✕). The whole dashboard re-renders on a filter change, which
+        would close the panel under the viewer's pointer; that one cell is asked
+        to come back with its panel open. Only in this response — it isn't kept
+        as state, so the next click elsewhere doesn't reopen it.
         """
         cf_tokens = list(cf_tokens or [])
         grain_tokens = list(grain_tokens or [])
@@ -381,6 +429,7 @@ class Dashboard:
             cf_tokens=cf_tokens,
             grain_tokens=grain_tokens,
             editing=editing,
+            open_filter=open_filter,
             ff_theme=_normalize_theme(theme),
         )
 
@@ -395,6 +444,7 @@ class Dashboard:
         legend_page: int = 0,
         table_page: int = 1,
         table_query: str = "",
+        open_filter: bool = False,
     ) -> str:
         """Render a single dashboard cell (indicator + chart). Used by
         /dashboard/cell — the response replaces the placeholder in place.
@@ -409,12 +459,11 @@ class Dashboard:
             cid, cf_tokens, list(grain_tokens or []),
             col=col, row=row, legend_page=legend_page,
             table_page=table_page, table_query=table_query,
+            open_filter=open_filter,
         )
         return _CELL_TEMPLATE.render(
             chart_html=result["html"],
-            applied=result["filters"],
-            emitted=result["emitted"],
-            col_labels=result["col_labels"],
+            panel=result["panel"],
             col=col,
             row=row,
             editing=editing,
@@ -481,6 +530,101 @@ class Dashboard:
             "col_count": len(item.columns_css.split()),
         }
 
+    def _filter_rows(self, cid, cf_tokens, declared, types, labels):
+        """One row per filter in play for this chart: **who set it**, then what
+        it says. A viewer looking at a narrowed chart needs to know which chart
+        to go and click to undo it, which the old two-section list never said.
+
+        Four sources, distinguished because they behave differently: one
+        declared in the YAML is part of the definition and cannot be removed
+        here; a global quick filter was typed into a panel; a filter *this*
+        chart emits narrows everyone else (and never itself); one from another
+        chart narrows this one. Every row but a declared one carries `remove`,
+        the tokens its ✕ drops. `types` is the chart's column types, or None
+        when the schema couldn't be read — then nothing is hidden.
+        """
+        def applies(f):
+            return types is None or f.column in types
+
+        def label(f):
+            return {
+                "column": labels.get(f.column, f.column),
+                "type": type_glyph((types or {}).get(f.column)),
+                "op": {"in": "in", "ni": "not in", "between": "between"}[f.op],
+                # Not "values": Jinja looks up attributes before items, so
+                # `r.values` would find `dict.values`, the method.
+                "vals": f.values_text,
+            }
+
+        rows = []
+        # Declared first: it is the chart's own definition, always in force.
+        for f in declared:
+            if applies(f):
+                rows.append({"source": _DECLARED_SOURCE, **label(f)})
+        for token, f in filters_mod.global_filters(cf_tokens):
+            if applies(f):
+                rows.append({
+                    "source": _GLOBAL_SOURCE, "remove": [token], "edit": token, **label(f),
+                })
+        for emitter, f in filters_mod.by_emitter(cf_tokens):
+            if emitter == filters_mod.GLOBAL:
+                continue
+            cfg = self.chart_configs.get(emitter)
+            source = {
+                "name": (cfg.kwargs.get("title") if cfg else "") or emitter,
+                "glyph": cfg.cls.ICON if cfg else "",
+                "role": "emitter" if emitter == cid else "incoming",
+            }
+            # A chart is exempt from its own crossfilter, so what it emits is
+            # listed whether or not this chart's data has that column.
+            if emitter == cid or applies(f):
+                remove = filters_mod.tokens_behind(cf_tokens, emitter, f)
+                rows.append({"source": source, "remove": remove, **label(f)})
+        return rows
+
+    def _filter_panel(
+        self, cid, applied, emitted, dataset, rows, types, is_open=False
+    ) -> str:
+        """The cell's filter badge and panel, ending in the + form that adds a
+        global quick filter on one of this chart's columns. `is_open` renders it
+        already open (see `render_skeleton`'s `open_filter`)."""
+        return _FILTER_PANEL_TEMPLATE.render(
+            cid=cid,
+            is_open=is_open,
+            applied=applied,
+            emitted=emitted,
+            dataset=dataset,
+            rows=rows,
+            add_body=filter_add_body(
+                cid,
+                dataset["name"],
+                filter_fields(list(types or {}), types=types, live=dataset["name"]),
+            ),
+            form_id=filter_form_id(cid),
+            edit_endpoint=FILTER_EDIT_ENDPOINT,
+            hx={
+                "endpoint": CROSSFILTER_ENDPOINT,
+                "target": CROSSFILTER_TARGET,
+                "include": CROSSFILTER_INCLUDE,
+            },
+        )
+
+    def _dataset_info(self, name: str) -> dict:
+        """What a cell says about the data behind its chart: which dataset, and
+        when it last changed. Inline data has no separate update time — it
+        changes when the dashboard does — so it is labelled rather than dated.
+        Best-effort: an unreadable store costs the date, not the render."""
+        if name in self._inline_names:
+            return {"name": name, "updated": "", "inline": True}
+        updated = ""
+        if self._dataset_meta is not None:
+            try:
+                meta = self._dataset_meta(name)
+                updated = (getattr(meta, "updated_at", "") or "").replace("T", " ")[:16]
+            except Exception:
+                updated = ""
+        return {"name": name, "updated": updated, "inline": False}
+
     def _render_chart(
         self,
         cid: str,
@@ -491,6 +635,7 @@ class Dashboard:
         legend_page: int = 0,
         table_page: int = 1,
         table_query: str = "",
+        open_filter: bool = False,
     ) -> dict:
         # Re-instantiate every render so merged filters reflect the current
         # crossfilter state. Cheap — chart classes are dataclasses, real work
@@ -580,14 +725,14 @@ class Dashboard:
 
         # Indicator state for the dashboard cell, computed here so chart code
         # stays unaware of it:
-        #   - `filters`: filters from other charts narrowing this chart (blue)
+        #   - `applied`: filters narrowing this chart (blue) — the ones whose
+        #     column its data actually has
         #   - `emitted`: filters this chart is emitting itself (red)
         # When both apply (chart is both source and downstream of others),
         # the template prefers the emitter state — the user typically wants
         # to know which chart is causing the cascade.
-        applied = _applied_filters_for(
-            merged, kwargs["dataset"], self._resolve, chart._calcs
-        )
+        types = _column_types_of(kwargs["dataset"], self._resolve, chart._calcs)
+        applied = [f for f in merged if types is None or f.column in types]
         emitted = filters_mod.emitted_by(cf_tokens, cid)
         # Display names for the columns those filters name, so a relabelled
         # column reads the same in the indicator as it does in the chart. Keyed
@@ -596,11 +741,13 @@ class Dashboard:
         if chart._calcs is not None:
             for f in [*applied, *emitted]:
                 labels[f.column] = chart._calcs.column_label(f.column)
+        rows = self._filter_rows(cid, cf_tokens, declared, types, labels)
+        dataset = self._dataset_info(kwargs["dataset"])
         return {
             "html": chart_html,
-            "filters": applied,
-            "emitted": emitted,
-            "col_labels": labels,
+            "panel": self._filter_panel(
+                cid, applied, emitted, dataset, rows, types, open_filter
+            ),
         }
 
 
@@ -622,22 +769,38 @@ def _chart_error_html(cid: str, exc: Exception) -> str:
     )
 
 
-def _applied_filters_for(
-    filters: list[filters_mod.Filter], dataset: str, resolve, calcs=None
-) -> list[filters_mod.Filter]:
-    """Filters that actually narrow this chart's data — column must exist.
+# Sources of filters that no chart set, as the panel shows them.
+_DECLARED_SOURCE = {"name": "declared", "glyph": "", "role": "declared"}
+_GLOBAL_SOURCE = {
+    "name": "Global",
+    "glyph": (
+        '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" '
+        'fill="none" stroke="currentColor" stroke-width="1.4" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6'
+        's-.8 4.3-2.6 6M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/></svg>'
+    ),
+    "role": "global",
+}
 
-    `calcs` matters: a filter can name a **column calc**, which only exists once
-    the calc set is attached to the scan. Reading the bare Parquet schema would
-    report such a filter as not applied even though the chart really is filtered
-    by it — the indicator would then contradict the chart.
-    """
-    if not filters:
-        return []
-    # `scan(...).collect_schema()` reads only the Parquet footer/schema, not the
-    # data. The chart's own to_html scans it too; a second schema read is cheap.
-    columns = scan(dataset, resolve, calcs).collect_schema().names()
-    return [f for f in filters if f.column in columns]
+
+def _column_types_of(dataset: str, resolve, calcs) -> dict[str, str] | None:
+    """The chart's columns in schema order, each with its `column_type` — what
+    a filter can name, and so what decides whether one applies; the type picks
+    the glyph beside it and the ops a filter on it offers. `calcs` matters: a filter can name a
+    **column calc**, which only exists once the calc set is attached to the
+    scan; the bare Parquet schema would report the chart unfiltered while it
+    really is. Reads only the schema, not the data.
+
+    None when the schema can't be read: the panel then hides nothing, and the
+    + form offers no columns."""
+    if not dataset:
+        return None
+    try:
+        schema = scan(dataset, resolve, calcs).collect_schema()
+    except Exception:
+        return None
+    return {name: column_type(dtype) for name, dtype in schema.items()}
 
 
 def _group_layout(items: list) -> list:

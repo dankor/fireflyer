@@ -181,12 +181,15 @@ def test_value_containing_a_range_separator_still_parses():
 @pytest.mark.parametrize(
     "low, high, expected",
     [
-        # Midnight on a bucket edge says nothing the date doesn't.
+        # Midnight on a bucket edge says nothing the date doesn't, and whole
+        # days read inclusively: February is 1–28, not 1 up to 1 March.
         ("2026-02-01 00:00:00+00:00", "2026-03-01 00:00:00+00:00",
-         "2026-02-01–2026-03-01"),
-        ("2026-02-01 00:00:00", "2026-03-01 00:00:00", "2026-02-01–2026-03-01"),
-        ("2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z", "2026-02-01–2026-03-01"),
-        ("2026-02-01", "2026-03-01", "2026-02-01–2026-03-01"),
+         "2026-02-01–2026-02-28"),
+        ("2026-02-01 00:00:00", "2026-03-01 00:00:00", "2026-02-01–2026-02-28"),
+        ("2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z", "2026-02-01–2026-02-28"),
+        ("2026-02-01", "2026-03-01", "2026-02-01–2026-02-28"),
+        # One day is just that day.
+        ("2026-02-01", "2026-02-02", "2026-02-01"),
         # A real time is information — keep it.
         ("2026-02-01 10:30:00+00:00", "2026-03-01 10:30:00+00:00",
          "2026-02-01 10:30:00+00:00–2026-03-01 10:30:00+00:00"),
@@ -205,3 +208,82 @@ def test_values_text_leaves_other_ops_alone():
     # Trimming is display only — the stored values still round-trip exactly.
     f = filters_mod.Filter("d", "between", ("2026-02-01 00:00:00+00:00", "x"))
     assert f.values == ("2026-02-01 00:00:00+00:00", "x")
+
+
+# --- global quick filters ---------------------------------------------------
+
+
+def test_a_global_token_carries_any_op_and_any_value_text():
+    """Typed, not clicked: it needs `ni`, and values the click syntax reserves
+    (`|`, `=`, `~`) must come through intact."""
+    token = filters_mod.global_token("status", "ni", ["a|b", "c=d", "e~f"])
+    assert token.startswith("*|")
+    assert filters_mod.decode_tokens([token]) == [
+        filters_mod.Filter("status", "ni", ("a|b", "c=d", "e~f"))
+    ]
+
+
+def test_a_global_filter_applies_to_every_chart():
+    """No chart is its emitter, so no chart is exempt from it."""
+    token = filters_mod.global_token("status", "in", ["paid"])
+    for cid in ("pie", "bar", "anything"):
+        assert filters_mod.decode_tokens([token], exclude_emitter=cid) == [
+            filters_mod.Filter("status", "in", ("paid",))
+        ]
+    assert filters_mod.emitted_by([token], "pie") == []
+
+
+def test_a_global_filter_ands_with_a_crossfilter_on_the_same_column():
+    """Clicked `in` values on one column merge (separate clicks accumulate),
+    but a typed filter is not one more click — merging it would OR it in."""
+    tokens = ["pie|status=paid", filters_mod.global_token("status", "in", ["shipped"])]
+    assert filters_mod.decode_tokens(tokens, exclude_emitter="bar") == [
+        filters_mod.Filter("status", "in", ("paid",)),
+        filters_mod.Filter("status", "in", ("shipped",)),
+    ]
+
+
+def test_global_filters_pair_each_filter_with_its_token():
+    """Removing one toggles exactly that token off, so the token comes along."""
+    token = filters_mod.global_token("region", "between", ["a", "m"])
+    assert filters_mod.global_filters(["pie|status=paid", token]) == [
+        (token, filters_mod.Filter("region", "between", ("a", "m")))
+    ]
+
+
+def test_a_malformed_global_token_is_ignored():
+    """A hand-edited URL must not take the dashboard down."""
+    bad = ["*|not json", '*|{"column":"x","op":"between","values":["1"]}', "*|"]
+    assert filters_mod.decode_tokens(bad) == []
+    assert filters_mod.global_filters(bad) == []
+
+
+def test_removing_a_merged_click_filter_drops_every_click_behind_it():
+    """Two clicks on one column read as one `in` row; ✕ on it clears both."""
+    tokens = ["pie|status=paid", "pie|status=pending", "pie|region=north", "bar|status=x"]
+    (f,) = [f for e, f in filters_mod.by_emitter(tokens) if e == "pie" and f.column == "status"]
+    assert filters_mod.tokens_behind(tokens, "pie", f) == ["pie|status=paid", "pie|status=pending"]
+
+
+def test_removing_one_half_of_a_segment_drops_the_whole_selection():
+    """A bar segment is one (x, y) selection — the unit a second click clears."""
+    token = "bar|" + filters_mod.range_part("day", "2026-06-01", "2026-06-02") + "|status=paid"
+    f = filters_mod.Filter("day", "between", ("2026-06-01", "2026-06-02"))
+    assert filters_mod.tokens_behind([token], "bar", f) == [token]
+
+
+def test_removing_a_global_filter_drops_only_that_one():
+    """Global filters never merge, so two on one column are two rows."""
+    a = filters_mod.global_token("status", "in", ["paid"])
+    b = filters_mod.global_token("status", "in", ["pending"])
+    f = filters_mod.Filter("status", "in", ("paid",))
+    assert filters_mod.tokens_behind([a, b], filters_mod.GLOBAL, f) == [a]
+
+
+def test_day_bounds_and_day_range_round_trip():
+    """The picker's inclusive last day becomes the model's exclusive bound and
+    back, across a month end and a leap day."""
+    assert filters_mod.day_bounds("2028-02-01", "2028-02-29") == ["2028-02-01", "2028-03-01"]
+    assert filters_mod.day_range(["2028-02-01", "2028-03-01"]) == ("2028-02-01", "2028-02-29")
+    assert filters_mod.day_bounds("2026-01-01", "nope") is None
+    assert filters_mod.day_range(["2026-01-01 10:30:00", "2026-01-02"]) is None

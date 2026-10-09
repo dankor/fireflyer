@@ -225,7 +225,34 @@ Rules:
 * Active crossfilters merge with each chart's declared `filters` by AND. A chart's declared filters are never removed by interaction.
 * The emitting chart is exempt from its own crossfilter. The chart that produced the click keeps showing every category with the clicked one visually selected; only other charts apply the filter to their data. (a common crossfilter convention — clicking a slice doesn't reduce the source chart to a single slice.)
 * A crossfilter applies to another chart only if that chart's dataset has a column with the same name. Charts without that column ignore it.
-* Crossfilter state lives in the dashboard URL as query params — shareable, htmx-friendly, no server-side session.
+* Crossfilter state lives in the dashboard URL — shareable, htmx-friendly, no server-side session. See **Filter state in the URL** below.
+
+## Global quick filters
+
+Every chart's filter panel (the badge's click-to-open panel) ends in a **+** row: column, operator, values. Submitting it adds a **global quick filter** — a filter a viewer types rather than clicks, applied across the whole dashboard. The row is the chart builder's own filter fields (`params.filter_fields`, parsed by `params.parse_filters`), so a filter typed here reads exactly like one written in a chart's `filters:`; any of `in` / `ni` / `between` works.
+
+Rules:
+
+* A global filter is **viewer state**, like a crossfilter — never written to the YAML. It lives in the same state and the same URL as crossfilters.
+* It applies to **every** chart whose dataset has the column (the crossfilter contract); a chart without that column ignores it and doesn't list it. No chart is exempt — nothing emitted it.
+* It **ANDs** with every other filter. (Clicked `in` values on one column still merge across clicks; a typed filter is not one more click, so it never merges into them.)
+* The panel lists it with source **Global**. Every row except a **declared** one (part of the chart's definition) has a remove button: a global filter's drops that filter; a crossfilter's drops every click behind the row — clicks on one column merge into one row — and a multi-part selection (a bar segment) goes whole, the unit a second click would clear. The **+** column list is that chart's own columns, column calcs included.
+* A global filter can also be **edited**: its row's pencil loads it into the panel's bottom row (`/filter/edit`, swapping only that row), the **+** becomes ✓ and a ✕ cancels back to a blank row. Saving replaces it **in place** — same position in the list — and stays viewer state. Click filters have no pencil: a click is undone by clicking.
+* Adding the same filter twice keeps one. A filter the model rejects (a `between` without exactly two bounds) is dropped.
+* **The fields follow the column's type** (`params.column_type`: number / boolean / date / text, a `str2dt()` column calc counting as a date). Each column in the picker — and in the panel's filter rows — carries the type glyph the dataset page uses (`#`, `✓`, `◷`, `T`).
+  * **Operators:** `in` / `not in` on every type; `between` **only on dates**. An op a filter already has is always kept, so opening a hand-written YAML filter never changes what it says; switching to a column that can't take the current op falls back to `in`.
+  * **`in` / `not in`:** a checkbox list of the column's distinct values (as text, sorted), at most 100 at a time. Past 10 values a **search box** sits above it: case-insensitive substring, searched on the server so a high-cardinality column (cities, customers) is pickable too — a note says when there are more than are listed. Ticked values stay at the top, ticked, whatever the search, so narrowing never drops a pick. Only the list re-renders (250ms after typing stops), so the box keeps focus; the box sits outside the form, so Enter can't submit the **+** and its text is never saved.
+  * **Before a column is picked** the op and values are disabled. In the panel the **+** shows only once the row is complete — a column, and a value typed, ticked or both dates picked — in pure CSS (`required` + `:has()`).
+  * **`between` on a date:** one field showing the range (`Jun 1 – Jun 30, 2026`) that opens a two-month calendar (`fireflyer/date_range.py`): the first click starts the range, the second ends it (an earlier day moves the start; a click on a complete range starts over), hovering previews the band, and it closes once complete. Its **Start** and **End** can also be typed (ISO `2026-06-01`; `/` or `.` accepted): Enter or leaving the field applies it — an End before the Start swaps them, text that isn't a date reverts — and the calendar follows to that month. The typed fields sit outside the form, like the value search, so Enter can't submit the **+**. It opens on the range's month, or for a new one on the latest month in the column's data. No JavaScript: the popover is a `<details>` and each click is an htmx GET to `/filter/range` carrying the picker's whole state, which the server applies and re-renders — a request that brings its own state never drags a surrounding form (or the dashboard's hidden inputs) along, so the one control serves the panel and the editor's modals alike. The last day is **inclusive**; the model stays half-open, so it's stored as the next day's start, and the panel shows whole-day ranges inclusively too (`2026-02-01–2026-02-28`). A range with a real time in it (an hourly bucket) stays a text input.
+  * Changing the column or op re-renders the row's fields from `/filter/fields`: over htmx in the panel, from the editor's JS in the chart builder and calcs manager — the same fields, ops, and pickers in all three.
+
+On the wire it is a crossfilter token under the reserved emitter `*`, whose part is the whole filter as JSON — so `ni` and value text the click syntax reserves (`|`, `=`, `~`) round-trip intact.
+
+## Filter state in the URL
+
+All filter state — crossfilter clicks and global quick filters — rides in the page URL as one `f` query parameter, so reloading or sharing the page reopens the same view. It is the token list as JSON, zlib-compressed and base64url-encoded: always compressed, because typed values grow a URL fast and browsers and proxies cut long URLs off. A value that doesn't decode (a truncated link) opens the dashboard unfiltered rather than failing.
+
+The `/dashboard` route writes it back with htmx's `HX-Replace-Url` header after every filter change — no JavaScript — replacing the history entry rather than pushing one, so Back leaves the dashboard instead of replaying clicks. The dashboard root carries `hx-history="false"` so htmx doesn't snapshot the page (its YAML and inline data) into `localStorage` on the way. The editor reads `f` on every render, so a YAML edit keeps the filters too.
 
 ## One model, two entry points
 
@@ -1139,20 +1166,31 @@ fireflyer/
 │   │   ├── chart.py
 │   │   ├── chart.html
 │   │   ├── chart.css
+│   │   ├── icon.svg
 │   │   └── spec.md
 │   └── pie/
 │       ├── __init__.py
 │       ├── chart.py
 │       ├── chart.html
 │       ├── chart.css
+│       ├── icon.svg
 │       └── spec.md
 │
 ├── web/
+│   ├── app.py
+│   ├── editor.html
+│   └── static/
+│       ├── editor.css
+│       └── editor.js
 │
 └── tests/
 ```
 
-Each chart lives in its own folder. The four files (`chart.py`, `chart.html`, `chart.css`, `spec.md`) co-locate inside it. No shared `templates/`, `styles/`, or `docs/` subdirectories — the chart folder is the modularity boundary.
+Each chart lives in its own folder. The five files (`chart.py`, `chart.html`, `chart.css`, `icon.svg`, `spec.md`) co-locate inside it. No shared `templates/`, `styles/`, or `docs/` subdirectories — the chart folder is the modularity boundary.
+
+`icon.svg` is required: a 16×16-viewBox glyph drawn in `stroke="currentColor"` (so it takes the colour of the text around it), exposed as the chart class's `ICON`. It names the chart type wherever one is shown — the filter panel's source column and the editor's chart-type picker.
+
+The editor's own page is split the same way: markup in `web/editor.html`, styles and script as files in `web/static/`, served at `/static`. That is editor chrome only; chart and dashboard output keep inlining their CSS so a `to_html()` page stands alone.
 
 Keep the structure simple.
 
