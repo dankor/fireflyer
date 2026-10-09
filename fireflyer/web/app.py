@@ -86,7 +86,7 @@ app.state.datasets = DatasetStore(make_object_store(_object_store_config()))
 async def _require_login(request: Request, call_next):
     """When auth is on, every route except the login page requires a session;
     unauthenticated requests are redirected to /login. Static assets are open
-    too — the login page needs its stylesheet, and they hold no data."""
+    too — the login page needs its stylesheet and icon, and they hold no data."""
     auth = app.state.authenticator
     if (
         auth is not None
@@ -301,7 +301,7 @@ def render_editor_page(
     page = (_DIR / "editor.html").read_text()
     # nav + profile are shared with the gallery, and come after the editor's own
     # rules — the order they were inlined in, so the cascade is unchanged.
-    styles = assets.stylesheets("editor.css", "nav.css", "profile.css")
+    styles = assets.favicons() + "\n" + assets.stylesheets("editor.css", "nav.css", "profile.css")
     return (
         page.replace("__FF_STYLES__", styles)
         .replace("__FF_SCRIPT__", assets.script("editor.js"))

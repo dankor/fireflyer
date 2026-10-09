@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="fireflyer/web/static/logo.svg" width="128" height="128" alt="Fireflyer logo: three columns of glowing dots rising like fireflies">
+</p>
+
 # Fireflyer
 
 > _Fire, walk with me._

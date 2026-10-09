@@ -27,3 +27,9 @@ def stylesheets(*names: str) -> str:
 
 def script(name: str) -> str:
     return f'<script src="{_url(name)}"></script>'
+
+
+def favicons() -> str:
+    """The tab icon every page links: the logo itself. One SVG, by choice — every
+    current browser takes one; no PNG copies to keep in step with it."""
+    return f'<link rel="icon" type="image/svg+xml" href="{_url("logo.svg")}">'

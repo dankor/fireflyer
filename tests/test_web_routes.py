@@ -484,3 +484,21 @@ def test_the_range_route_takes_a_typed_date(client):
         "from": "2026-06-03", "to": "", "month": "2026-06", "typed_to": "2026-06-10",
     }).text
     assert '<input name="filter_to" value="2026-06-10" hidden>' in html
+
+
+# --- icons -------------------------------------------------------------------
+
+
+def test_every_page_links_the_logo_as_its_icon(client):
+    """The editor; the gallery and login pages render through their own
+    builders, so they're checked as functions. Login matters most: it's open
+    before sign-in, and /static is too, so the icon loads there."""
+    from fireflyer.web import auth, portal
+
+    pages = [
+        client.get("/").text,
+        portal.render_gallery([]),
+        auth.login_page().body.decode(),
+    ]
+    for page in pages:
+        assert '<link rel="icon" type="image/svg+xml" href="/static/logo.svg?v=' in page
