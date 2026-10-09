@@ -1,0 +1,30 @@
+/* Back button — one shared style for the dataset detail and the editor. */
+.ff-back { display:inline-flex; align-items:center; justify-content:center;
+  background:transparent; border:1px solid var(--border); color:var(--text);
+  border-radius:4px; padding:6px 7px; text-decoration:none; }
+.ff-back svg { width:15px; height:15px; display:block; }
+.ff-back:hover { border-color:var(--accent); color:var(--accent); }
+/* Left-nav group: switch + path dropdown share one gap. */
+/* Dashboards | Datasets segmented switch. */
+.ff-switch { display:inline-flex; border:1px solid var(--border);
+  border-radius:7px; overflow:hidden; }
+.ff-switch-seg { padding:6px 14px; font-size:13px; color:var(--muted);
+  text-decoration:none; }
+.ff-switch-seg + .ff-switch-seg { border-left:1px solid var(--border); }
+.ff-switch-seg:hover { background:var(--bg); color:var(--text); }
+.ff-switch-seg.active { background:var(--accent); color:#fff; }
+/* Path dropdown: a labelled <details> showing the active path. */
+.ff-pathdd { position:relative; }
+.ff-pathdd summary { list-style:none; cursor:pointer; display:inline-flex;
+  align-items:center; gap:5px; padding:5px 10px; border:1px solid var(--border);
+  border-radius:7px; font-size:13px; color:var(--text); }
+.ff-pathdd summary::-webkit-details-marker { display:none; }
+.ff-pathdd summary svg { width:11px; height:11px; opacity:.7; }
+.ff-pathdd summary:hover, .ff-pathdd[open] summary { background:var(--bg); }
+.ff-pathdd-menu { position:absolute; right:0; top:calc(100% + 6px);
+  min-width:160px; background:var(--panel); border:1px solid var(--border);
+  border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,.18); padding:6px; z-index:30; }
+.ff-pathdd-menu a { display:block; padding:8px 10px; border-radius:4px;
+  color:var(--text); text-decoration:none; font-size:14px; }
+.ff-pathdd-menu a:hover { background:var(--bg); }
+.ff-pathdd-menu a.active { color:var(--accent); font-weight:600; }

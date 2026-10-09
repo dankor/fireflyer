@@ -715,9 +715,12 @@ def test_the_filter_indicator_uses_the_display_name(orders_parquet):
     token = _row_tokens(dash.render_cell("t", cf_tokens=[]))[0]
     cell = dash.render_cell("t", cf_tokens=[token])
 
+    # Drop the source cell: this test is about the column *label*, and the row
+    # now leads with which chart set the filter.
     rows = [
-        " ".join(re.sub(r"<[^>]+>", " ", r).split())
-        for r in re.findall(r'<div class="fireflyer-filter-row">(.*?)</div>', cell, re.S)
+        # The text past the source cell, minus the column's type glyph.
+        " ".join(re.sub(r"<[^>]+>", " ", re.sub(r'<span class="ff-type-glyph"[^>]*>[^<]*</span>', "", r).split("</td>", 1)[1]).split())
+        for r in re.findall(r'<tr class="src-\w+">(.*?)</tr>', cell, re.S)
     ]
     # Which group lands first isn't fixed without a `sort:`, so match the label
     # and the value the token actually carried.

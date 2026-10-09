@@ -98,8 +98,8 @@ work in both paths automatically — no extra wiring.
 
 The thin endpoints in `web/app.py` are `POST /chart/config/form` + `/save` (edit)
 and `/add-form` + `/create` (add); each returns form HTML or `{ok, yaml|error}`.
-The pencil, gutter "+" buttons, and modal JS live in the editor page (`app.py`
-INDEX) and are gated by the `editing` flag so they never ship in `to_html()`.
+The pencil, gutter "+" buttons, and modal JS live in the editor page
+(`web/editor.html` + `web/static/editor.js`) and are gated by the `editing` flag so they never ship in `to_html()`.
 
 ## Tests
 

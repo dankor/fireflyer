@@ -34,6 +34,15 @@ class FakeForm:
     def getlist(self, key):
         return self._multi.get(key, [])
 
+    def multi_items(self):
+        """Fields in document order, as a browser submits them: parallel lists
+        interleave, so each filter row's column, op and values stay together."""
+        items = list(self._single.items())
+        longest = max((len(v) for v in self._multi.values()), default=0)
+        for i in range(longest):
+            items += [(k, v[i]) for k, v in self._multi.items() if i < len(v)]
+        return items
+
 
 def test_list_for_dataset():
     got = me.list_for_dataset(_doc(), "orders")
@@ -163,6 +172,8 @@ def test_every_calcs_button_is_an_icon():
     )
     for html in (calcs_edit.render_manager(yaml),
                  calcs_edit.render_form(yaml, "orders", "n")):
+        # Not a customizable select's own `<button>` — that's the closed control.
+        html = html.replace("<button><selectedcontent></selectedcontent></button>", "")
         buttons = re.findall(r"<button[^>]*>(.*?)</button>", html, re.S)
         assert buttons
         for inner in buttons:

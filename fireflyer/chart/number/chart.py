@@ -29,6 +29,10 @@ class Number:
     _resolve = None   # name -> (uri, storage_options); not a dataclass field
     _calcs = None  # CalcSet for this chart's dataset; set by the dashboard
 
+    # Every chart type ships an icon: it names the chart wherever the type is
+    # shown (the filter panel's source column, the editor's type picker).
+    ICON = (_DIR / "icon.svg").read_text().strip()
+
     # Editor modal schema — one Param per constructor kwarg, in display order.
     PARAMS = [
         DatasetParam("dataset", "Dataset"),

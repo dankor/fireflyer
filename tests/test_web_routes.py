@@ -7,6 +7,7 @@ silently ignores it, and the response is a valid 200 that simply doesn't change.
 That happened, so these tests exercise the endpoints for real.
 """
 
+import html as html_mod
 import re
 
 import pytest
@@ -228,3 +229,258 @@ def test_the_error_card_drops_the_query_plan(client):
     message = re.search(r'error-msg">(.*?)</div>', response.text, re.S).group(1)
     assert "\n" not in message.strip()
     assert "RESOLVED" not in message.upper() and "Parquet SCAN" not in message
+
+
+def test_the_editor_links_its_stylesheets_and_script(client):
+    """The editor's CSS and JS are files under web/static, linked — not inlined —
+    and each link carries a version so an edited file isn't served from cache."""
+    page = client.get("/").text
+    for name in ("editor.css", "nav.css", "profile.css", "editor.js"):
+        m = re.search(rf'/static/{re.escape(name)}\?v=\d+', page)
+        assert m, f"{name} not linked"
+        assert client.get(m.group(0)).status_code == 200
+
+
+def test_static_files_are_open_without_a_login(client):
+    """The login page links its stylesheet, so the login gate has to let
+    /static through — or the sign-in form renders unstyled."""
+    app.state.authenticator, saved = object(), app.state.authenticator
+    try:
+        assert client.get("/static/login.css").status_code == 200
+        assert client.get("/", follow_redirects=False).status_code == 303
+    finally:
+        app.state.authenticator = saved
+
+
+# --- global quick filters + URL state ----------------------------------------
+
+from urllib.parse import parse_qs, urlsplit
+
+from fireflyer import filters as filters_mod
+
+
+def _tokens(html):
+    return re.findall(r'<input type="hidden" name="cf" value="([^"]*)">', html)
+
+
+def _filter(client, *, cf=(), headers=None, **fields):
+    data = {"yaml_text": _YAML, "cf": list(cf), **fields}
+    response = client.post("/dashboard", data=data, headers=headers or {})
+    assert response.status_code == 200
+    return response
+
+
+def test_the_plus_form_adds_a_global_filter(client):
+    """The panel posts the chart builder's own fields; the route turns them into
+    a global token that every cell then renders with."""
+    html = _filter(
+        client, filter_column="status", filter_op="ni", filter_values="paid, shipped"
+    ).text
+    want = filters_mod.global_token("status", "ni", ["paid", "shipped"])
+    assert [html_mod.unescape(t) for t in _tokens(html)] == [want]
+
+
+def test_adding_the_same_global_filter_twice_keeps_one(client):
+    """Added, never toggled: resubmitting must not remove it."""
+    token = filters_mod.global_token("status", "in", ["paid"])
+    html = _filter(
+        client, cf=[token], filter_column="status", filter_op="in", filter_values="paid"
+    ).text
+    assert [html_mod.unescape(t) for t in _tokens(html)] == [token]
+
+
+def test_a_filter_the_model_rejects_is_not_added(client):
+    """A `between` needs two bounds; one would be a token nothing applies."""
+    html = _filter(
+        client, filter_column="day", filter_op="between", filter_values="2026-06-01"
+    ).text
+    assert _tokens(html) == []
+
+
+def test_removing_a_global_filter_toggles_its_token_off(client):
+    token = filters_mod.global_token("status", "in", ["paid"])
+    html = _filter(client, cf=[token, "b|status=pending"], toggle=token).text
+    assert _tokens(html) == ["b|status=pending"]
+
+
+def test_the_filter_state_is_written_to_the_page_url(client):
+    """htmx sends the page's URL; the route answers with that URL carrying the
+    new state in `f`, keeping every other parameter."""
+    response = _filter(
+        client,
+        cf=["b|status=paid"],
+        filter_column="status", filter_op="ni", filter_values="x",
+        headers={"HX-Current-URL": "http://host/d/abc?tab=2&f=stale"},
+    )
+    url = urlsplit(response.headers["HX-Replace-Url"])
+    assert url.path == "/d/abc" and not url.netloc
+    query = parse_qs(url.query)
+    assert query["tab"] == ["2"]
+    assert filters_mod.decode_state(query["f"][0]) == [
+        "b|status=paid", filters_mod.global_token("status", "ni", ["x"]),
+    ]
+
+
+def test_clearing_every_filter_drops_f_from_the_url(client):
+    response = _filter(
+        client, cf=["b|status=paid"], toggle="b|status=paid",
+        headers={"HX-Current-URL": "http://host/?f=old"},
+    )
+    assert response.headers["HX-Replace-Url"] == "/"
+
+
+def test_the_editor_renders_from_the_urls_filter_state(client):
+    """A reload or a shared link: /execute starts from `f`."""
+    token = filters_mod.global_token("status", "in", ["paid"])
+    state = filters_mod.encode_state([token])
+    html = client.post(
+        f"/execute?f={state}", content=_YAML, headers={"Content-Type": "application/yaml"}
+    ).json()["html"]
+    assert [html_mod.unescape(t) for t in _tokens(html)] == [token]
+
+
+def test_the_panels_fields_refetch_as_a_value_picker(client):
+    """The panel has no script: picking a column re-renders its fields over
+    htmx, and the response stays live so the next change re-fetches too."""
+    html = client.post("/filter/fields", data={
+        "yaml_text": _YAML, "filter_dataset": "orders", "live": "1",
+        "filter_column": "status", "filter_op": "in",
+    }).text
+    assert re.findall(r'name="filter_value" value="([^"]+)"', html) == [
+        "cancelled", "paid", "pending", "shipped",
+    ]
+    assert html.count('hx-post="/filter/fields"') == 2        # column + op
+    # The builder's re-fetch (editor JS) gets the same fields, minus htmx.
+    builder = client.post("/filter/fields", data={
+        "yaml_text": _YAML, "filter_dataset": "orders",
+        "filter_column": "status", "filter_op": "in",
+    }).text
+    assert "hx-post" not in builder and 'value="shipped"' in builder
+
+
+def test_ticked_values_add_a_global_filter(client):
+    html = _filter(client, filter_column="status", filter_op="in",
+                   filter_value=["paid", "shipped"]).text
+    want = filters_mod.global_token("status", "in", ["paid", "shipped"])
+    assert [html_mod.unescape(t) for t in _tokens(html)] == [want]
+
+
+def test_a_rows_remove_drops_every_token_behind_it(client):
+    html = _filter(
+        client, cf=["b|status=paid", "b|status=pending", "x|status=y"],
+        remove=["b|status=paid", "b|status=pending"],
+    ).text
+    assert _tokens(html) == ["x|status=y"]
+
+
+def test_a_panel_change_reopens_that_panel(client):
+    """/dashboard marks the one cell; that cell's own request renders it open."""
+    skeleton = _filter(client, cf=["b|status=paid"], remove=["b|status=paid"], open_filter="b").text
+    assert '"open_filter": "1"' in skeleton
+    cell = _post_cell(client, open_filter="1")
+    assert re.search(r'<details [^>]*name="fireflyer-filter" open>', cell)
+
+
+def test_the_ops_follow_the_column_kind(client):
+    """A `str2dt()` column calc is a date: it gets `between` and a day picker.
+    Text gets `in` / `not in` only — and a `between` carried over from a date
+    column falls back to `in`."""
+    def fields(column, op):
+        return client.post("/filter/fields", data={
+            "yaml_text": _YAML, "filter_dataset": "orders",
+            "filter_column": column, "filter_op": op,
+        }).text
+
+    date = fields("at", "between")
+    assert '<option value="between" selected>' in date and 'class="ff-range' in date
+    text = fields("status", "between")
+    assert 'value="between"' not in text
+    assert '<option value="in" selected>' in text and 'name="filter_value"' in text
+
+
+def test_a_picked_day_range_adds_a_global_filter(client):
+    html = _filter(client, filter_column="at", filter_op="between",
+                   filter_from="2026-06-01", filter_to="2026-06-02").text
+    want = filters_mod.global_token("at", "between", ["2026-06-01", "2026-06-03"])
+    assert [html_mod.unescape(t) for t in _tokens(html)] == [want]
+
+
+def test_a_column_calc_is_typed_from_its_data(client):
+    """`str2dt()` makes a date: its glyph is the date glyph, and the panel's
+    column picker says so for every column."""
+    html = client.post("/filter/fields", data={
+        "yaml_text": _YAML, "filter_dataset": "orders", "filter_column": "at",
+    }).text
+    from fireflyer.params import type_glyph
+
+    assert f'{type_glyph("date")} <span>at</span>' in html
+    assert f'{type_glyph("text")} <span>status</span>' in html
+    assert f'{type_glyph("number")} <span>amount</span>' in html
+
+
+def test_the_search_route_returns_only_the_list(client):
+    """Only the list is swapped, so the search box keeps focus while typing."""
+    html = client.post("/filter/values", data={
+        "yaml_text": _YAML, "filter_dataset": "orders", "filter_column": "status",
+        "filter_q": "p", "filter_value": ["shipped"],
+    }).text
+    assert html.startswith('<div class="ff-filter-choices"') and "filter_q" not in html
+    assert re.findall(r'name="filter_value" value="([^"]+)"', html) == [
+        "shipped", "paid", "pending",
+    ]
+
+
+def test_the_range_route_applies_a_click(client):
+    html = client.get("/filter/range", params={
+        "from": "2026-06-03", "to": "", "month": "2026-06", "pick": "2026-06-10",
+    }).text
+    assert '<input name="filter_to" value="2026-06-10" hidden>' in html
+
+
+def test_a_fresh_range_picker_opens_on_the_datas_latest_month(client):
+    html = client.post("/filter/fields", data={
+        "yaml_text": _YAML, "filter_dataset": "orders",
+        "filter_column": "at", "filter_op": "between",
+    }).text
+    assert re.findall(r'class="ff-cal-title">([^<]+)<', html)[0] == "June 2026"
+
+
+def test_a_picked_range_adds_a_global_filter_from_the_one_field(client):
+    html = _filter(client, filter_column="at", filter_op="between",
+                   filter_from="2026-06-01", filter_to="2026-06-02").text
+    want = filters_mod.global_token("at", "between", ["2026-06-01", "2026-06-03"])
+    assert [html_mod.unescape(t) for t in _tokens(html)] == [want]
+
+
+def test_editing_loads_the_filter_into_the_bottom_row(client):
+    """The pencil: the filter's own fields, filled in, with ✓ and ✕."""
+    token = filters_mod.global_token("status", "ni", ["paid"])
+    html = client.post("/filter/edit", data={
+        "yaml_text": _YAML, "filter_dataset": "orders", "cid": "b", "token": token,
+    }).text
+    assert '<option value="status" selected>' in html
+    assert '<option value="ni" selected>' in html and 'value="paid" checked' in html
+    replace = re.search(r'<input name="replace" value="([^"]*)" hidden>', html).group(1)
+    assert html_mod.unescape(replace) == token
+    assert 'title="Save filter"' in html and 'title="Cancel edit"' in html
+    blank = client.post("/filter/edit", data={
+        "yaml_text": _YAML, "filter_dataset": "orders", "cid": "b",
+    }).text
+    assert 'name="replace"' not in blank and 'title="Add a global filter"' in blank
+
+
+def test_saving_an_edit_replaces_the_filter_in_place(client):
+    old = filters_mod.global_token("status", "in", ["paid"])
+    other = filters_mod.global_token("amount", "in", ["42"])
+    html = _filter(client, cf=["b|status=x", old, other], replace=old,
+                   filter_column="status", filter_op="ni", filter_value=["pending"]).text
+    assert [html_mod.unescape(t) for t in _tokens(html)] == [
+        "b|status=x", filters_mod.global_token("status", "ni", ["pending"]), other,
+    ]
+
+
+def test_the_range_route_takes_a_typed_date(client):
+    html = client.get("/filter/range", params={
+        "from": "2026-06-03", "to": "", "month": "2026-06", "typed_to": "2026-06-10",
+    }).text
+    assert '<input name="filter_to" value="2026-06-10" hidden>' in html

@@ -1,4 +1,5 @@
-"""Static guards on the editor page (`INDEX`). Its interactive behavior is
+"""Static guards on the editor page (`editor.html` + `static/editor.css` and
+`static/editor.js`). Its interactive behavior is
 JS/browser territory the snapshot suite can't reach, but a couple of regressions
 are cheap to pin down from the rendered HTML/CSS — notably that the "stale"
 preview overlay stays *interactive*: a `pointer-events: none` there once made
@@ -9,10 +10,17 @@ import re
 from pathlib import Path
 
 from fireflyer.web.app import DEFAULT_YAML, _theme_switch, render_editor_page
+from fireflyer.web.assets import STATIC_DIR
+
+EDITOR_CSS = (STATIC_DIR / "editor.css").read_text()
+EDITOR_JS = (STATIC_DIR / "editor.js").read_text()
 
 
 def _page() -> str:
-    return render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    """The page as the browser ends up with it: the markup plus the stylesheet
+    and script it links, which the guards below read as one text."""
+    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    return page + EDITOR_CSS + EDITOR_JS
 
 
 def test_stale_preview_is_greyed_but_still_interactive():
@@ -89,7 +97,7 @@ def test_default_dashboard_is_commented():
 def test_the_mode_switch_sits_before_the_dashboard_name():
     """One segmented control, on the left, ahead of the name — where the eye
     starts. It replaced a row of separate toggles on the right."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     left = page[page.index('<div class="topbar-left">') : page.index('<div class="topbar-right">')]
     assert 'id="ff-modes"' in left, "the switch belongs in the left group"
     # The name slot is filled only in portal/paths mode; when it is, the switch
@@ -103,7 +111,7 @@ def test_the_switch_has_one_segment_per_mode_and_no_text():
     meaning."""
     import re
 
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     switch = page[page.index('id="ff-modes"') :]
     switch = switch[: switch.index("</div>")]
     assert re.findall(r'data-mode="(\w+)"', switch) == [
@@ -118,7 +126,7 @@ def test_the_switch_has_one_segment_per_mode_and_no_text():
 
 
 def test_the_buttons_the_switch_replaced_are_gone():
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     for gone in ('id="ff-chat-btn"', 'id="ff-calcs-btn"', 'id="ff-docs-btn"',
                  'id="toggle"', 'id="pane-resizer"'):
         assert gone not in page, gone
@@ -127,11 +135,11 @@ def test_the_buttons_the_switch_replaced_are_gone():
 def test_the_dashboard_is_full_width_by_default():
     """View is the landing mode and the canvas is the page — no split, no
     half-screen preview."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     assert '<div class="layout mode-view"' in page
     assert "setMode('view');" in page
     # The layout is a single positioned container, not a two-column grid.
-    start = page.index("  .layout {")
+    start = page.index("\n.layout {")
     rule = page[start : page.index("}", start)]
     assert "grid-template-columns" not in rule
     assert "position: relative" in rule
@@ -141,7 +149,7 @@ def test_every_panel_starts_closed():
     """Chat, docs and calcs are panels over the canvas, opened by a mode."""
     import re
 
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     panels = re.findall(r'<aside class="ff-docs ff-panel[^"]*" id="([\w-]+)" hidden>', page)
     assert sorted(panels) == ["ff-calcs", "ff-chat", "ff-docs", "ff-yaml"]
 
@@ -149,7 +157,7 @@ def test_every_panel_starts_closed():
 def test_edit_mode_opens_no_panel():
     """Edit is for rearranging the dashboard, so nothing may cover it — the YAML
     has its own `code` mode instead."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     assert "edit: null" in page, "edit must map to no panel"
     assert "code: 'ff-yaml'" in page, "the YAML belongs to `code`, not `edit`"
 
@@ -157,7 +165,7 @@ def test_edit_mode_opens_no_panel():
 def test_code_mode_shows_the_yaml_in_a_panel():
     """The source is editable by hand again, in the same side panel the other
     modes use."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     panel = page[page.index('id="ff-yaml"') :]
     panel = panel[: panel.index("</aside>")]
     # The panel starts closed; the textarea inside it must not be hidden too,
@@ -172,7 +180,7 @@ def test_on_canvas_editing_is_gated_on_edit_mode():
     """The server always renders the editor chrome, so the mode class is what
     decides whether it shows — that is why switching modes needs no re-render.
     Gate it wrongly and the handles rewrite YAML the viewer cannot see."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     for affordance in ("fireflyer-resize-handle", "fireflyer-chart-tools",
                        "fireflyer-add-row", "fireflyer-add-cell"):
         assert f".layout:not(.mode-edit) .{affordance}" in page, affordance
@@ -185,7 +193,7 @@ def test_run_syncs_the_topbar_after_a_programmatic_yaml_change():
     manager, chat — goes through run(), so that is where Save state and the
     editable title have to catch up. Without it, renaming via chat leaves the
     old name in the topbar."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     finally_block = page[page.index("function run(") :]
     finally_block = finally_block[finally_block.index("finally") :][:400]
     assert "updateSaveState();" in finally_block
@@ -197,7 +205,7 @@ def test_every_panel_sits_beside_the_dashboard():
     YAML, asking the assistant, reading a chart's options. None of them overlay
     it. The split is keyed off one `panel-open` class rather than each mode, so
     adding a mode cannot leave a stale column behind."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
 
     start = page.index(".layout.panel-open {")
     rule = page[start : page.index("}", start)]
@@ -221,7 +229,7 @@ def test_leaving_a_panel_mode_clears_its_class():
     list, so returning to view left `.mode-code` on the layout: the grid stayed,
     the dashboard stayed in column 2, and column 1 sat empty. Deriving the list
     from MODES makes that impossible."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     assert "for (const name of Object.keys(MODES)) layoutEl.classList.remove('mode-' + name);" in page
     assert "layoutEl.classList.toggle('panel-open', MODES[mode] !== null);" in page
 
@@ -229,7 +237,7 @@ def test_leaving_a_panel_mode_clears_its_class():
 def test_panels_have_no_close_button():
     """The switch is the only way in or out — a ✕ that does the same thing as
     clicking the lit segment is a second control for one job."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
     assert "ff-docs-close" not in page
     assert "✕</button>" not in page.split('id="ff-move-cancel"')[0]
 
@@ -272,7 +280,7 @@ def test_the_panel_is_resizable_and_the_width_is_remembered():
     """How much room you want for YAML or the assistant is a preference, not a
     per-visit decision — so the drag persists. It belongs in localStorage (per
     browser) rather than the dashboard, which is shared with everyone."""
-    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    page = _page()
 
     assert 'id="ff-split"' in page
     start = page.index(".layout.panel-open .ff-split {")
@@ -289,3 +297,30 @@ def test_the_panel_is_resizable_and_the_width_is_remembered():
     start = page.index("function setPanelWidth(")
     body = page[start : page.index("\n}", start)]
     assert "Math.max(240" in body and "window.innerWidth - 320" in body
+
+
+def test_the_editor_script_declares_the_state_it_uses():
+    """Removing the Preview toggle took an adjacent block with it — the resize
+    constants, `gcd`/`reduceRatio` and `let resize` — leaving handlers that
+    referenced names nothing declared. Chart resize threw on every mousemove and
+    shipped that way, because Python tests never execute this script.
+
+    A crude check, but it catches exactly that: every module-level name the
+    handlers lean on must still be declared somewhere in the page.
+    """
+    import re
+
+    script = EDITOR_JS
+
+    declared = set(re.findall(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)", script))
+    declared |= set(re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)", script))
+
+    # State and helpers that handlers reference; each was a real orphan risk.
+    needed = {
+        "resize", "HEIGHT_UNIT_PX", "COL_STEP", "gcd", "reduceRatio",
+        "currentMode", "MODES", "setMode", "editingDisabled",
+        "layoutEl", "outEl", "codeEl", "splitEl", "modeSwitch",
+        "loadCalcs", "calcsBody", "run", "setPanelWidth", "setRowUnits",
+    }
+    missing = sorted(n for n in needed if n not in declared)
+    assert not missing, f"used but never declared: {missing}"

@@ -18,8 +18,7 @@ from html import escape
 import yaml
 
 from fireflyer import calcs as calcs_mod
-from fireflyer import filters as filters_mod
-from fireflyer.params import FilterListParam, ParamContext, icon
+from fireflyer.params import FilterListParam, ParamContext, icon, parse_filters
 
 
 class CalcsEditError(ValueError):
@@ -216,32 +215,12 @@ def definition_from_form(form) -> dict:
         definition["agg"] = (form.get("agg") or "count").strip()
         if formula:
             definition["formula"] = formula
-        filters = _filters_from_form(form)
+        filters = parse_filters(form)
         if filters:
             definition["filters"] = filters
     if fmt:
         definition["format"] = fmt
     return definition
-
-
-def _filters_from_form(form) -> list:
-    cols = form.getlist("filter_column")
-    ops = form.getlist("filter_op")
-    vals = form.getlist("filter_values")
-    out = []
-    for col, op, raw in zip(cols, ops, vals):
-        col = (col or "").strip()
-        if not col:
-            continue
-        values = [s.strip() for s in (raw or "").split(",") if s.strip()]
-        if not values:
-            continue
-        out.append({
-            "column": col,
-            "op": op if op in filters_mod.OPS else "in",
-            "values": values,
-        })
-    return out
 
 
 AGGS = calcs_mod.AGGS
@@ -339,9 +318,14 @@ def _select_field(name: str, label: str, options, current: str) -> str:
     )
 
 
-def render_form(text: str, dataset: str, key: str = "", columns=None) -> str:
+def render_form(
+    text: str, dataset: str, key: str = "", columns=None,
+    column_values=None, column_types=None,
+) -> str:
     """The add/edit calc form. Prefilled from the existing calc when
-    `key` names one. `columns` populates the filter builder's column dropdowns."""
+    `key` names one. `columns` populates the filter builder's column dropdowns;
+    `column_values(column)` its value pickers, and `column_types` its type
+    glyphs and ops (see `ParamContext`)."""
     definition = list_for_dataset(text, dataset).get(key, {}) if key else {}
     kind = "formula" if "agg" not in definition and "formula" in definition else "aggregate"
     datasets = chart_datasets(text)
@@ -349,7 +333,12 @@ def render_form(text: str, dataset: str, key: str = "", columns=None) -> str:
         datasets = [dataset, *datasets]
 
     filters_widget = FilterListParam("filters", "Filters").render(
-        definition.get("filters"), ParamContext(columns=list(columns or []))
+        definition.get("filters"),
+        ParamContext(
+            columns=list(columns or []),
+            column_values=column_values,
+            column_types=column_types or {},
+        ),
     )
 
     heading = "Edit calc" if key else "New calc"

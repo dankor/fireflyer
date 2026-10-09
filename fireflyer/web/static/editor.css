@@ -1,0 +1,423 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --border: #e0e0e0;
+  --text: #20242b;
+  --muted: #5e6975;
+  --accent: #20a7c9;
+  --accent-hover: #1a8aa6;
+  --error: #e04355;
+}
+/* Editor chrome dark palette. The topbar toggle sets `data-ff-theme` on
+   <html>; that same attribute also themes the dashboard preview and every
+   chart inside it (their CSS keys off any ancestor). "auto" (no attribute)
+   follows the OS, but an explicit "light" opts back out of a dark OS. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-ff-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f1620;
+    --panel: #1b2635;
+    --border: #2c384a;
+    --text: #e6e8ec;
+    --muted: #a3adbd;
+    --accent: #20a7c9;
+    --accent-hover: #48c4e0;
+    --error: #e04355;
+  }
+}
+:root[data-ff-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1620;
+  --panel: #1b2635;
+  --border: #2c384a;
+  --text: #e6e8ec;
+  --muted: #a3adbd;
+  --accent: #20a7c9;
+  --accent-hover: #48c4e0;
+  --error: #e04355;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  color: var(--text); background: var(--bg); }
+.topbar {
+  position: relative; height: 44px; display: flex; align-items: center;
+  justify-content: space-between;
+  padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: 14px; }
+/* Dot setting the nav group off from the dashboard name (paths mode). */
+.topbar .ff-sep { color: var(--muted); }
+/* Dashboard title in the left group, after the back button.
+   Click-to-rename: editable in place; capped width with ellipsis so a long
+   name doesn't push the right group (grows to full text while focused). */
+.topbar .ff-dash-name { font-size: 14px; font-weight: 600; color: var(--text);
+  white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis;
+  padding: 3px 8px; border-radius: 4px; cursor: text; outline: none; }
+.topbar .ff-dash-name:hover { background: var(--bg); }
+.topbar .ff-dash-name:focus { background: var(--bg); overflow: visible; max-width: none;
+  box-shadow: 0 0 0 2px var(--accent); }
+/* 3-segment icon theme switch: Auto (A) / Light (sun) / Dark (moon). */
+.topbar .ff-theme { display: inline-flex; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; }
+.topbar .ff-theme button { background: var(--panel); color: var(--muted); border: 0;
+  border-left: 1px solid var(--border); padding: 5px 8px; cursor: pointer;
+  display: inline-flex; align-items: center; }
+.topbar .ff-theme button:first-child { border-left: 0; }
+.topbar .ff-theme button svg { width: 16px; height: 16px; display: block; }
+.topbar .ff-theme button:hover { background: var(--bg); color: var(--text); }
+.topbar .ff-theme button.active { background: var(--accent); color: #fff; }
+.topbar .toggle {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  padding: 5px 12px; border-radius: 4px; font-size: 12px; cursor: pointer;
+}
+.topbar .toggle:hover { background: var(--bg); }
+.topbar .run {
+  background: var(--accent); color: #fff; border: 0; padding: 6px 14px;
+  border-radius: 4px; font-size: 13px; font-weight: 500; cursor: pointer;
+}
+.topbar .run:hover { background: var(--accent-hover); }
+.topbar .run:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Output pane: refresh overlay shown when the YAML is edited but not re-run. */
+.pane.output { position: relative; }
+/* Greyed as a "stale" cue, but still interactive — the resize/move/edit
+   handlers read the live textarea and re-render on release, so acting on a
+   stale preview stays consistent (and blocking it broke vertical resize). */
+.pane.output.stale .pane-body { opacity: 0.55; filter: grayscale(0.35);
+  transition: opacity 0.12s; }
+/* Centered in the output pane (both axes) and sized responsively via clamp,
+   so it stays a big, obvious target at any pane width. */
+.ff-refresh { display: none; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%); z-index: 6; align-items: center; gap: 10px;
+  background: var(--accent); color: #fff; border: 0;
+  padding: clamp(10px, 1.6vw, 18px) clamp(20px, 2.6vw, 34px);
+  border-radius: 10px; font-size: clamp(15px, 1.4vw, 20px); font-weight: 600;
+  cursor: pointer; white-space: nowrap; max-width: calc(100% - 32px);
+  box-shadow: 0 8px 26px rgba(0,0,0,0.32); transition: background 0.12s, transform 0.08s; }
+.ff-refresh:hover { background: var(--accent-hover); }
+.ff-refresh:active { transform: translate(-50%, -50%) scale(0.97); }
+.pane.output.stale .ff-refresh { display: inline-flex; }
+/* Documentation overlay — covers the output pane; a chart reference from each
+   chart's spec.md. z-index clears the dashboard content (sticky tab bar z:10,
+   up to z:20) and the refresh overlay, but stays under modals (z:50). */
+/* The shared panel shell: a titled, closable column. Positioning comes from
+   `.ff-panel` so the same shell works for the YAML, chat, docs and calcs. */
+.ff-docs { background: var(--panel); display: flex; flex-direction: column; }
+.ff-docs[hidden] { display: none; }
+/* Every panel sits *beside* the dashboard, never over it — you are changing
+   or reading about the dashboard while looking at it. */
+.ff-panel { border-right: 1px solid var(--border); min-width: 0; }
+/* The split exists only while a panel is open; otherwise the dashboard has
+   the window to itself. Keyed off one class rather than each mode, so adding
+   a mode cannot leave a stale column behind. */
+.layout.panel-open {
+  display: grid;
+  /* `--panel-w` is the dragged width, restored from the last session. */
+  grid-template-columns: var(--panel-w, 38vw) 5px 1fr;
+  grid-template-rows: 100%;
+}
+/* Drag handle between the panel and the dashboard. Only a split has one. */
+.ff-split { display: none; }
+.layout.panel-open .ff-split {
+  display: block; grid-area: 1 / 2; background: var(--border); cursor: col-resize;
+}
+.layout.panel-open .ff-split:hover, .ff-split.dragging { background: var(--accent); }
+/* Row *and* column, on both items. The panels follow the output pane in the
+   DOM and grid auto-placement never goes backwards, so a column alone put the
+   panel in a row of its own below the dashboard. */
+.layout.panel-open .ff-panel:not([hidden]) { grid-area: 1 / 1; }
+.layout.panel-open #output-pane { grid-area: 1 / 3; }
+.ff-docs-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 24px; }
+.ff-docs-chart { border-bottom: 1px solid var(--border); }
+.ff-docs-chart > summary { cursor: pointer; font-weight: 600; font-size: 14px;
+  padding: 10px 2px; text-transform: capitalize; list-style: none; }
+.ff-docs-chart > summary::-webkit-details-marker { display: none; }
+.ff-docs-chart > summary::before { content: "\25B8"; color: var(--muted);
+  margin-right: 8px; display: inline-block; transition: transform 0.1s; }
+.ff-docs-chart[open] > summary::before { transform: rotate(90deg); }
+.ff-docs-md { font-size: 13px; line-height: 1.55; color: var(--text);
+  padding: 0 4px 14px 22px; }
+.ff-docs-md h4 { font-size: 14px; margin: 14px 0 4px; }
+.ff-docs-md h5 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin: 14px 0 4px; }
+.ff-docs-md p { margin: 6px 0; }
+.ff-docs-md ul { margin: 4px 0; padding-left: 20px; }
+.ff-docs-md li { margin: 3px 0; }
+.ff-docs-md code { background: var(--bg); padding: 1px 5px; border-radius: 3px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+/* Calcs manager (reuses the .ff-docs overlay shell). */
+.ff-calcs-empty { color: var(--muted); font-size: 13px; padding: 8px 4px; }
+.ff-calcs-ds { margin: 0 0 14px; }
+.ff-calcs-ds-head { display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--border); padding: 6px 2px; }
+.ff-calcs-ds-name { font-weight: 600; font-size: 13px; }
+/* Icon buttons: a square target with the glyph centred, rather than a text
+   pill. Meaning lives in the title/aria-label. */
+.ff-calcs-add, .ff-calcs-edit, .ff-calcs-del,
+.ff-calcs-cancel, .ff-calcs-save {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0;
+  background: none; border: 1px solid var(--border); color: var(--text);
+  border-radius: 5px; cursor: pointer; }
+.ff-calcs-add svg, .ff-calcs-edit svg, .ff-calcs-del svg,
+.ff-calcs-cancel svg, .ff-calcs-save svg { width: 14px; height: 14px; display: block; }
+.ff-calcs-add:hover, .ff-calcs-edit:hover, .ff-calcs-cancel:hover { background: var(--bg); }
+.ff-calcs-del:hover { color: var(--error); border-color: var(--error); }
+/* Save is the affirmative action, so it keeps the accent the text button had. */
+.ff-calcs-save { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ff-calcs-save:hover { filter: brightness(1.08); }
+.ff-calcs-row { display: flex; align-items: center; gap: 10px; padding: 6px 2px;
+  border-bottom: 1px solid var(--border); }
+.ff-calcs-key { font-weight: 600; font-size: 13px; min-width: 120px; }
+.ff-calcs-sum { flex: 1; color: var(--muted); font-size: 12px;
+  font-family: ui-monospace, Menlo, monospace; }
+.ff-calcs-acts { display: flex; gap: 6px; }
+.ff-calcs-form { max-width: 520px; }
+.ff-calcs-form-head { font-weight: 600; font-size: 14px; margin: 4px 0 12px; }
+.ff-calcs-form-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.ff-calcs-form[data-kind="formula"] [data-param-hide] { display: none; }
+/* Transient error toast (bottom-centre). */
+.ff-toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  background: var(--error); color: #fff; padding: 9px 16px; border-radius: 6px;
+  font-size: 13px; z-index: 50; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
+/* The dashboard is the page: one column, full width, whatever the mode. The
+   YAML, chat, docs and calcs are panels over it rather than a second column,
+   so a dashboard is never squeezed into half a screen to be looked at. */
+.layout { position: relative; height: calc(100vh - 44px); background: var(--panel); }
+/* On-canvas editing belongs to edit mode alone. Everywhere else the handles
+   would rewrite YAML you cannot see. The JS bails too; this removes the
+   affordance so nothing invites the click. */
+.layout:not(.mode-edit) .fireflyer-resize-handle,
+.layout:not(.mode-edit) .fireflyer-resize-col-handle,
+.layout:not(.mode-edit) .fireflyer-chart-tools,
+.layout:not(.mode-edit) .fireflyer-add-row,
+.layout:not(.mode-edit) .fireflyer-add-cell { display: none; }
+.pane { display: flex; flex-direction: column; background: var(--panel); min-height: 0; height: 100%; }
+.pane-body { flex: 1; overflow: auto; min-height: 0; }
+#code {
+  width: 100%; height: 100%; border: 0; outline: 0; resize: none;
+  padding: 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.5; color: var(--text); background: var(--panel);
+  tab-size: 2;
+}
+#output { padding: 16px; }
+/* The output pane scrolls vertically only. Filter-indicator tooltips escape
+   their cells (cells are overflow:visible) and, while hidden, still reserve
+   layout — without this they'd extend the panel's scroll width and surface a
+   spurious horizontal scrollbar. Clipping overflow-x is harmless: content-
+   sized tooltips stay within their cells. overflow-y stays auto from the base
+   rule, so tall dashboards still scroll. */
+.pane-body:has(#output) { overflow-x: hidden; }
+pre.error { color: var(--error); white-space: pre-wrap; font-size: 12px; }
+/* AI assistant — a left-pane overlay (reuses the .ff-docs shell), toggled
+   from the topbar like the docs/calcs overlays on the right. */
+.pane.editor { position: relative; }
+#ff-chat .chat-log {
+  display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
+}
+.chat-msg {
+  font-size: 13px; line-height: 1.45; white-space: pre-wrap;
+  padding: 8px 10px; border-radius: 6px; max-width: 90%;
+}
+.chat-msg.user { background: var(--bg); align-self: flex-end; }
+.chat-msg.assistant { background: rgba(32,167,201,0.12); align-self: flex-start; }
+.chat-msg.error { background: rgba(224,67,85,0.12); color: var(--error); align-self: flex-start; }
+.chat-input {
+  flex: none; display: flex; gap: 8px; padding: 10px 14px; align-items: flex-end;
+  border-top: 1px solid var(--border); background: var(--panel);
+}
+#chat-text {
+  flex: 1; resize: vertical; height: 96px; min-height: 46px; max-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 4px; padding: 8px; font-family: inherit; font-size: 13px;
+  outline: 0; background: var(--bg); color: var(--text);
+}
+#chat-text:focus { border-color: var(--accent); }
+.chat-send {
+  background: var(--accent); color: #fff; border: 0; padding: 0 14px;
+  border-radius: 4px; font-size: 13px; font-weight: 500; cursor: pointer;
+}
+.chat-send:disabled { opacity: 0.6; cursor: not-allowed; }
+.chat-notice { padding: 12px 14px; font-size: 12px; color: var(--muted); }
+.chat-notice code { background: var(--bg); padding: 1px 4px; border-radius: 3px; }
+/* Edit-chart modal (editor-only). */
+.ff-modal-overlay {
+  position: fixed; inset: 0; z-index: 50; background: rgba(20,36,43,0.45);
+  display: none; align-items: flex-start; justify-content: center;
+  padding: 48px 16px; overflow: auto;
+}
+.ff-modal-overlay.open { display: flex; }
+.ff-modal {
+  background: var(--panel); border-radius: 8px; width: 440px; max-width: 100%;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25); overflow: hidden;
+}
+.ff-modal-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.ff-modal-title { font-size: 14px; }
+.ff-modal-body {
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 12px;
+  max-height: 60vh; overflow: auto;
+}
+.ff-field { display: flex; flex-direction: column; gap: 4px; }
+.ff-field-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.ff-input {
+  border: 1px solid var(--border); border-radius: 4px; padding: 7px 9px;
+  font-size: 13px; font-family: inherit; outline: 0;
+  background: var(--bg); color: var(--text);
+}
+.ff-input:focus { border-color: var(--accent); }
+/* Chart-type and column pickers: customizable selects, so each option can show
+   the chart's icon or the column's type glyph. Where `base-select` is unknown
+   the browser ignores all of this and draws its native control with plain-text
+   options. */
+.ff-type-select, .ff-type-select::picker(select),
+.ff-column-select, .ff-column-select::picker(select) { appearance: base-select; }
+.ff-type-select::picker(select), .ff-column-select::picker(select) {
+  border: 1px solid var(--border); border-radius: 4px; padding: 4px;
+  background: var(--panel); color: var(--text);
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.ff-type-select > button, .ff-type-select option,
+.ff-column-select > button, .ff-column-select option {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.ff-type-select option, .ff-column-select option {
+  padding: 6px 8px; border-radius: 3px; font-size: 13px;
+}
+.ff-column-select option { min-height: 26px; }
+.ff-type-select option:hover, .ff-type-select option:focus-visible,
+.ff-column-select option:hover, .ff-column-select option:focus-visible { background: var(--bg); }
+.ff-type-select option:checked, .ff-column-select option:checked { color: var(--accent); }
+.ff-type-select option::checkmark, .ff-column-select option::checkmark { display: none; }
+.ff-column-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ff-type-select svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+.ff-type-select option:checked svg { color: var(--accent); }
+/* A column's type, beside its name. */
+.ff-type-glyph { display: inline-flex; flex: none; color: var(--muted); }
+.ff-type-glyph svg { width: 14px; height: 14px; }
+/* The pickers' own closed-state button: the select around it is the control. */
+.ff-type-select > button, .ff-column-select > button {
+  flex: 1 1 auto; padding: 0; border: 0; background: none; color: inherit; font: inherit;
+}
+.ff-placeholder { color: var(--muted); }
+/* A filter row's op and values mean nothing until a column is picked. */
+.ff-filter-row .ff-input:disabled { opacity: 0.45; cursor: not-allowed; }
+.ff-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.ff-filters { display: flex; flex-direction: column; gap: 6px; }
+.ff-filter-row {
+  display: grid; grid-template-columns: 1fr 84px 1.4fr auto; gap: 6px;
+  align-items: center;
+}
+/* The shared fields (`params.filter_fields`) come wrapped so a row can swap
+   them in one piece; `contents` keeps them as the row's own grid items. */
+.ff-filter-fields { display: contents; }
+/* `in` / `not in` with the column's values in hand: tick, don't type. */
+.ff-filter-choices {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 140px; overflow: auto; padding: 4px 6px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg);
+}
+.ff-filter-choice { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.ff-filter-choice span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The value picker: a search box (long lists only) over the checkboxes. */
+.ff-filter-picker { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ff-filter-search { width: 100%; box-sizing: border-box; }
+.ff-filter-choices-note { color: var(--muted); font-size: 12px; font-style: italic; padding: 2px 0; }
+/* `between` on a date column: one field showing the range (`date_range.html`).
+   The modal body scrolls, which would clip a floating popover, so here the
+   calendar opens inline under the field — one month, to fit the column.
+   Scoped to the builder's rows: this stylesheet is on the editor page, and the
+   dashboard's own filter panel there draws its two-month popover itself. */
+.ff-filter-row .ff-range { min-width: 0; }
+.ff-filter-row .ff-range-field {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  list-style: none; cursor: pointer; white-space: nowrap;
+}
+.ff-filter-row .ff-range-field::-webkit-details-marker { display: none; }
+.ff-filter-row .ff-range-label { overflow: hidden; text-overflow: ellipsis; }
+.ff-filter-row .ff-range[open] > .ff-range-field { border-color: var(--accent); }
+.ff-filter-row .ff-cal { margin-top: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.ff-filter-row .ff-cal-month + .ff-cal-month { display: none; }
+.ff-filter-row .ff-cal-inputs { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 6px; }
+.ff-filter-row .ff-cal-typed { display: flex; flex-direction: column; flex: 1 1 0; gap: 2px; min-width: 0; }
+.ff-filter-row .ff-cal-typed span { font-size: 11px; color: var(--muted); }
+.ff-filter-row .ff-cal-typed .ff-input { width: 100%; box-sizing: border-box; padding: 4px 6px; font-variant-numeric: tabular-nums; }
+.ff-filter-row .ff-cal-dash { padding-bottom: 6px; color: var(--muted); }
+.ff-filter-row .ff-cal-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.ff-filter-row .ff-cal-hint { font-size: 11px; color: var(--muted); text-align: center; }
+.ff-filter-row .ff-cal-nav {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+  padding: 0; border: 0; border-radius: 50%; background: none; color: var(--text); cursor: pointer;
+}
+.ff-filter-row .ff-cal-nav:hover { background: var(--bg); }
+.ff-filter-row .ff-cal-title { margin-bottom: 4px; text-align: center; font-weight: 600; font-size: 12px; }
+.ff-filter-row .ff-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); row-gap: 2px; }
+.ff-filter-row .ff-cal-wd { text-align: center; font-size: 10px; color: var(--muted); }
+.ff-filter-row .ff-cal-day {
+  height: 26px; padding: 0; border: 0; border-radius: 50%; background: none;
+  color: var(--text); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.ff-filter-row .ff-cal-day:hover { box-shadow: inset 0 0 0 1px var(--text); }
+.ff-filter-row .ff-cal-day.is-today { text-decoration: underline; text-underline-offset: 3px; }
+.ff-filter-row .ff-cal-day.in-range { border-radius: 0; background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.ff-filter-row .ff-cal-day.is-start, .ff-filter-row .ff-cal-day.is-end { background: var(--accent); color: #fff; font-weight: 600; }
+.ff-filter-row .ff-range.is-picking .is-start ~ .ff-cal-day:has(~ .ff-cal-day:hover) {
+  border-radius: 0; background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ff-filter-row { align-items: start; }
+.ff-filter-del {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--muted);
+  cursor: pointer; padding: 0 4px;
+}
+.ff-filter-del svg { width: 14px; height: 14px; display: block; }
+.ff-filter-del:hover { color: var(--error); }
+.ff-filter-add {
+  display: inline-flex; align-items: center; justify-content: center;
+  align-self: flex-start; width: 26px; height: 26px; padding: 0;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; cursor: pointer; color: var(--text);
+}
+.ff-filter-add svg { width: 14px; height: 14px; display: block; }
+.ff-modal-error {
+  margin: 0 16px; padding: 8px 10px; background: rgba(224,67,85,0.12); color: var(--error);
+  border-radius: 4px; font-size: 12px;
+}
+.ff-modal-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 16px; border-top: 1px solid var(--border);
+}
+.ff-btn {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  border-radius: 4px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+}
+.ff-btn.ff-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+.ff-btn.ff-danger { background: var(--error); border-color: var(--error); color: #fff; font-weight: 500; }
+.ff-btn:hover { filter: brightness(0.97); }
+.ff-confirm-text { font-size: 13px; line-height: 1.5; margin: 0; }
+/* Popup for the gutter "+" (insert row): chart / header / separator. */
+.ff-addmenu {
+  position: fixed; z-index: 60; min-width: 132px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  display: flex; flex-direction: column;
+}
+.ff-addmenu[hidden] { display: none; }
+.ff-addmenu button {
+  text-align: left; background: transparent; border: 0; border-radius: 4px;
+  padding: 7px 10px; font-size: 13px; color: var(--text); cursor: pointer;
+}
+.ff-addmenu button:hover { background: var(--bg); color: var(--accent); }
+/* Red cancel button overlaying the topbar above the output pane; its left edge
+   tracks the output pane (set in JS) and it only shows in move mode. */
+.ff-move-discard {
+  position: absolute; top: 0; bottom: 0; left: 50%; right: 0; z-index: 30;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--error); color: #fff; border: 0; border-radius: 0;
+  font-size: 14px; font-weight: 500; line-height: 1; cursor: pointer;
+}
+.ff-move-discard[hidden] { display: none; }
+.ff-move-discard:hover { filter: brightness(0.93); }

@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Global quick filters.** Every chart's filter panel ends in a **+** row —
+  column, operator, values — that adds a filter applied across the whole
+  dashboard (to every chart whose data has the column). It is viewer state, like
+  a crossfilter: never written to the YAML. Listed as **Global** in the panel,
+  with an edit (pencil) and a remove button.
+- **Filter state in the URL.** All filters in play — clicks and global filters —
+  ride in one compressed `?f=` parameter, so a reload or a shared link reopens
+  the same view, and a YAML edit in the editor keeps them.
+- **Remove any filter from the panel.** Every row but a declared one has a ✕;
+  removing a click filter clears every click behind the row. The panel stays
+  open through the change.
+- **Value picker with search.** `in` / `not in` list the column's distinct values
+  as checkboxes (sorted by the column's own type), with a search box once there
+  are more than 10 — server-side, so high-cardinality columns are pickable too.
+  Ticked values stay pinned whatever the search.
+- **Date-range picker.** `between` on a date column is one field opening a
+  two-month calendar: click the first and last day, or type Start / End. The last
+  day is inclusive, and whole-day ranges read that way in the panel.
+- **Chart and column type icons.** Each chart folder ships a required `icon.svg`
+  (shown in the chart-type picker and as a filter's source); each column shows
+  its type (number / text / date / boolean) in pickers and filter rows.
+
+### Changed
+
+- **Operators follow the column type**: `in` / `not in` everywhere, `between`
+  only on dates. Op and values stay disabled until a column is picked, and the
+  panel's **+** shows only once the row is complete.
+- **One filter-panel template** (`filter_panel.html`) serves both render paths;
+  only one panel is open at a time, and it stays on screen (anchor positioning).
+- **The chart builder and calcs manager share the panel's filter fields** —
+  same pickers, same parser.
+- **The editor's CSS, JS and markup are files** (`web/editor.html`,
+  `web/static/`), served from `/static` and read per request, so editing them
+  needs no restart.
+
+### Fixed
+
+- A column calc sharing a raw column's name was listed twice in column pickers.
+
 ## [0.12.0] - 2026-08-25
 
 ### Changed

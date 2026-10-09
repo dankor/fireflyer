@@ -89,8 +89,9 @@ def test_the_demo_folder_is_a_usable_path():
     from pathlib import Path
 
     demo = Path(__file__).resolve().parent.parent / "demo"
-    rows = PathDashboardStore(str(demo)).list()
-    assert [r.name for r in rows] == ["Orders overview"]
+    # `in`, not `==`: this is a live path, so anything you create in the browser
+    # lands here too. The starter must be present, not alone.
+    assert "Orders overview" in [r.name for r in PathDashboardStore(str(demo)).list()]
 
 
 def test_the_demo_dashboard_renders_with_no_store():
@@ -102,7 +103,8 @@ def test_the_demo_dashboard_renders_with_no_store():
 
     demo = Path(__file__).resolve().parent.parent / "demo"
     store = PathDashboardStore(str(demo))
-    dashboard = ff.Dashboard.from_yaml(store.get(store.list()[0].id).yaml)
+    # By id, not by position — other dashboards may sit alongside it.
+    dashboard = ff.Dashboard.from_yaml(store.get("orders-overview").yaml)
     assert len(dashboard.chart_configs) > 5
     for cid in dashboard.chart_configs:
         assert "chart-error" not in dashboard.render_cell(cid, cf_tokens=[]), cid

@@ -16,12 +16,16 @@ import re
 from dataclasses import MISSING, fields as dataclass_fields
 from html import escape
 
+import polars as pl
 import yaml
 
 from fireflyer import calcs as calcs_mod
 from fireflyer import inline_data
 from fireflyer.dashboard import CHART_TYPES, DashboardError
-from fireflyer.params import ParamContext
+from fireflyer.params import (
+    PICKABLE_OPS, ParamContext, ValueChoices, column_type, filter_fields,
+    filter_ops, value_list,
+)
 from fireflyer.scan import scan
 
 
@@ -69,20 +73,180 @@ def _context(config: dict, cfg: dict, resolve=None) -> ParamContext:
     # are values, so they're what the calc dropdown offers.
     dataset = cfg.get("dataset")
     column_keys, value_keys = _calc_keys(config, dataset)
-    # Same precedence the dashboard uses, so the dropdown lists the columns the
-    # chart will actually read — a chart on an inline dataset would otherwise
-    # offer nothing, since the store has never heard of it.
-    try:
-        resolve = inline_data.resolver(
-            inline_data.parse_block(config.get("datasets")), resolve
-        )
-    except inline_data.InlineDataError:
-        pass                                  # a broken block reports itself at render
     return ParamContext(
         datasets={},
         dataset_id=dataset,
-        columns=_columns(dataset, resolve) + column_keys,
+        columns=_column_list(config, dataset, column_keys, resolve),
         calcs=value_keys,
+        column_values=lambda column: _distinct(config, dataset, column, resolve),
+        column_types=_types(config, dataset, resolve),
+    )
+
+
+def _column_list(config: dict, dataset, column_keys, resolve=None) -> list[str]:
+    """The dataset's columns, then its column calcs — each name once. A calc may
+    share a raw column's name (to relabel it), and listing it twice offered the
+    same column twice."""
+    names = _columns(dataset, _with_inline(config, resolve)) + list(column_keys)
+    return list(dict.fromkeys(names))
+
+
+def _with_inline(config: dict, resolve=None):
+    """`resolve` with the dashboard's inline datasets in front — the precedence
+    the dashboard itself uses, so the editor reads what the chart will read. A
+    chart on an inline dataset would otherwise offer nothing, since the store
+    has never heard of it."""
+    try:
+        return inline_data.resolver(
+            inline_data.parse_block(config.get("datasets")), resolve
+        )
+    except inline_data.InlineDataError:
+        return resolve                        # a broken block reports itself at render
+
+
+def _scan(config: dict, dataset, resolve=None):
+    """The dataset as the chart reads it: inline data first, column calcs
+    attached. A calc block that doesn't parse is left off rather than failing
+    the read — it reports itself at render."""
+    calcs = None
+    block = config.get("calcs")
+    defs = block.get(dataset) if isinstance(block, dict) else None
+    if isinstance(defs, dict):
+        try:
+            calcs = calcs_mod.CalcSet.from_defs(defs)
+        except calcs_mod.CalcError:
+            calcs = None
+    return scan(dataset, _with_inline(config, resolve), calcs)
+
+
+def _types(config: dict, dataset, resolve=None) -> dict[str, str]:
+    """Every column's `column_type` — column calcs included, so a `str2dt()`
+    calc is a date. {} when the schema can't be read. Only the schema is read."""
+    if not dataset:
+        return {}
+    try:
+        schema = _scan(config, dataset, resolve).collect_schema()
+    except Exception:
+        return {}
+    return {name: column_type(dtype) for name, dtype in schema.items()}
+
+
+# A value picker lists at most this many values at once. A column with more
+# (ids, cities, customers) is still pickable: the search box narrows it, so
+# only the first page of what matches is ever read out.
+VALUE_LIST_LIMIT = 100
+
+
+def _as_text(column: str):
+    """A column as a filter compares it — text (`filters.predicates` casts both
+    sides to strings)."""
+    return pl.col(column).cast(pl.String, strict=False).alias("value")
+
+
+def _distinct(config: dict, dataset, column: str, resolve=None, query="") -> ValueChoices | None:
+    """The first `VALUE_LIST_LIMIT` of `column`'s distinct values containing
+    `query` (any case), as text — and whether there are more. Sorted by the
+    column's own type, so numbers and dates run in order (as text `10` sorts
+    before `2`); matched as text, since that's what the viewer typed. None when
+    the column can't be read."""
+    if not dataset or not column:
+        return None
+    try:
+        values = (
+            _scan(config, dataset, resolve)
+            .select(pl.col(column).alias("raw"))
+            .drop_nulls()
+            .unique()
+            .with_columns(pl.col("raw").cast(pl.String, strict=False).alias("value"))
+        )
+        if query:
+            values = values.filter(
+                pl.col("value").str.to_lowercase().str.contains(query.lower(), literal=True)
+            )
+        found = values.sort("raw").head(VALUE_LIST_LIMIT + 1).collect()["value"].to_list()
+    except Exception:
+        return None
+    return ValueChoices(found[:VALUE_LIST_LIMIT], more=len(found) > VALUE_LIST_LIMIT)
+
+
+def _latest(config: dict, dataset, column: str, resolve=None) -> str:
+    """The latest day in a date column (ISO), "" when it can't be read — where
+    a fresh range picker opens, rather than on a today the data may not reach."""
+    try:
+        latest = _scan(config, dataset, resolve).select(pl.col(column).max()).collect().item()
+    except Exception:
+        return ""
+    return str(latest)[:10] if latest is not None else ""
+
+
+def _present(config: dict, dataset, column: str, values, resolve=None) -> list[str]:
+    """Those of `values` that `column` really has — asked of the data, since a
+    value can sit beyond the first page the picker lists."""
+    if not values:
+        return []
+    try:
+        found = set(
+            _scan(config, dataset, resolve).select(_as_text(column))
+            .filter(pl.col("value").is_in([str(v) for v in values]))
+            .unique().collect()["value"].to_list()
+        )
+    except Exception:
+        return list(values)
+    return [v for v in values if v in found]
+
+
+def _config_or_empty(text: str) -> dict:
+    try:
+        return _load(text)
+    except ConfigEditError:
+        return {}
+
+
+def column_values(text: str, dataset, column: str, resolve=None) -> ValueChoices | None:
+    """`_distinct` from YAML text — for callers outside this module that hold
+    the document, not its parsed config (the calcs manager)."""
+    return _distinct(_config_or_empty(text), dataset, column, resolve)
+
+
+def column_types(text: str, dataset, resolve=None) -> dict[str, str]:
+    """`_types` from YAML text, likewise."""
+    return _types(_config_or_empty(text), dataset, resolve)
+
+
+def filter_values_for(
+    text: str, dataset, column: str, query="", selected=(), resolve=None
+) -> str:
+    """A filter row's value list for a search (the `/filter/values` route): the
+    ticked values first, then what matches `query`."""
+    choices = _distinct(_config_or_empty(text), dataset, column, resolve, query)
+    return value_list(selected, choices or ValueChoices([]), query)
+
+
+def filter_fields_for(
+    text: str, dataset, column="", op="in", values=(), resolve=None, live=False
+) -> str:
+    """A filter row's fields, re-rendered after its column or op changed (the
+    `/filter/fields` route, for both the chart builder and the dashboard's
+    filter panel). Ticked values that the new column doesn't have are dropped:
+    they belonged to the column you just switched away from. `values` arrive
+    as the model stores them — a picked date range already half-open."""
+    config = _config_or_empty(text)
+    column_keys, _ = _calc_keys(config, dataset)
+    columns = _column_list(config, dataset, column_keys, resolve)
+    types = _types(config, dataset, resolve)
+    kind = types.get(column)
+    # A switch to a column that can't take the op (a range on text) falls back
+    # to `in` rather than offering an op the new column doesn't have.
+    allowed = [value for value, _ in filter_ops(kind, column)]
+    if op not in allowed:
+        op, values = "in", []
+    choices = _distinct(config, dataset, column, resolve) if op in PICKABLE_OPS else None
+    if choices is not None:
+        values = _present(config, dataset, column, values, resolve)
+    anchor = _latest(config, dataset, column, resolve) if kind == "date" else ""
+    return filter_fields(
+        columns, column, op, values, choices,
+        live=dataset if live else None, types=types, anchor=anchor,
     )
 
 
@@ -104,16 +268,24 @@ def _calc_keys(config: dict, dataset) -> tuple[list[str], list[str]]:
 
 def _type_select(current: str) -> str:
     """The chart-type dropdown. Changing it re-fetches the form (`type_override`)
-    so the fields match the new type's PARAMS."""
+    so the fields match the new type's PARAMS.
+
+    Each option carries the chart's icon. That needs a customizable select
+    (`appearance: base-select`, styled in the editor CSS): the `<button>` +
+    `<selectedcontent>` mirror the picked option, icon included, into the closed
+    control. A browser without it drops both, and the markup inside each option,
+    and shows the plain text list — the same choice, just without icons."""
     opts = "".join(
         f'<option value="{escape(t, quote=True)}"'
-        f'{" selected" if t == current else ""}>{escape(t)}</option>'
-        for t in CHART_TYPES
+        f'{" selected" if t == current else ""}>'
+        f'{cls.ICON}<span>{escape(t)}</span></option>'
+        for t, cls in CHART_TYPES.items()
     )
     return (
         '<div class="ff-field" data-param="type" data-kind="type">'
         '<label class="ff-field-label">Chart type</label>'
-        f'<select class="ff-input" name="type" data-type-select>{opts}</select>'
+        '<select class="ff-input ff-type-select" name="type" data-type-select>'
+        f'<button><selectedcontent></selectedcontent></button>{opts}</select>'
         '</div>'
     )
 

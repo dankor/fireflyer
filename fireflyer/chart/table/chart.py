@@ -139,6 +139,10 @@ class Table:
     # up as columns, and `measures` keys resolve against it.
     _calcs = None
 
+    # Every chart type ships an icon: it names the chart wherever the type is
+    # shown (the filter panel's source column, the editor's type picker).
+    ICON = (_DIR / "icon.svg").read_text().strip()
+
     # Editor modal schema — see fireflyer/params.py and the "chart params" skill.
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
