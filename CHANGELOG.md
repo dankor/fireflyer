@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-10
+
+### Changed
+
+- **The tab icon is redrawn for its size.** At 16px the logo's fine, graduated
+  dots blurred into a smudge, so the favicon is now its own `favicon.svg`: the
+  same three rising columns with fewer, larger dots, no background, and colours
+  that follow the browser theme — gold with a glow on dark tabs, deeper amber on
+  light ones. `logo.svg` is unchanged.
+- **The social preview uses the bolder favicon design**, which stays legible at
+  the small sizes link cards are shown at.
+
 ## [0.14.0] - 2026-10-09
 
 ### Added
@@ -856,7 +868,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/dankor/fireflyer/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/dankor/fireflyer/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/dankor/fireflyer/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/dankor/fireflyer/compare/v0.11.0...v0.12.0
