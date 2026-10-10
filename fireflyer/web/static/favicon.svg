@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Fireflyer">
+  <!-- The logo redrawn for a 16px tab: the same three columns of glowing dots
+       rising like fireflies, but fewer and larger, so each still lands on whole
+       pixels — the logo's fine, graduated dots blur into a smudge at that size.
+       No background, so it sits on the tab itself; the colours follow the
+       browser's theme: gold with a glow on dark tabs, deeper amber on light
+       ones, where gold would all but vanish. -->
+  <style>
+    .dot { fill: #F5C542; }
+    .f0 { opacity: .35; } .f1 { opacity: .55; } .f2 { opacity: .75; }
+    @media (prefers-color-scheme: light) {
+      .dot { fill: #9A6400; }
+      .glow { display: none; }
+      .f0 { opacity: .4; } .f1 { opacity: .6; } .f2 { opacity: .8; }
+    }
+  </style>
+  <defs>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#F5C542" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#F5C542" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle class="glow" cx="20" cy="76" r="24" fill="url(#glow)"/>
+  <circle class="glow" cx="60" cy="50" r="24" fill="url(#glow)"/>
+  <circle class="glow" cx="100" cy="22" r="24" fill="url(#glow)"/>
+  <circle class="dot f0" cx="20" cy="102" r="10"/>
+  <circle class="dot" cx="20" cy="76" r="13"/>
+  <circle class="dot f0" cx="60" cy="102" r="10"/>
+  <circle class="dot f1" cx="60" cy="76" r="10"/>
+  <circle class="dot" cx="60" cy="50" r="13"/>
+  <circle class="dot f0" cx="100" cy="102" r="10"/>
+  <circle class="dot f1" cx="100" cy="76" r="10"/>
+  <circle class="dot f2" cx="100" cy="50" r="10"/>
+  <circle class="dot" cx="100" cy="22" r="13"/>
+</svg>

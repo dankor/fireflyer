@@ -30,6 +30,6 @@ def script(name: str) -> str:
 
 
 def favicons() -> str:
-    """The tab icon every page links: the logo itself. One SVG, by choice — every
-    current browser takes one; no PNG copies to keep in step with it."""
-    return f'<link rel="icon" type="image/svg+xml" href="{_url("logo.svg")}">'
+    """The tab icon every page links: `favicon.svg`, the logo redrawn to read
+    at 16px (see its comment). SVG only — every current browser takes one."""
+    return f'<link rel="icon" type="image/svg+xml" href="{_url("favicon.svg")}">'
