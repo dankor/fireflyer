@@ -527,6 +527,9 @@ class Bar:
     # the opposite of the convention some chart libraries use.
     direction: str = "horizontal"
     filters: list = field(default_factory=list)
+    # What the chart shows, in a sentence; read in the dashboard's filter panel.
+    # The chart itself doesn't draw it.
+    description: str = ""
 
     _resolve = None   # name -> (uri, storage_options); not a dataclass field
     _calcs = None  # CalcSet for this chart's dataset; set by the dashboard
@@ -539,6 +542,7 @@ class Bar:
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
+        TextParam("description", "Description"),
         ColumnParam("x", "X (bar groups)"),
         ColumnParam("y", "Y (stack / breakdown)", optional=True),
         CalcParam("calc", "Calc"),

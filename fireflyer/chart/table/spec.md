@@ -104,6 +104,8 @@ Card, header, row stripes, hover highlight, borders, search input, and paginatio
 ## Parameters
 - `dataset: str` — path to the CSV.
 - `title: str` — chart title.
+- `description: str = ""` — optional; what the chart shows, in a sentence. Not drawn on the
+  chart: the dashboard shows it at the top of the chart's filter panel.
 - `columns: list = []` — columns to show, in order. With `measures` set these
   are the **grouping keys**. Empty means every column (raw mode) or no grouping
   at all — one totals row (grouped mode). A column calc's key works here, since
@@ -133,7 +135,7 @@ Card, header, row stripes, hover highlight, borders, search input, and paginatio
 - When `to_html()` is invoked outside the Fireflyer web app, the controls render but htmx is absent, so they are inert. Acceptable for MVP.
 
 ## Editor params
-Edit-modal schema (`Table.PARAMS`): dataset (dropdown), title (text), columns
+Edit-modal schema (`Table.PARAMS`): dataset (dropdown), title (text), description (text), columns
 (comma-separated list), measures (comma-separated list), sort (comma-separated
 list), search (checkbox), pagination (number), filters (filter builder). The three
 lists use `ListParam` — a text field rather than a multi-select, because all three

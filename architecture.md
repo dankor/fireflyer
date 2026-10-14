@@ -268,11 +268,12 @@ The Python API (`ff.chart.table(...)`, `ff.chart.pie(...)`) stays for ad-hoc ren
 
 ## File shape
 
-A dashboard YAML has three required top-level sections, plus two optional
-blocks — `calcs` and `datasets`:
+A dashboard YAML has three required top-level sections, plus optional
+`description`, `calcs` and `datasets`:
 
 ```yaml
 name: <string>
+description: <string>   # optional
 
 calcs:              # optional; keyed by dataset name (see Calcs)
   <dataset>:
@@ -294,9 +295,15 @@ datasets:           # optional; inline CSV (see Datasets). Kept last by
 * `name` — required. A short human-readable title for the whole dashboard,
   part of the definition. `Dashboard.from_yaml` rejects a missing or empty
   `name`; **Portal mode** lists dashboards by it.
+* `description` — optional text: what the dashboard is for. Part of the
+  definition, like `name` (stored in the YAML, never a database column). The
+  editor shows it when you click the name — editable, except read-only in view
+  mode — and the dashboards list as an ⓘ tooltip. Anything but text is rejected.
 * `calcs` — optional. Named aggregations a chart references by key (see
   **Calcs**).
-* `charts` — mapping of chart id → chart config.
+* `charts` — mapping of chart id → chart config. Any chart may carry an
+  optional `description` — what it shows, in a sentence — which the chart
+  doesn't draw: the dashboard shows it at the top of the chart's filter panel.
 * `layout` — the page layout (the layout DSL, below). Either a flat list of
   layout items, or a mapping of tab name → layout list (see **Tabs**).
 * `datasets` — optional. CSV carried in the file itself, keyed by dataset name
@@ -323,6 +330,22 @@ datasets:
     1,paid,42
     2,pending,15
 ```
+
+A dataset that wants a description takes the longer form — a mapping with the
+CSV under `csv` (any other key is rejected, so a typo doesn't vanish silently):
+
+```yaml
+datasets:
+  order_data:
+    description: Last week's orders, one row per order.
+    csv: |
+      id,status,amount
+      1,paid,42
+```
+
+A dataset's description — this, or a managed dataset's from the store — shows
+as an ⓘ beside its name in the datasets list and in every chart's filter panel,
+and in the box that opens when you click its name on its own page.
 
 The first line is the header, the rest ordinary rows. The block holds **CSV and
 nothing else** — no paths, no URIs; a single line is rejected, since it is

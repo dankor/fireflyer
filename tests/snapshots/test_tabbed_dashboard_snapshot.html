@@ -750,6 +750,41 @@ body.fireflyer-resizing-col * {
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
 }
 .fireflyer-filter-ds .ds-name { font-weight: 600; }
+.fireflyer-filter-ds .ds-title { display: flex; align-items: center; gap: 5px; }
+/* The dataset's description: an ⓘ beside its name, a tooltip on hover or
+   keyboard focus — light on the dark panel. The bubble ignores the pointer, so
+   it can't swallow clicks meant for what's under it. */
+.fireflyer-info { position: relative; display: inline-flex; opacity: 0.65; cursor: help; }
+.fireflyer-info:hover, .fireflyer-info:focus-visible { opacity: 1; outline: none; }
+.fireflyer-info::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: -8px;
+  z-index: 3;
+  width: max-content;
+  max-width: 280px;
+  padding: 6px 9px;
+  border-radius: 5px;
+  background: #fff;
+  color: #20242b;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+  box-shadow: 0 6px 18px var(--ff-shadow-strong);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.fireflyer-info:hover::after, .fireflyer-info:focus-visible::after { opacity: 1; }
+/* The chart's own description, first thing in its panel. */
+.fireflyer-filter-about {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  line-height: 1.4;
+}
 .fireflyer-filter-ds .ds-updated {
   font-size: 10px;
   opacity: 0.6;
@@ -1155,7 +1190,7 @@ layout:
   <summary aria-label="0 active filters">0</summary>
   <div class="fireflyer-filter-panel">
     <div class="fireflyer-filter-ds">
-      <span class="ds-name"><TEST_DATA>/orders.parquet</span>
+      <span class="ds-title"><span class="ds-name"><TEST_DATA>/orders.parquet</span></span>
       <span class="ds-updated">—</span>
     </div>
     <div class="fireflyer-filter-tooltip-empty">No active filters</div><form class="fireflyer-filter-add" id="ff-add-a" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"open_filter": "a"}'>
@@ -1596,7 +1631,7 @@ layout:
   <summary aria-label="0 active filters">0</summary>
   <div class="fireflyer-filter-panel">
     <div class="fireflyer-filter-ds">
-      <span class="ds-name"><TEST_DATA>/orders.parquet</span>
+      <span class="ds-title"><span class="ds-name"><TEST_DATA>/orders.parquet</span></span>
       <span class="ds-updated">—</span>
     </div>
     <div class="fireflyer-filter-tooltip-empty">No active filters</div><form class="fireflyer-filter-add" id="ff-add-b" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"open_filter": "b"}'>

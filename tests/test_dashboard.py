@@ -668,10 +668,12 @@ def test_the_badge_names_the_dataset_and_when_it_changed():
     )
     html = ff.Dashboard.from_yaml(yaml, datasets=store).to_html()
     found = re.search(
-        r'ds-name">([^<]*)</span>\s*<span class="ds-updated">([^<]*)<', html
+        r'ds-name">([^<]*)</span>.*?data-tip="([^"]*)".*?<span class="ds-updated">([^<]*)<',
+        html, re.S,
     )
     assert found.group(1) == "orders"
-    assert found.group(2).startswith("updated 20")
+    assert found.group(2) == "d"                  # the store's description, as the ⓘ's tip
+    assert found.group(3).startswith("updated 20")
 
 
 def test_inline_data_is_labelled_rather_than_dated():
@@ -684,7 +686,7 @@ def test_inline_data_is_labelled_rather_than_dated():
     )
     html = ff.Dashboard.from_yaml(yaml).to_html()
     found = re.search(
-        r'ds-name">([^<]*)</span>\s*<span class="ds-updated">([^<]*)<', html
+        r'ds-name">([^<]*)</span>\s*</span>\s*<span class="ds-updated">([^<]*)<', html
     )
     assert found.group(1) == "sales"
     assert found.group(2) == "inline data"

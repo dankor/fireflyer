@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-13
+
+### Added
+
+- **Descriptions, on a dashboard, a chart and a dataset.** All optional:
+  - **Dashboard** — top-level `description:` in the YAML, the *New dashboard*
+    dialog, or the editor: clicking the name to rename it also opens a
+    description box under it. In view mode the name isn't editable: a click
+    opens the same box read-only, to read the description. The dashboards list
+    shows it as an ⓘ.
+  - **Chart** — `description:` on any chart, also in the chart builder. It opens
+    the chart's filter panel (the badge), which is where a viewer goes to find
+    out what they're looking at.
+  - **Dataset** — a managed one's description (set on upload or *Edit*) and,
+    new, an inline one's: the `datasets:` block takes a longer form,
+    `name: {description: ..., csv: |...}`, beside the plain `name: |...`. It
+    shows as an ⓘ in the datasets list and on the dataset's page, and under the
+    dataset's name in every chart's filter panel.
+- The assistant knows the new keys and writes descriptions where they add
+  something the title doesn't.
+
+### Changed
+
+- **A dataset's page edits its name and description in place**, as the editor
+  does a dashboard's: click the name to rename it, and a description box opens
+  under it; leaving both saves them (renaming updates every dashboard that uses
+  the dataset) and the page reloads at the new name. The toolbar's edit button
+  is gone; the datasets list keeps its Edit dialog. The description shows as an
+  ⓘ in the datasets list; on its page, in the box (no ⓘ there, nor a line of
+  text under the name).
+
+### Fixed
+
+- A tooltip in a gallery table's last row was clipped at the table's edge.
+
 ## [0.14.1] - 2026-10-10
 
 ### Changed
@@ -868,7 +903,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/dankor/fireflyer/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/dankor/fireflyer/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/dankor/fireflyer/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/dankor/fireflyer/compare/v0.12.0...v0.13.0

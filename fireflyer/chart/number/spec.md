@@ -39,6 +39,8 @@ Card and text colors come from the shared light/dark token set (see architecture
 ## Parameters
 - `dataset: str` — dataset name (or Parquet path standalone).
 - `title: str` — chart title (its own key — **not** inherited from the calc's `name`).
+- `description: str = ""` — optional; what the chart shows, in a sentence. Not drawn on the
+  chart: the dashboard shows it at the top of the chart's filter panel.
 - `calc` — a calc **key** resolved against the dashboard's `calcs:`
   block, or — for standalone use — an inline calc definition dict. `None`
   (the default) means a plain row count. The calc supplies the value **and**
@@ -47,5 +49,5 @@ Card and text colors come from the shared light/dark token set (see architecture
   intersected with the calc's own filters.
 
 ## Editor params
-Edit-modal schema (`Number.PARAMS`): dataset (dropdown), title (text), calc
+Edit-modal schema (`Number.PARAMS`): dataset (dropdown), title (text), description (text), calc
 (calc dropdown), filters (filter builder). Widgets live in `fireflyer/params.py`.

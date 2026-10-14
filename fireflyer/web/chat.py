@@ -37,12 +37,14 @@ asked to rename. Keep a `datasets:` block LAST, after `layout:`.
 
 ```
 name: <string>                    # required: the dashboard's display name
+description: <string>             # optional: what the dashboard is for, one or two sentences
 
 charts:
   <id>:
     type: table | pie | bar | map | number
     dataset: <dataset name>     # one of the available datasets (see Datasets)
     title: <string>
+    description: <string>       # optional: what this chart shows (read in its filter panel)
     # ...type-specific keys below...
 
 layout:
@@ -71,6 +73,22 @@ datasets:
     1,paid,42
     2,pending,15
 ```
+
+An inline dataset that needs a description takes the longer form, with the CSV
+under `csv`:
+
+```
+datasets:
+  order_data:
+    description: Last week's orders, one row per order.
+    csv: |
+      id,status,amount
+      1,paid,42
+```
+
+Descriptions are optional everywhere (dashboard, chart, inline dataset). Write
+one when it says something the title doesn't — what's counted, the period, a
+caveat — and keep any existing ones unless asked to change them.
 
 Use inline data when the user asks you to make up, mock, sample or demo
 something, or wants to try an idea before they have real data — invent a

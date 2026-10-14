@@ -25,6 +25,9 @@ class Number:
     # The scalar it reduces to fills the card; its `format` drives display.
     calc: object = None
     filters: list = field(default_factory=list)
+    # What the chart shows, in a sentence; read in the dashboard's filter panel.
+    # The chart itself doesn't draw it.
+    description: str = ""
 
     _resolve = None   # name -> (uri, storage_options); not a dataclass field
     _calcs = None  # CalcSet for this chart's dataset; set by the dashboard
@@ -37,6 +40,7 @@ class Number:
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
+        TextParam("description", "Description"),
         CalcParam("calc", "Calc"),
         FilterListParam("filters", "Filters"),
     ]

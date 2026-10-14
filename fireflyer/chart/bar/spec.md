@@ -161,6 +161,8 @@ Display a calc distribution as **stacked** vertical bars, broken down by a secon
 ## Parameters
 - `dataset: str` — dataset name (or Parquet path standalone).
 - `title: str` — chart title.
+- `description: str = ""` — optional; what the chart shows, in a sentence. Not drawn on the
+  chart: the dashboard shows it at the top of the chart's filter panel.
 - `x: str` — column for the bar groups (x-axis labels). May be a **column calc**
   key as well as a real dataset column — that's how a text date becomes a proper
   date axis: `order_day: {formula: 'str2dt(day, YYYYMMDD)'}` (quoted — inline,
@@ -193,6 +195,6 @@ Display a calc distribution as **stacked** vertical bars, broken down by a secon
 - `filters: list = []` — declarative pre-filter applied before grouping.
 
 ## Editor params
-Edit-modal schema (`Bar.PARAMS`): dataset (dropdown), title (text), x (column dropdown),
+Edit-modal schema (`Bar.PARAMS`): dataset (dropdown), title (text), description (text), x (column dropdown),
 y (column dropdown), calc (calc dropdown), filters (filter builder). Widgets
 live in `fireflyer/params.py`.
