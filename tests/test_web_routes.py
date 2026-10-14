@@ -502,3 +502,44 @@ def test_every_page_links_the_favicon(client):
     ]
     for page in pages:
         assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=' in page
+
+
+# --- descriptions ------------------------------------------------------------
+
+
+def test_the_editor_toolbar_follows_the_yamls_description(client):
+    """Rendered with the page (hidden when empty), then refreshed by /execute."""
+    page = client.get("/").text
+    assert 'id="ff-dash-name" data-description="' in page
+    assert 'id="ff-dash-desc"' not in page          # no ⓘ: the name carries it
+    data = client.post("/execute", content="name: X\ndescription: Hello\ncharts: {}\nlayout: []\n",
+                       headers={"Content-Type": "application/yaml"}).json()
+    assert data["description"] == "Hello"
+
+
+def test_a_new_dashboard_can_be_given_a_description():
+    from fireflyer.web.app import _empty_yaml
+    from fireflyer.dashboard import Dashboard
+
+    dash = Dashboard.from_yaml(_empty_yaml("Sales", 'Says "hi"'))
+    assert (dash.name, dash.description) == ("Sales", 'Says "hi"')
+    assert "description" not in _empty_yaml("Sales")
+
+
+def test_renaming_from_the_dataset_page_returns_to_it(client, tmp_path, monkeypatch):
+    """The page edits name + description in place, so it comes back to itself —
+    at the new name; the list's dialog still returns to the list."""
+    from fireflyer.datasets import DatasetStore
+    from fireflyer.storage import make_object_store
+    from fireflyer.web import app as app_mod
+
+    store = DatasetStore(make_object_store({"base": str(tmp_path)}))
+    store.create("sales", b"a,b\n1,2\n")
+    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: store)
+    r = client.post("/datasets/sales/rename", data={"name": "revenue", "description": "Hi", "next": "detail"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/datasets/revenue"
+    assert store.get("revenue").description == "Hi"
+    r = client.post("/datasets/revenue/rename", data={"name": "revenue", "description": "Yo"},
+                    follow_redirects=False)
+    assert r.headers["location"] == "/datasets"

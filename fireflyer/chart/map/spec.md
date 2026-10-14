@@ -26,6 +26,8 @@ Plot a point dataset (lat/lng) as a pointy-top hex grid heatmap over an OpenStre
 ## Parameters
 - `dataset: str` — path to the CSV.
 - `title: str` — chart title.
+- `description: str = ""` — optional; what the chart shows, in a sentence. Not drawn on the
+  chart: the dashboard shows it at the top of the chart's filter panel.
 - `lat: str` — column with latitude values.
 - `lng: str` — column with longitude values.
 - `grid_size: int = 20` — hex side length in world-pixel (Mercator) units. Smaller = finer hexes at any given zoom. Clamped to `[4, 200]`.
@@ -39,6 +41,6 @@ Plot a point dataset (lat/lng) as a pointy-top hex grid heatmap over an OpenStre
   intersected with the calc's own filters.
 
 ## Editor params
-Edit-modal schema (`Map.PARAMS`): dataset (dropdown), title (text), lat/lng (column dropdowns),
+Edit-modal schema (`Map.PARAMS`): dataset (dropdown), title (text), description (text), lat/lng (column dropdowns),
 grid_size (number), zoom (nullable number), calc (calc dropdown), filters
 (filter builder). Widgets live in `fireflyer/params.py`.

@@ -127,10 +127,29 @@ else:
 _BACK_HTML = portal_mod.back_button("/", "Back to dashboards")
 
 
-def _dash_name_html(name: str) -> str:
+def _name_and_description(yaml_text: str) -> tuple[str, str]:
+    dashboard = Dashboard.from_yaml(yaml_text)
+    return dashboard.name, dashboard.description
+
+
+def _dash_name_html(name: str, description: str = "") -> str:
     # Leads the left group (after the back button). Editable in place (wired by
     # static/editor.js); two-way with the YAML `name:`.
-    return f'<span class="ff-dash-name" id="ff-dash-name">{escape(name)}</span>'
+    # The ⓘ is always there (hidden when empty) so editing `description:` in
+    # the YAML can show it without a page reload — run() refreshes it.
+    # Renaming (a click on the name, outside view mode) also opens the
+    # description box beneath it. The description rides on the name itself —
+    # no ⓘ: clicking the name already shows it, and in view mode it is the
+    # name's tooltip. editor.js keeps it in step with the YAML.
+    return (
+        '<span class="ff-dash-title">'
+        f'<span class="ff-dash-name" id="ff-dash-name"'
+        f' data-description="{escape(description, quote=True)}">{escape(name)}</span>'
+        '<span class="ff-dash-about" id="ff-dash-about" hidden>'
+        '<textarea id="ff-dash-about-text" rows="3" placeholder="Add a description"'
+        ' aria-label="Dashboard description" spellcheck="true"></textarea></span>'
+        "</span>"
+    )
 
 
 def _save_html(dash_id: str) -> str:
@@ -444,15 +463,20 @@ def index(request: Request) -> str:
     # editable name and theme switch.
     return render_editor_page(
         DEFAULT_YAML,
-        dash_name=_dash_name_html(Dashboard.from_yaml(DEFAULT_YAML).name),
+        dash_name=_dash_name_html(*_name_and_description(DEFAULT_YAML)),
         theme=_theme_switch(),
     )
 
 
-def _empty_yaml(name: str) -> str:
+def _empty_yaml(name: str, description: str = "") -> str:
     """A blank but valid dashboard named `name` — no datasets, charts, or layout
-    yet. The author fills it in the editor. json.dumps quotes the name safely."""
-    return f"name: {json.dumps(name)}\n\ndatasets: {{}}\n\ncharts: {{}}\n\nlayout: []\n"
+    yet. The author fills it in the editor. json.dumps quotes the name (and the
+    description, when given) safely."""
+    about = f"description: {json.dumps(description)}\n" if description else ""
+    return (
+        f"name: {json.dumps(name)}\n{about}\n"
+        "datasets: {}\n\ncharts: {}\n\nlayout: []\n"
+    )
 
 
 def _set_yaml_name(yaml_text: str, name: str) -> str:
@@ -470,8 +494,10 @@ def _current_author(request: Request) -> str:
 
 
 @app.post("/new")
-async def portal_new(request: Request, name: str = Form("")) -> RedirectResponse:
-    yaml_text = _empty_yaml(name.strip() or "Untitled dashboard")
+async def portal_new(
+    request: Request, name: str = Form(""), description: str = Form("")
+) -> RedirectResponse:
+    yaml_text = _empty_yaml(name.strip() or "Untitled dashboard", description.strip())
     new_id = _dash_store(request).create(yaml_text, _current_author(request))
     return RedirectResponse(f"/d/{new_id}", status_code=303)
 
@@ -511,7 +537,7 @@ def portal_open(dash_id: str, request: Request) -> HTMLResponse:
     page = render_editor_page(
         row.yaml,
         nav=nav,
-        dash_name=_dash_name_html(row.name),
+        dash_name=_dash_name_html(row.name, row.description),
         path_dropdown=path_dd,
         save=_save_html(row.id),
         user_menu=user_menu,
@@ -622,8 +648,12 @@ async def dataset_replace(
 
 @app.post("/datasets/{old_name}/rename")
 async def dataset_rename(
-    old_name: str, request: Request, name: str = Form(""), description: str = Form("")
+    old_name: str, request: Request, name: str = Form(""), description: str = Form(""),
+    next: str = Form(""),
 ):
+    """Rename and/or re-describe a dataset. From the list's Edit dialog it
+    returns to the list; from the dataset's own page (`next=detail`, its name
+    edited in place) to that page, at the new name."""
     new = name.strip()
     try:
         _dataset_store(request).rename(old_name, new, description=description)
@@ -635,7 +665,8 @@ async def dataset_rename(
         for row in store.list():
             if old_name in Dashboard.dataset_names(row.yaml):
                 store.save(row.id, rename_dataset_ref(row.yaml, old_name, new))
-    return RedirectResponse("/datasets", status_code=303)
+    back = f"/datasets/{quote(new)}" if next == "detail" else "/datasets"
+    return RedirectResponse(back, status_code=303)
 
 
 @app.post("/datasets/{name}/delete")
@@ -668,6 +699,8 @@ async def execute(request: Request, active_tab: int = 0, f: str = "") -> dict:
                 editing=True,
                 active_tab=active_tab,
             ),
+            # For the toolbar's ⓘ, which follows the YAML like the name does.
+            "description": dashboard.description,
         }
     except DashboardError as exc:
         return {"ok": False, "html": f'<pre class="error">{escape(str(exc))}</pre>'}

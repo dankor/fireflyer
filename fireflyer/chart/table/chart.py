@@ -131,6 +131,9 @@ class Table:
     search: bool = True
     pagination: int = 5
     filters: list = field(default_factory=list)
+    # What the chart shows, in a sentence; read in the dashboard's filter panel.
+    # The chart itself doesn't draw it.
+    description: str = ""
 
     # Name -> (uri, storage_options) resolver, injected by the dashboard/route.
     # None: `dataset` is a Parquet path/URI (standalone). Not a dataclass field.
@@ -147,6 +150,7 @@ class Table:
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
+        TextParam("description", "Description"),
         ListParam("columns", "Columns", placeholder="all columns"),
         ListParam("measures", "Measures", placeholder="none — show raw rows"),
         ListParam("sort", "Sort", placeholder="-revenue, +status"),

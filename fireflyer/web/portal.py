@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from html import escape
 from urllib.parse import quote
 
+import yaml
+
 from fireflyer.dashboard import Dashboard
 from fireflyer.datasets import Dataset
 from fireflyer.params import COLUMN_TYPES, column_type, type_icon_svg
@@ -46,6 +48,18 @@ class DashboardRow:
     author: str
     yaml: str
     updated_at: str
+
+    @property
+    def description(self) -> str:
+        """The YAML's top-level `description:`, read on demand rather than kept
+        as a column: like `name`, it's part of the definition, and every store
+        already holds the YAML. "" when absent or the YAML doesn't parse."""
+        try:
+            raw = yaml.safe_load(self.yaml) or {}
+        except yaml.YAMLError:
+            return ""
+        description = raw.get("description") if isinstance(raw, dict) else None
+        return description.strip() if isinstance(description, str) else ""
 
 
 def _now() -> str:
@@ -172,6 +186,7 @@ def make_store(dsn: str | None):
 
 # Inline-SVG action icons (stroke=currentColor so they follow the button colour).
 _ICONS = {
+    "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.6v.1"/>',
     "pencil": '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
     "copy": '<rect x="9" y="9" width="12" height="12" rx="2"/>'
             '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
@@ -192,13 +207,29 @@ def _icon(name: str) -> str:
     )
 
 
+def info_tip(text: str, el_id: str = "") -> str:
+    """An ⓘ beside a name that shows `text` — a dashboard's or dataset's
+    description — as a tooltip on hover or keyboard focus. Styled in nav.css,
+    which the gallery and the editor both link. "" without text; with `el_id`
+    it is rendered anyway, hidden, for the editor's script to fill in when the
+    YAML gains a description."""
+    if not text and not el_id:
+        return ""
+    attr_id = f' id="{escape(el_id, quote=True)}"' if el_id else ""
+    tip = escape(text, quote=True)
+    return (
+        f'<span class="ff-info"{attr_id} tabindex="0" role="img" aria-label="{tip}"'
+        f' data-tip="{tip}"{"" if text else " hidden"}>{_icon("info")}</span>'
+    )
+
+
 def _row(row: DashboardRow) -> str:
     updated = escape(row.updated_at.replace("T", " ")[:16])
     author = escape(row.author) if row.author else "—"
     name = escape(row.name)
     return (
         "<tr>"
-        f'<td><a class="name" href="/d/{row.id}">{name}</a></td>'
+        f'<td><a class="name" href="/d/{row.id}">{name}</a>{info_tip(row.description)}</td>'
         f"<td>{author}</td>"
         f'<td class="muted">{updated}</td>'
         '<td class="actions">'
@@ -212,14 +243,22 @@ def _row(row: DashboardRow) -> str:
     )
 
 
-def _dialog(dialog_id: str, form_id: str, action: str, heading: str, ok_label: str) -> str:
+def _dialog(
+    dialog_id: str, form_id: str, action: str, heading: str, ok_label: str,
+    description: bool = False,
+) -> str:
     # `action` is empty for the clone dialog — set by JS from the clicked row.
+    # Only a new dashboard asks for a description: a clone keeps its source's.
+    about = (
+        '\n    <textarea name="description" placeholder="Description (optional)"></textarea>'
+        if description else ""
+    )
     return f"""
 <dialog id="{dialog_id}">
   <form id="{form_id}" method="post" action="{action}">
     <h3>{heading}</h3>
     <input name="name" id="{form_id}-name" placeholder="Dashboard name"
-           autocomplete="off" required>
+           autocomplete="off" required>{about}
     <div class="dialog-actions">
       <button type="button" class="cancel"
               onclick="this.closest('dialog').close()">Cancel</button>
@@ -325,7 +364,7 @@ def render_gallery(
         )
     else:
         body_table = '<div class="empty">No dashboards yet. Use + to create one.</div>'
-    add_dialog = _dialog("add-dialog", "add-form", "/new", "New dashboard", "Create")
+    add_dialog = _dialog("add-dialog", "add-form", "/new", "New dashboard", "Create", description=True)
     clone_dialog = _dialog("clone-dialog", "clone-form", "", "Clone dashboard", "Clone")
     clone_dialog = clone_dialog.replace('id="clone-form-name"', 'id="clone-name"')
     return _shell(
@@ -385,7 +424,7 @@ def _dataset_row(ds: Dataset) -> str:
     author = escape(ds.author) if ds.author else "—"
     return (
         "<tr>"
-        f'<td><a class="name" href="{href}">{escape(ds.name)}</a></td>'
+        f'<td><a class="name" href="{href}">{escape(ds.name)}</a>{info_tip(ds.description)}</td>'
         f'<td class="muted">{len(ds.columns)}</td>'
         f'<td class="muted">{ds.rows}</td>'
         f'<td class="muted">{updated}</td>'
@@ -498,23 +537,34 @@ def render_dataset_detail(
         )
         usage_dialog = ""
 
-    # Header (back + name/description + actions) lives in the topbar.
-    tname = f'<span class="tname">{escape(ds.name)}</span>'
-    tdesc = f'<span class="tdesc">{escape(ds.description)}</span>' if ds.description else ""
+    # Header (back + name/description + actions) lives in the topbar. The name
+    # is edited in place, as a dashboard's is in the editor: a click renames it
+    # and opens a description box under it (gallery.js `dsTitle`), so the
+    # toolbar needs neither an edit button nor an ⓘ.
+    tname = (
+        f'<span class="tname" id="ds-title-name" data-name="{escape(ds.name, quote=True)}"'
+        f' data-description="{escape(ds.description, quote=True)}"'
+        f' data-action="/datasets/{quote(ds.name)}/rename"'
+        ' contenteditable="plaintext-only" spellcheck="false" title="Click to rename or describe">'
+        f'{escape(ds.name)}</span>'
+    )
+    tabout = (
+        '<span class="ff-title-about" id="ds-title-about" hidden>'
+        '<textarea id="ds-title-about-text" rows="3" placeholder="Add a description"'
+        ' aria-label="Dataset description"></textarea>'
+        '<span class="ff-title-error" id="ds-title-error" hidden></span></span>'
+    )
     # A selected item leads with just the back button + name — no Dashboards |
     # Datasets switch (that's for the lists). The path dropdown still rides on the
     # right in local paths mode (added by `_shell`).
     topbar_left = (
         '<div class="topbar-lead">'
         + back_button("/datasets", "Back to datasets")
-        + f'<div class="topbar-title">{tname}{tdesc}</div>'
+        + f'<div class="topbar-title" id="ds-title">{tname}{tabout}</div>'
         + "</div>"
     )
     topbar_right = (
         '<span class="detail-actions">'
-        f'<button class="act" type="button" title="Edit" data-name="{escape(ds.name, quote=True)}"'
-        f' data-desc="{escape(ds.description, quote=True)}"'
-        f' onclick="openDsRename(this)">{_icon("pencil")}</button>'
         '<button class="act" title="Replace data"'
         f" onclick=\"document.getElementById('replace-dialog').showModal()\">{_icon('upload')}</button>"
         f"{trash}</span>"
@@ -527,7 +577,7 @@ def render_dataset_detail(
     )
     return _shell(
         title, user_menu, "datasets", body,
-        extra=replace + _rename_dialog() + usage_dialog,
+        extra=replace + usage_dialog,
         topbar_left=topbar_left, topbar_right=topbar_right,
         paths=paths, active_path=active_path, detail=True,
     )

@@ -15,8 +15,17 @@
 <details class="fireflyer-filter-indicator{% if state %} {{ state }}{% endif %}" name="fireflyer-filter"{% if is_open %} open{% endif %}>
   <summary aria-label="{{ total }} active filter{% if total != 1 %}s{% endif %}{% if emitted %}, {{ emitted|length }} emitted by this chart{% endif %}">{{ total }}</summary>
   <div class="fireflyer-filter-panel">
+    {#- What the chart shows, when its YAML says (`description:`) — the badge is
+        where a viewer goes to find out what they're looking at. -#}
+    {%- if chart_description %}
+    <p class="fireflyer-filter-about">{{ chart_description }}</p>
+    {%- endif %}
     <div class="fireflyer-filter-ds">
-      <span class="ds-name">{{ dataset.name }}</span>
+      <span class="ds-title"><span class="ds-name">{{ dataset.name }}</span>
+      {%- if dataset.description %}
+        {#- The same ⓘ the gallery puts beside a dataset's name. -#}
+        <span class="fireflyer-info" tabindex="0" role="img" aria-label="{{ dataset.description }}" data-tip="{{ dataset.description }}"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.1"/></svg></span>
+      {%- endif %}</span>
       <span class="ds-updated">{% if dataset.inline %}inline data{% elif dataset.updated %}updated {{ dataset.updated }}{% else %}—{% endif %}</span>
     </div>
     {%- if rows %}

@@ -228,6 +228,9 @@ class Dashboard:
     # definition (not portal metadata). Portal lists dashboards by it; local
     # mode just carries it. Empty when the key is absent.
     name: str = ""
+    # Optional top-level `description:` — what the dashboard is for, shown as an
+    # info icon beside its name in the editor and the dashboards list.
+    description: str = ""
 
     # Dataset resolver: name -> (uri, storage_options). Set by `from_yaml` from
     # the `datasets` argument (a DatasetStore or a callable); None means a
@@ -239,6 +242,8 @@ class Dashboard:
     _dataset_meta = None
     # Names the dashboard defines inline; those have no separate update time.
     _inline_names = frozenset()
+    # Inline datasets' descriptions (the longer `{description, csv}` form).
+    _inline_descriptions = {}
 
     @classmethod
     def from_yaml(cls, text: str, datasets=None) -> "Dashboard":
@@ -262,6 +267,7 @@ class Dashboard:
         name = config["name"]
         if not isinstance(name, str) or not name.strip():
             raise DashboardError("top-level `name` must be a non-empty string")
+        description = _description(config.get("description"), "top-level `description`")
 
         try:
             inline = inline_data.parse_block(config.get("datasets"))
@@ -283,15 +289,16 @@ class Dashboard:
             # chart from every row it's in — stays sound across tabs.
             _validate_unique_placements([g for t in tabs for g in t.items])
             dash = cls(chart_configs=chart_configs, calc_sets=calc_sets,
-                       tabs=tabs, yaml_source=text, name=name)
+                       tabs=tabs, yaml_source=text, name=name, description=description)
         else:
             items = _parse_layout(raw_layout, chart_configs)
             items = _group_layout(items)
             _validate_unique_placements(items)
             dash = cls(chart_configs=chart_configs, calc_sets=calc_sets,
-                       items=items, yaml_source=text, name=name)
+                       items=items, yaml_source=text, name=name, description=description)
         dash._resolve = resolve
         dash._inline_names = frozenset(inline)
+        dash._inline_descriptions = inline_data.descriptions(config.get("datasets"))
         if datasets is not None and hasattr(datasets, "get"):
             dash._dataset_meta = datasets.get
         return dash
@@ -583,7 +590,8 @@ class Dashboard:
         return rows
 
     def _filter_panel(
-        self, cid, applied, emitted, dataset, rows, types, is_open=False
+        self, cid, applied, emitted, dataset, rows, types, is_open=False,
+        chart_description="",
     ) -> str:
         """The cell's filter badge and panel, ending in the + form that adds a
         global quick filter on one of this chart's columns. `is_open` renders it
@@ -591,6 +599,7 @@ class Dashboard:
         return _FILTER_PANEL_TEMPLATE.render(
             cid=cid,
             is_open=is_open,
+            chart_description=chart_description,
             applied=applied,
             emitted=emitted,
             dataset=dataset,
@@ -610,20 +619,24 @@ class Dashboard:
         )
 
     def _dataset_info(self, name: str) -> dict:
-        """What a cell says about the data behind its chart: which dataset, and
-        when it last changed. Inline data has no separate update time — it
-        changes when the dashboard does — so it is labelled rather than dated.
-        Best-effort: an unreadable store costs the date, not the render."""
+        """What a cell says about the data behind its chart: which dataset, what
+        it holds, and when it last changed. Inline data has no separate update
+        time — it changes when the dashboard does — so it is labelled rather
+        than dated; its description comes from the YAML, a managed one's from
+        the store. Best-effort: an unreadable store costs the date and the
+        description, not the render."""
         if name in self._inline_names:
-            return {"name": name, "updated": "", "inline": True}
-        updated = ""
+            description = self._inline_descriptions.get(name, "")
+            return {"name": name, "updated": "", "inline": True, "description": description}
+        updated = description = ""
         if self._dataset_meta is not None:
             try:
                 meta = self._dataset_meta(name)
                 updated = (getattr(meta, "updated_at", "") or "").replace("T", " ")[:16]
+                description = (getattr(meta, "description", "") or "").strip()
             except Exception:
-                updated = ""
-        return {"name": name, "updated": updated, "inline": False}
+                updated = description = ""
+        return {"name": name, "updated": updated, "inline": False, "description": description}
 
     def _render_chart(
         self,
@@ -746,7 +759,8 @@ class Dashboard:
         return {
             "html": chart_html,
             "panel": self._filter_panel(
-                cid, applied, emitted, dataset, rows, types, open_filter
+                cid, applied, emitted, dataset, rows, types, open_filter,
+                chart_description=(kwargs.get("description") or "").strip(),
             ),
         }
 
@@ -782,6 +796,16 @@ _GLOBAL_SOURCE = {
     ),
     "role": "global",
 }
+
+
+def _description(raw, where: str) -> str:
+    """An optional `description:` — text, or absent. Anything else is a mistake
+    worth saying so about rather than rendering as `{'a': 1}`."""
+    if raw is None:
+        return ""
+    if not isinstance(raw, str):
+        raise DashboardError(f"{where} must be text")
+    return raw.strip()
 
 
 def _column_types_of(dataset: str, resolve, calcs) -> dict[str, str] | None:

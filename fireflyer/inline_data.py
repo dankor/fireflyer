@@ -14,6 +14,16 @@ carries its own data is a single file you can paste to someone.
 
 The first line is the header. Everything else is ordinary CSV.
 
+A dataset that wants a description takes the longer form — a mapping with the
+CSV under `csv`:
+
+    datasets:
+      order_data:
+        description: Last week's orders, one row per order.
+        csv: |
+          id,status,amount
+          1,paid,42
+
 Charts read Parquet, so each block is converted once and cached **by content
 checksum**: the same CSV always maps to the same file, an edit maps to a new
 one, and re-rendering a dashboard re-uses what's already there instead of
@@ -49,7 +59,8 @@ def parse_block(raw) -> dict[str, str]:
             "  datasets:\n    orders: |\n      id,amount\n      1,42"
         )
     out: dict[str, str] = {}
-    for name, text in raw.items():
+    for name, entry in raw.items():
+        text = _csv_of(name, entry)
         if not isinstance(text, str) or not text.strip():
             raise InlineDataError(
                 f"dataset {str(name)!r}: must be CSV text (use `|` for a block "
@@ -69,6 +80,35 @@ def parse_block(raw) -> dict[str, str]:
             )
         out[str(name)] = text
     return out
+
+
+def _csv_of(name, entry):
+    """The CSV of one entry — the entry itself, or its `csv` key in the longer
+    form that also carries a description."""
+    if not isinstance(entry, dict):
+        return entry
+    unknown = sorted(set(entry) - {"csv", "description"})
+    if unknown:
+        raise InlineDataError(
+            f"dataset {str(name)!r}: unknown key(s) {unknown} — the longer form "
+            "takes `csv` and an optional `description`"
+        )
+    description = entry.get("description")
+    if description is not None and not isinstance(description, str):
+        raise InlineDataError(f"dataset {str(name)!r}: `description` must be text")
+    return entry.get("csv")
+
+
+def descriptions(raw) -> dict[str, str]:
+    """`{name: description}` for the inline datasets that have one. Call after
+    `parse_block` has accepted `raw` — it doesn't re-validate."""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(name): entry["description"].strip()
+        for name, entry in raw.items()
+        if isinstance(entry, dict) and (entry.get("description") or "").strip()
+    }
 
 
 def _digest(csv_text: str) -> str:

@@ -160,6 +160,9 @@ class Map:
     # hex) or `sum` (a per-hex weight) are supported here.
     calc: object = None
     filters: list = field(default_factory=list)
+    # What the chart shows, in a sentence; read in the dashboard's filter panel.
+    # The chart itself doesn't draw it.
+    description: str = ""
 
     _resolve = None   # name -> (uri, storage_options); not a dataclass field
     _calcs = None  # CalcSet for this chart's dataset; set by the dashboard
@@ -172,6 +175,7 @@ class Map:
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
+        TextParam("description", "Description"),
         ColumnParam("lat", "Latitude column"),
         ColumnParam("lng", "Longitude column"),
         IntParam("grid_size", "Hex size", minimum=GRID_MIN, maximum=GRID_MAX),

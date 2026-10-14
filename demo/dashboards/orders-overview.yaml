@@ -5,6 +5,7 @@
 #  A dashboard has four top-level keys:
 #
 #    name    the dashboard's title
+#    description  what it's for (optional) - the (i) beside the name
 #    calcs   named values and dimensions (optional)
 #    charts  what to draw
 #    layout  where to put it
@@ -14,6 +15,9 @@
 # ==========================================================================
 
 name: Orders overview
+# Optional, here and on any chart or inline dataset. Hover the (i) beside the
+# name in the toolbar; a chart's shows in its filter panel (the badge).
+description: Orders, revenue and where they come from - a tour of every chart type.
 
 # ---- CALCS ---------------------------------------------------------------
 # Named values and dimensions, keyed by DATASET name. A chart references one
@@ -137,6 +141,7 @@ charts:
     type: number
     dataset: orders
     title: Total orders
+    description: Every order placed, whatever its status - cancelled ones included.
     calc: order_count
 
   revenue_kpi:
@@ -163,6 +168,7 @@ charts:
     type: pie
     dataset: orders
     title: Revenue by status
+    description: Each slice is the order value that ended in that status.
     column: status
     calc: revenue
 

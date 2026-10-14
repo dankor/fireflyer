@@ -217,6 +217,9 @@ class Pie:
     calc: object = None
     total: bool = True  # show the grand total in the donut centre
     filters: list = field(default_factory=list)
+    # What the chart shows, in a sentence; read in the dashboard's filter panel.
+    # The chart itself doesn't draw it.
+    description: str = ""
 
     _resolve = None   # name -> (uri, storage_options); not a dataclass field
     _calcs = None  # CalcSet for this chart's dataset; set by the dashboard
@@ -229,6 +232,7 @@ class Pie:
     PARAMS = [
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
+        TextParam("description", "Description"),
         ColumnParam("column", "Column"),
         CalcParam("calc", "Calc"),
         BoolParam("total", "Show total in centre"),

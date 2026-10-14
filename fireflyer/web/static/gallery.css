@@ -18,9 +18,26 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
    the name block, evenly spaced. */
 .topbar-lead { display:inline-flex; align-items:center; gap:14px; }
 /* Detail context in the topbar: name + small description under it. */
-.topbar-title { display:flex; flex-direction:column; line-height:1.2; }
+/* The name, then its ⓘ beside it (the description used to sit underneath). */
+.topbar-title { position:relative; display:flex; align-items:center; line-height:1.2; }
+/* A dataset's name, edited in place (gallery.js `dsTitle`). */
+.topbar-title .tname[contenteditable] { padding:2px 6px; margin-left:-6px; border-radius:4px;
+  outline:0; cursor:text; }
+.topbar-title .tname[contenteditable]:hover,
+.topbar-title .tname[contenteditable]:focus { background:var(--bg); }
+.topbar-title .tname[contenteditable]:focus { box-shadow:0 0 0 2px var(--accent); }
+/* The description box that opens under the name while renaming. */
+.ff-title-about { position:absolute; top:calc(100% + 8px); left:-6px; z-index:60; width:340px;
+  padding:8px; background:var(--panel); border:1px solid var(--border); border-radius:6px;
+  box-shadow:0 8px 24px rgba(0,0,0,.18); }
+.ff-title-about[hidden] { display:none; }
+.ff-title-about textarea { display:block; width:100%; box-sizing:border-box; resize:vertical;
+  min-height:56px; padding:7px 9px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg); color:var(--text); font:inherit; font-size:13px; line-height:1.4; outline:0; }
+.ff-title-about textarea:focus { border-color:var(--accent); }
+.ff-title-error { display:block; margin-top:6px; color:#e04355; font-size:12px; }
+.ff-title-error[hidden] { display:none; }
 .topbar-title .tname { font-weight:600; font-size:15px; }
-.topbar-title .tdesc { font-size:12px; color:var(--muted); }
 /* Column type icon: a small monospaced glyph badge. */
 .type-icon { display:inline-flex; align-items:center; justify-content:center;
   width:18px; height:18px; border-radius:4px; font-size:11px; font-weight:700;
@@ -32,8 +49,15 @@ table.preview { border-collapse:collapse; width:100%; font-size:13px; }
   text-align:left; white-space:nowrap; }
 .preview thead th { color:var(--muted); font-weight:600; background:var(--panel);
   position:sticky; top:0; }
-table.dash-table { width:100%; border-collapse:collapse; background:var(--panel);
-  border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+/* Rounded by its corner cells, not `overflow:hidden` on the table: that clipped
+   a name's ⓘ tooltip at the table's edge, on the last row. `separate` borders
+   are what let the cells take the radius. */
+table.dash-table { width:100%; border-collapse:separate; border-spacing:0; background:var(--panel);
+  border:1px solid var(--border); border-radius:8px; }
+.dash-table thead th:first-child { border-top-left-radius:8px; }
+.dash-table thead th:last-child { border-top-right-radius:8px; }
+.dash-table tbody tr:last-child td:first-child { border-bottom-left-radius:8px; }
+.dash-table tbody tr:last-child td:last-child { border-bottom-right-radius:8px; }
 .dash-table th, .dash-table td { text-align:left; padding:11px 14px;
   border-bottom:1px solid var(--border); font-size:14px; }
 .dash-table thead th { font-size:12px; color:var(--muted); font-weight:600;

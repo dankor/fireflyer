@@ -47,6 +47,22 @@ html, body { margin: 0; padding: 0; height: 100%;
   padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border);
 }
 .topbar-left, .topbar-right { display: flex; align-items: center; gap: 14px; }
+/* The dashboard's name and its ⓘ: one item, the icon right beside the name
+   (whose own padding, for its hover background, is the space between them). */
+.ff-dash-title { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+/* The description box that opens under the name while renaming. */
+.ff-dash-about { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
+  width: 340px; padding: 8px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.ff-dash-about[hidden] { display: none; }
+.ff-dash-about textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical;
+  min-height: 56px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 13px; line-height: 1.4;
+  outline: 0; }
+.ff-dash-about textarea:focus { border-color: var(--accent); }
+/* Read-only (view mode): the description as text, sized to it, not a field. */
+.ff-dash-about.is-readonly textarea { border: 0; background: none; padding: 0; min-height: 0;
+  resize: none; cursor: default; field-sizing: content; }
 /* Dot setting the nav group off from the dashboard name (paths mode). */
 .topbar .ff-sep { color: var(--muted); }
 /* Dashboard title in the left group, after the back button.
@@ -55,7 +71,12 @@ html, body { margin: 0; padding: 0; height: 100%;
 .topbar .ff-dash-name { font-size: 14px; font-weight: 600; color: var(--text);
   white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis;
   padding: 3px 8px; border-radius: 4px; cursor: text; outline: none; }
-.topbar .ff-dash-name:hover { background: var(--bg); }
+/* Only an editable name (outside view mode) invites a click. */
+.topbar .ff-dash-name:not([contenteditable]) { cursor: default; }
+/* View mode: a name with a description opens it, read-only, on click. */
+.topbar .ff-dash-name[tabindex]:not([contenteditable]) { cursor: pointer; }
+.topbar .ff-dash-name[tabindex]:not([contenteditable]):hover { background: var(--bg); }
+.topbar .ff-dash-name[contenteditable]:hover { background: var(--bg); }
 .topbar .ff-dash-name:focus { background: var(--bg); overflow: visible; max-width: none;
   box-shadow: 0 0 0 2px var(--accent); }
 /* 3-segment icon theme switch: Auto (A) / Light (sun) / Dark (moon). */

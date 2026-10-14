@@ -59,6 +59,7 @@ async function run() {
     });
     const data = await res.json();
     outEl.innerHTML = data.html;
+    if ('description' in data) setDashDescription(data.description);
     // htmx doesn't auto-wire nodes inserted via innerHTML; wire them now.
     if (window.htmx) window.htmx.process(outEl);
     syncActiveTab();
@@ -94,6 +95,87 @@ function yamlName(text) {
   return v;
 }
 function setYamlName(text, name) { return text.replace(/^name:.*$/m, 'name: ' + JSON.stringify(name)); }
+// Renaming also opens a box under the name for the dashboard's description. It
+// is filled from the ⓘ (what the server parsed, so any YAML form of it) and
+// writes a top-level `description:` back, as the name writes `name:`. Blur or
+// Cmd/Ctrl+Enter keeps the text, Esc puts the old one back; the box closes once
+// focus leaves both the name and the box.
+const titleEl = document.querySelector('.ff-dash-title');
+const aboutEl = document.getElementById('ff-dash-about');
+const aboutText = document.getElementById('ff-dash-about-text');
+let aboutBefore = '';
+function openAbout() {
+  if (!aboutEl || !aboutEl.hidden) return;
+  // View mode reads it, so with nothing to read there's nothing to open.
+  if (aboutText.readOnly && !nameEl.dataset.description) return;
+  aboutBefore = nameEl.dataset.description || '';
+  aboutText.value = aboutBefore;
+  aboutEl.hidden = false;
+}
+// Drops the key — with the indented lines under it, should it be a `|` / `>`
+// block — and, unless `desc` is empty, writes it back right after `name:`.
+// JSON.stringify gives a double-quoted YAML string, newlines escaped.
+function setYamlDescription(text, desc) {
+  const without = text.replace(/^description:.*(?:\r?\n[ \t]+.*)*(?:\r?\n)?/m, '');
+  if (!desc) return without;
+  const line = 'description: ' + JSON.stringify(desc);
+  if (!/^name:.*$/m.test(without)) return line + '\n' + without;
+  return without.replace(/^name:.*$/m, m => m + '\n' + line);
+}
+if (aboutText) {
+  aboutText.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); aboutText.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); aboutText.value = aboutBefore; aboutText.blur(); }
+  });
+  aboutText.addEventListener('blur', () => {
+    const desc = aboutText.value.trim();
+    if (desc === aboutBefore) return;
+    codeEl.value = setYamlDescription(codeEl.value, desc);
+    aboutBefore = desc;
+    setDashDescription(desc);
+    updateSaveState();          // an unsaved change, as a rename is
+  });
+  titleEl.addEventListener('focusout', e => {
+    if (!titleEl.contains(e.relatedTarget)) aboutEl.hidden = true;
+  });
+}
+
+// The YAML's `description:`, kept on the name: the box above edits it, and in
+// view mode it's the name's tooltip. Filled from /execute's answer, so any YAML
+// form of the text works.
+function setDashDescription(text) {
+  if (!nameEl) return;
+  nameEl.dataset.description = text;
+  syncTitleEditable();
+}
+
+// The name is renamed (and described) by clicking it — except in view mode,
+// which is for reading the dashboard: there the name is plain text, and a click
+// opens the same box read-only, to read the description (when there is one).
+function syncTitleEditable() {
+  if (!nameEl) return;
+  const editable = currentMode !== 'view';
+  const description = nameEl.dataset.description || '';
+  if (document.activeElement === nameEl || (aboutEl && aboutEl.contains(document.activeElement))) {
+    document.activeElement.blur();             // a mode switch mid-edit: close it
+  }
+  if (aboutEl) {
+    aboutEl.hidden = true;
+    aboutEl.classList.toggle('is-readonly', !editable);
+    aboutText.readOnly = !editable;
+  }
+  if (editable) {
+    nameEl.setAttribute('contenteditable', 'plaintext-only');
+    nameEl.setAttribute('tabindex', '0');
+    nameEl.title = 'Click to rename or describe';
+  } else {
+    nameEl.removeAttribute('contenteditable');
+    // Focusable only when a click has something to show.
+    if (description) nameEl.setAttribute('tabindex', '0');
+    else nameEl.removeAttribute('tabindex');
+    nameEl.title = description ? 'Click for the description' : '';
+  }
+}
 function syncNameFromYaml() {
   if (nameEl && document.activeElement !== nameEl) nameEl.textContent = yamlName(codeEl.value);
 }
@@ -135,13 +217,19 @@ if (saveBtn) {
 }
 
 if (nameEl) {
-  nameEl.setAttribute('contenteditable', 'plaintext-only');
   nameEl.setAttribute('spellcheck', 'false');
-  nameEl.setAttribute('title', 'Click to rename');
+  // Editable or not is setMode's call (via syncTitleEditable): it runs at
+  // startup, after `currentMode` exists — calling it here would be too early.
   nameEl.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') { e.preventDefault(); nameEl.blur(); }
+    if (aboutText && aboutText.readOnly) {          // view mode: reading only
+      if (e.key === 'Escape') nameEl.blur();
+      return;
+    }
+    // Enter commits the name and moves on to the description below it.
+    if (e.key === 'Enter') { e.preventDefault(); if (aboutText) aboutText.focus(); else nameEl.blur(); }
     else if (e.key === 'Escape') { e.preventDefault(); nameEl.textContent = yamlName(codeEl.value); nameEl.blur(); }
   });
+  nameEl.addEventListener('focus', openAbout);
   nameEl.addEventListener('blur', function() {
     const nm = nameEl.textContent.trim();
     if (!nm || nm === yamlName(codeEl.value)) { nameEl.textContent = yamlName(codeEl.value); return; }
@@ -288,6 +376,7 @@ function setMode(mode) {
   for (const b of modeSwitch.querySelectorAll('button')) {
     b.classList.toggle('active', b.dataset.mode === mode);
   }
+  syncTitleEditable();
   if (mode === 'calcs') loadCalcs();
   if (mode === 'code') codeEl.focus();
   if (mode === 'chat') {

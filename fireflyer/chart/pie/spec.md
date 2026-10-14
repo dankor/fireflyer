@@ -79,6 +79,8 @@ Display category distribution as a donut.
 ## Parameters
 - `dataset: str` — dataset name (or Parquet path standalone).
 - `title: str` — chart title.
+- `description: str = ""` — optional; what the chart shows, in a sentence. Not drawn on the
+  chart: the dashboard shows it at the top of the chart's filter panel.
 - `column: str` — the category column to group by. May be a **column calc** key
   as well as a real dataset column.
 - `calc` — a calc **key** resolved against the dashboard's `calcs:`
@@ -93,6 +95,6 @@ Display category distribution as a donut.
 - Outside a dashboard (e.g. standalone `to_html()` call) slices are not clickable; rendering is identical to a chart without crossfilters.
 
 ## Editor params
-Edit-modal schema (`Pie.PARAMS`): dataset (dropdown), title (text), column (column
+Edit-modal schema (`Pie.PARAMS`): dataset (dropdown), title (text), description (text), column (column
 dropdown), calc (calc dropdown), total (checkbox), filters (filter builder).
 Widgets live in `fireflyer/params.py`.
