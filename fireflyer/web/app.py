@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from fireflyer import config_edit
 from fireflyer import date_range
+from fireflyer import number_range
 from fireflyer import filters as filters_mod
 from fireflyer import calcs_edit
 from fireflyer.datasets import DatasetError, DatasetStore
@@ -1027,6 +1028,15 @@ def filter_range(
     )
 
 
+@app.get("/filter/number", response_class=HTMLResponse)
+def filter_number(request: Request) -> str:
+    """The number-range picker after a handle was let go or a number typed
+    (`changed` names which). Every request carries the picker's values and the
+    column's extent, so this needs nothing else — no YAML, no dataset."""
+    params = request.query_params
+    return number_range.respond(params, params.get("changed", ""))
+
+
 @app.post("/chart/config/form", response_class=HTMLResponse)
 async def chart_config_form(
     request: Request,
@@ -1282,6 +1292,7 @@ async def calcs_form(
             yaml_text, dataset, column, source
         ),
         column_types=config_edit.column_types(yaml_text, dataset, source),
+        column_extent=lambda column: config_edit.column_extent(yaml_text, dataset, column, source),
     )
 
 

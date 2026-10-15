@@ -11,7 +11,7 @@ import yaml
 from fireflyer import filters as filters_mod
 from fireflyer import calcs as calcs_mod
 from fireflyer import inline_data
-from fireflyer.params import column_type, filter_fields, type_glyph
+from fireflyer.params import FILTER_OPS, OP_WORDS, column_type, filter_fields, type_glyph
 from fireflyer.scan import scan
 from fireflyer.chart.bar.chart import Bar
 from fireflyer.chart.map.chart import Map
@@ -557,7 +557,8 @@ class Dashboard:
             return {
                 "column": labels.get(f.column, f.column),
                 "type": type_glyph((types or {}).get(f.column)),
-                "op": {"in": "in", "ni": "not in", "between": "between"}[f.op],
+                "op": dict(FILTER_OPS)[f.op],          # =, ≠, ↔
+                "op_word": OP_WORDS[f.op],
                 # Not "values": Jinja looks up attributes before items, so
                 # `r.values` would find `dict.values`, the method.
                 "vals": f.values_text,
@@ -604,6 +605,7 @@ class Dashboard:
             emitted=emitted,
             dataset=dataset,
             rows=rows,
+            source_icons=SOURCE_ICONS,
             add_body=filter_add_body(
                 cid,
                 dataset["name"],
@@ -784,18 +786,31 @@ def _chart_error_html(cid: str, exc: Exception) -> str:
 
 
 # Sources of filters that no chart set, as the panel shows them.
-_DECLARED_SOURCE = {"name": "declared", "glyph": "", "role": "declared"}
-_GLOBAL_SOURCE = {
-    "name": "Global",
-    "glyph": (
+def _source_icon(paths: str) -> str:
+    return (
         '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" '
         'fill="none" stroke="currentColor" stroke-width="1.4" '
-        'stroke-linecap="round" stroke-linejoin="round">'
+        f'stroke-linecap="round" stroke-linejoin="round">{paths}</svg>'
+    )
+
+
+# Where a filter in the panel comes from, as the icon leading its row — what
+# kind of filter it is, read before the column. Hovering or focusing it names
+# the source. Chosen side by side at 12px: a globe for one that applies across
+# the dashboard; a lock for one built into the chart (it can't be removed);
+# an arrow cursor for one a click selected (its row colour says whose click).
+SOURCE_ICONS = {
+    "global": _source_icon(
         '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6'
-        's-.8 4.3-2.6 6M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/></svg>'
+        's-.8 4.3-2.6 6M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/>'
     ),
-    "role": "global",
+    "declared": _source_icon(
+        '<rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>'
+    ),
+    "selected": _source_icon('<path d="M4 2.5 12 7.7l-3.6.9 2 3.9-1.6.8-2-3.9L4 12z"/>'),
 }
+_DECLARED_SOURCE = {"name": "Built-in", "glyph": "", "role": "declared"}
+_GLOBAL_SOURCE = {"name": "Global", "glyph": "", "role": "global"}
 
 
 def _description(raw, where: str) -> str:

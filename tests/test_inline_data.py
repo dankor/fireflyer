@@ -168,7 +168,9 @@ def test_the_edit_modal_offers_inline_columns():
         "datasets:\n  sales: |\n    region,amount,rep\n    north,10,ann\n"
     )
     form = config_edit.build_form(yaml, "t")
+    # Column dropdowns, and the filter row's column list (buttons, one per column).
     offered = set(re.findall(r'<option value="([^"]*)"', form))
+    offered |= set(re.findall(r'data-column="([^"]*)"', form))
     assert {"region", "amount", "rep"} <= offered
 
 

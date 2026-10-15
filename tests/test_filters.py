@@ -146,9 +146,20 @@ def test_between_compares_numbers_numerically():
     use — lexicographically "10" < "9", which would silently mis-filter."""
     import polars as pl
 
-    df = pl.DataFrame({"n": [8, 9, 10, 11]})
+    df = pl.DataFrame({"n": [8, 9, 10, 11, 12]})
     f = filters_mod.normalize([{"column": "n", "op": "between", "values": [9, 11]}])
-    assert df.filter(*filters_mod.predicates(f, df.columns))["n"].to_list() == [9, 10]
+    # Inclusive on numbers: a 9–11 pick means 11 too.
+    assert df.filter(*filters_mod.predicates(f, df.columns))["n"].to_list() == [9, 10, 11]
+
+
+def test_between_on_dates_stays_half_open():
+    """A month bucket is [first day, next month's first day) — June must not
+    take July 1st with it."""
+    import polars as pl
+
+    df = pl.DataFrame({"d": ["2026-06-01", "2026-06-30", "2026-07-01"]})
+    f = filters_mod.normalize([{"column": "d", "op": "between", "values": ["2026-06-01", "2026-07-01"]}])
+    assert df.filter(*filters_mod.predicates(f, df.columns))["d"].to_list() == ["2026-06-01", "2026-06-30"]
 
 
 def test_between_requires_exactly_two_values():

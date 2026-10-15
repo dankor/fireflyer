@@ -133,7 +133,7 @@ calcs:
     order_day: {formula: 'str2dt(order_date, YYYYMMDD)'}   # names a column ⇒ calculated column
 ```
 
-Every chart also accepts an optional `filters` list. Each filter is `{column, op, values}` where `op` is `in`, `ni` (not-in) or `between`. `between` takes exactly two values (low, high) and is half-open — `low <= v < high`. Example:
+Every chart also accepts an optional `filters` list. Each filter is `{column, op, values}` where `op` is `in`, `ni` (not-in) or `between`. `between` takes exactly two values (low, high): on dates it is half-open — `low <= v < high` (so June is `[2026-06-01, 2026-07-01]`) — and on numbers inclusive — `low <= v <= high` (`[10, 20]` includes 20). Example:
 ```
 filters:
   - column: status

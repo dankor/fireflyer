@@ -1,6 +1,8 @@
 """Unit tests for the shared editor param widgets."""
 
+import json
 import re
+from html import unescape
 
 import polars as pl
 import pytest
@@ -111,7 +113,7 @@ def test_filter_list_renders_rows_and_template():
     html = p.render([{"column": "status", "op": "in", "values": ["paid", "pending"]}], CTX)
     assert "ff-filter-add" in html and "ff-filter-tpl" in html
     assert 'value="paid, pending"' in html
-    assert '<option value="status" selected>' in html
+    assert '<input name="filter_column" value="status" hidden>' in html
 
 
 def test_filter_list_parse_zips_and_skips_empty():
@@ -249,13 +251,45 @@ def test_column_type(dtype, kind):
     assert column_type(str(dtype)) == kind          # the dataset page has strings
 
 
-def test_each_column_option_is_led_by_its_type_glyph():
-    html = filter_fields(["status", "amount"], types={"status": "text", "amount": "number"})
-    assert f'<option value="status">{type_glyph("text")} <span>status</span></option>' in html
-    assert f'{type_glyph("number")} <span>amount</span>' in html
-    assert "<button><selectedcontent></selectedcontent></button>" in html
-    # Unknown type: no icon, never a wrong one.
-    assert type_glyph(None) == "" and 'value="x"> <span>x</span>' in filter_fields(["x"])
+def _column_items(html):
+    return re.findall(r'<button type="button" class="ff-colpick-item[^"]*" data-column="([^"]*)"[^>]*>(.*?)</button>', html, re.S)
+
+
+def test_each_column_is_led_by_its_type_icon():
+    """Buttons, not <option>s: a native <select> drops an option's icon in every
+    browser but Chrome/Edge 135+; a button shows it everywhere."""
+    html = filter_fields(["status", "amount", "x"], types={"status": "text", "amount": "number"})
+    items = dict(_column_items(html))
+    assert items["status"] == f'{type_glyph("text")}<span>status</span>'
+    assert items["amount"] == f'{type_glyph("number")}<span>amount</span>'
+    assert items["x"] == "<span>x</span>"          # unknown type: no icon, never a wrong one
+    assert html.count("<select") == 1 and '<select class="ff-input ff-op-select" name="filter_op"' in html   # only the op
+
+
+def test_the_field_shows_the_chosen_column_and_submits_it():
+    html = filter_fields(["status", "amount"], column="amount", types={"amount": "number"})
+    field = re.search(r'<summary class="ff-input ff-colpick-field"[^>]*>(.*?)</summary>', html, re.S).group(1)
+    assert type_glyph("number") in field and '<span class="ff-colpick-name">amount</span>' in field
+    assert '<input name="filter_column" value="amount" hidden>' in html
+    assert 'class="ff-colpick-item is-selected" data-column="amount"' in html
+
+
+def test_the_column_placeholder_is_never_a_choice():
+    """Shown in the empty field, absent from the list."""
+    html = filter_fields(["id"])
+    assert '<span class="ff-placeholder">Column</span>' in html.split("</summary>")[0]
+    assert [c for c, _ in _column_items(html)] == ["id"]
+
+
+def test_in_the_panel_each_column_is_a_refetch_carrying_the_pick():
+    html = filter_fields(["id", "status"], live="orders")
+    status = re.search(r'<button[^>]*data-column="status"[^>]*>', html).group(0)
+    assert 'hx-post="/filter/fields"' in status and 'hx-target="closest .ff-filter-fields"' in status
+    vals = json.loads(unescape(re.search(r'hx-vals="([^"]*)"', status).group(1)))
+    assert vals == {"filter_dataset": "orders", "live": "1", "filter_column": "status"}
+    # The pick is required there, which holds the panel's + back until it's made.
+    assert '<input name="filter_column" value="" hidden required>' in html
+    assert "hx-post" not in "".join(b for _, b in _column_items(filter_fields(["id"])))   # builder: editor JS
 
 
 def test_each_type_icon_is_drawn_and_says_what_it_means():

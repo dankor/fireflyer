@@ -80,6 +80,7 @@ def _context(config: dict, cfg: dict, resolve=None) -> ParamContext:
         calcs=value_keys,
         column_values=lambda column: _distinct(config, dataset, column, resolve),
         column_types=_types(config, dataset, resolve),
+        column_extent=lambda column: _extent(config, dataset, column, resolve),
     )
 
 
@@ -179,6 +180,20 @@ def _latest(config: dict, dataset, column: str, resolve=None) -> str:
     return str(latest)[:10] if latest is not None else ""
 
 
+def _extent(config: dict, dataset, column: str, resolve=None) -> tuple | None:
+    """A number column's `(min, max, whole_numbers)` — the span a number range's
+    slider covers, and whether it steps by 1. None when it can't be read."""
+    try:
+        frame = _scan(config, dataset, resolve)
+        dtype = frame.collect_schema().get(column)
+        mn, mx = frame.select(pl.col(column).min().alias("a"), pl.col(column).max().alias("b")).collect().row(0)
+    except Exception:
+        return None
+    if mn is None or mx is None:
+        return None
+    return float(mn), float(mx), bool(dtype is not None and dtype.is_integer())
+
+
 def _present(config: dict, dataset, column: str, values, resolve=None) -> list[str]:
     """Those of `values` that `column` really has — asked of the data, since a
     value can sit beyond the first page the picker lists."""
@@ -206,6 +221,11 @@ def column_values(text: str, dataset, column: str, resolve=None) -> ValueChoices
     """`_distinct` from YAML text — for callers outside this module that hold
     the document, not its parsed config (the calcs manager)."""
     return _distinct(_config_or_empty(text), dataset, column, resolve)
+
+
+def column_extent(text: str, dataset, column: str, resolve=None) -> tuple | None:
+    """`_extent` from YAML text, likewise."""
+    return _extent(_config_or_empty(text), dataset, column, resolve)
 
 
 def column_types(text: str, dataset, resolve=None) -> dict[str, str]:
@@ -244,9 +264,10 @@ def filter_fields_for(
     if choices is not None:
         values = _present(config, dataset, column, values, resolve)
     anchor = _latest(config, dataset, column, resolve) if kind == "date" else ""
+    extent = _extent(config, dataset, column, resolve) if kind == "number" and op == "between" else None
     return filter_fields(
         columns, column, op, values, choices,
-        live=dataset if live else None, types=types, anchor=anchor,
+        live=dataset if live else None, types=types, anchor=anchor, extent=extent,
     )
 
 

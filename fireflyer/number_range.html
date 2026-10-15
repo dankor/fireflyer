@@ -1,0 +1,27 @@
+{#- Number-range picker; see number_range.py. The two number fields are what's
+    submitted (`filter_low` / `filter_high`); the slider under them, outside the
+    form (`form` names none), only moves them. Every input is an htmx GET
+    carrying the picker's values and state (`wiring`, built in Python). -#}
+{%- if part == 'all' %}
+<div class="ff-numrange">
+  <div class="ff-numrange-fields">
+    <input class="ff-input" type="number" name="filter_low" value="{{ low }}" step="{{ step }}" placeholder="{{ track.min if track else 'from' }}" aria-label="From"{% if required %} required{% endif %} {{ wiring.filter_low|safe }}>
+    <span class="ff-numrange-dash" aria-hidden="true">–</span>
+    <input class="ff-input" type="number" name="filter_high" value="{{ high }}" step="{{ step }}" placeholder="{{ track.max if track else 'to' }}" aria-label="To (inclusive)"{% if required %} required{% endif %} {{ wiring.filter_high|safe }}>
+  </div>
+{%- endif %}
+  {%- if track %}
+  {#- Two range inputs on one track; only their handles take the pointer. The
+      shaded stretch between them is drawn from `--lo` / `--hi` (0..1). -#}
+  <div class="ff-numrange-track{% if track.low_on_top %} is-low-top{% endif %}" style="--lo: {{ track.lo_at }}; --hi: {{ track.hi_at }}">
+    {#- Out of the tab order: the slider is the pointer's way in, the fields the
+        keyboard's — and tabbing into it would land on what a typed number
+        redraws. -#}
+    <input type="range" name="slide_low" form="ff-none" tabindex="-1" min="{{ track.min }}" max="{{ track.max }}" step="{{ track.step }}" value="{{ track.low }}" aria-label="From" {{ wiring.slide_low|safe }}>
+    <input type="range" name="slide_high" form="ff-none" tabindex="-1" min="{{ track.min }}" max="{{ track.max }}" step="{{ track.step }}" value="{{ track.high }}" aria-label="To" {{ wiring.slide_high|safe }}>
+    <span class="ff-numrange-ends" aria-hidden="true"><span>{{ track.min }}</span><span>{{ track.max }}</span></span>
+  </div>
+  {%- endif %}
+{%- if part == 'all' %}
+</div>
+{%- endif %}

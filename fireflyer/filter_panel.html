@@ -26,17 +26,35 @@
         {#- The same ⓘ the gallery puts beside a dataset's name. -#}
         <span class="fireflyer-info" tabindex="0" role="img" aria-label="{{ dataset.description }}" data-tip="{{ dataset.description }}"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.1"/></svg></span>
       {%- endif %}</span>
-      <span class="ds-updated">{% if dataset.inline %}inline data{% elif dataset.updated %}updated {{ dataset.updated }}{% else %}—{% endif %}</span>
+      <span class="ds-updated">{% if dataset.inline %}inline data{% elif dataset.updated %}Last updated at {{ dataset.updated }}{% else %}—{% endif %}</span>
+    </div>
+    {#- The filters' own header: just the funnel — each row says what it is by
+        its icons, so the table needs no column headings. -#}
+    <div class="fireflyer-filter-head" role="heading" aria-level="3" aria-label="Filters" title="Filters">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2.5 3h11L9.3 8.3v4.2L6.7 13.8V8.3z"/></svg>
     </div>
     {%- if rows %}
     <table class="fireflyer-filter-table">
-      <thead><tr><th>Source</th><th>Column</th><th>Op</th><th>Values</th><th></th></tr></thead>
+      {#- Widths for the fixed layout, which no header row carries any more. -#}
+      <colgroup><col class="c-col"><col class="c-op"><col><col class="c-act"></colgroup>
       <tbody>
       {%- for r in rows %}
+      {%- set kind = 'selected' if r.source.role in ('emitter', 'incoming') else r.source.role %}
       <tr class="src-{{ r.source.role }}">
-        <td class="src" title="{{ r.source.name }}">{% if r.source.glyph %}{{ r.source.glyph|safe }}{% endif %}<span>{{ r.source.name }}</span></td>
-        <td class="col" title="{{ r.column }}">{{ r.type|safe }}{{ r.column }}</td>
-        <td class="op">{{ r.op }}</td>
+        <td class="col">
+          {#- Where the filter comes from, as an icon (`SOURCE_ICONS`); hover or
+              focus (a click) names it — the chart, by its type icon and title,
+              or just Global / Built-in. CSS only, so it works in `to_html()`. -#}
+          <span class="fireflyer-src" tabindex="0" aria-label="Source: {{ r.source.name }}{% if r.source.role == 'emitter' %} (this chart){% endif %}">
+            {{- source_icons[kind]|safe -}}
+            <span class="fireflyer-src-tip" role="tooltip">
+              {%- if r.source.glyph %}{{ r.source.glyph|safe }}{% endif %}<span class="tip-name">{{ r.source.name }}</span>
+              {%- if r.source.role == 'emitter' %}<span class="tip-note">this chart</span>{% endif -%}
+            </span>
+          </span>
+          {{- r.type|safe }}<span class="col-name" title="{{ r.column }}">{{ r.column }}</span>
+        </td>
+        <td class="op" title="{{ r.op_word }}" aria-label="{{ r.op_word }}">{{ r.op }}</td>
         <td class="vals" title="{{ r.vals }}">{{ r.vals }}</td>
         <td class="rm">
           {%- if r.edit %}
