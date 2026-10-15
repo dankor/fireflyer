@@ -5,10 +5,13 @@ A filter is a small declarative shape: `{column, op, values}` where `op` is
 every row. The same shape powers the Python `filters=...` argument, the YAML
 `filters:` block, and dashboard crossfilters — see architecture.md, "Filters".
 
-`between` takes exactly two values and is **half-open** — `lo <= v < hi`. It
-exists because a bucketed axis is a *range*: a bar labelled `2026-06` covers
-every date in June, which no list of exact values can express (see the bar
-chart's spec). Half-open is what makes adjacent buckets tile without overlap.
+`between` takes exactly two values. On dates (and other text) it is
+**half-open** — `lo <= v < hi` — because it exists for a bucketed axis: a bar
+labelled `2026-06` covers every date in June, which no list of exact values can
+express, and half-open is what makes adjacent buckets tile without overlap. On
+**numbers** it is **inclusive** — `lo <= v <= hi` — because nothing tiles
+numbers here: a number range is picked by a person (a price from 10 to 20), who
+means 20 too.
 """
 
 import base64
@@ -172,16 +175,17 @@ def predicates(filters: Iterable[Filter], columns: Iterable[str]) -> list[pl.Exp
 
 
 def _between(column: str, as_text: pl.Expr, low: str, high: str) -> pl.Expr:
-    """Half-open `low <= v < high`.
+    """Inclusive `low <= v <= high` on numbers; half-open `low <= v < high` on
+    text — which is what dates are compared as (see the module docstring).
 
     Compared as **numbers** when both bounds are numeric, as text otherwise.
-    Text works for the case this exists for — ISO-8601 dates sort
+    Text works for the case it exists for — ISO-8601 dates sort
     chronologically as strings — but `"10" < "9"` lexicographically, so numeric
     bounds have to opt out of the stringify-both-sides rule the other ops use.
     """
     if _is_number(low) and _is_number(high):
         as_number = pl.col(column).cast(pl.Float64, strict=False)
-        return (as_number >= float(low)) & (as_number < float(high))
+        return (as_number >= float(low)) & (as_number <= float(high))
     return (as_text >= low) & (as_text < high)
 
 

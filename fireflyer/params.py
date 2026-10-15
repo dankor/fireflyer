@@ -22,6 +22,7 @@ from typing import Callable, NamedTuple
 from html import escape
 
 from fireflyer import date_range
+from fireflyer import number_range
 from fireflyer import filters as filters_mod
 
 
@@ -59,6 +60,9 @@ class ParamContext:
     # column -> its type (`column_type`), for the type glyph beside it and the
     # ops a filter on it offers. A column missing here is of unknown type.
     column_types: dict[str, str] = field(default_factory=dict)
+    # column -> its `(min, max, whole_numbers)` for a number range's slider, or
+    # None when it can't be read.
+    column_extent: Callable[[str], tuple | None] | None = None
 
 
 class Param:
@@ -300,7 +304,10 @@ class ListParam(Param):
 
 # `between` takes exactly two comma-separated values (low, high) and is
 # half-open — the same op a bar segment emits for a bucketed axis.
-FILTER_OPS = (("in", "in"), ("ni", "not in"), ("between", "between"))
+# Each op as a symbol — what a viewer reads in the op dropdown and the filter
+# panel's rows — and in words (`OP_WORDS`), for its title and screen readers.
+FILTER_OPS = (("in", "="), ("ni", "≠"), ("between", "↔"))
+OP_WORDS = {"in": "in", "ni": "not in", "between": "between"}
 
 
 # The ops that compare against a set of exact values — the ones a value picker
@@ -314,6 +321,9 @@ PICKABLE_OPS = ("in", "ni")
 # sense on. `between` exists for time buckets; on text it compares
 # alphabetically, which nobody means.
 DATE_KIND = "date"
+NUMBER_KIND = "number"
+# The column types a `between` makes sense on: a date range, a number range.
+RANGE_KINDS = (DATE_KIND, NUMBER_KIND)
 COLUMN_TYPES = {
     # Digits — the same `123` as the number chart's icon: both say "a number".
     "number": ('<path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/>'
@@ -379,6 +389,14 @@ FILTER_VALUES_ENDPOINT = "/filter/values"
 SEARCH_FROM = 10
 
 
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
 class ValueChoices(NamedTuple):
     """A column's distinct values for a value picker: sorted, as text, at most
     a page of them (`more` says the column has others — the search narrows)."""
@@ -388,11 +406,12 @@ class ValueChoices(NamedTuple):
 
 def filter_ops(kind, column="", op="") -> tuple:
     """The `(value, label)` ops a filter on a column of `kind` offers: `between`
-    only on dates. With a column whose kind is unknown (its schema can't be
-    read) nothing is withheld that might be right; with no column yet, only the
-    ops every column takes. An `op` already set is always kept — opening a
-    filter must never quietly change what it says."""
-    if kind == DATE_KIND or (kind is None and column):
+    on dates and numbers — the types a range means something on. With a column
+    whose kind is unknown (its schema can't be read) nothing is withheld that
+    might be right; with no column yet, only the ops every column takes. An `op`
+    already set is always kept — opening a filter must never quietly change
+    what it says."""
+    if kind in RANGE_KINDS or (kind is None and column):
         ops = FILTER_OPS
     else:
         ops = tuple(o for o in FILTER_OPS if o[0] in PICKABLE_OPS)
@@ -402,7 +421,7 @@ def filter_ops(kind, column="", op="") -> tuple:
 
 def filter_fields(
     columns, column="", op="in", values=(), choices=None, live=None, types=None,
-    anchor="",
+    anchor="", extent=None,
 ) -> str:
     """Column / op / values inputs for one filter, read back by
     `parse_filters`. A `column` the list doesn't have is kept as an option, so
@@ -414,7 +433,9 @@ def filter_fields(
     — the current ones ticked — so nobody has to remember or retype them, with
     a search box once the list is long (`value_picker`). For `between` on a
     date column it is a one-field range picker (`date_range`) — opening on
-    `anchor`, the column's latest day, when no range is set yet.
+    `anchor`, the column's latest day, when no range is set yet. On a number
+    column it is a from / to pair over a slider (`number_range`) spanning
+    `extent`, the column's `(min, max, whole_numbers)`.
     Otherwise (no column yet, or values that can't be read) it is the
     comma-separated text input.
 
@@ -437,12 +458,23 @@ def filter_fields(
     off = "" if column else " disabled"
     listed = [column, *columns] if column and column not in columns else list(columns)
     refetch = search = ""
+    pick = None
     if live is not None:
-        context = escape(json.dumps({"filter_dataset": live, "live": "1"}), quote=True)
+        context = {"filter_dataset": live, "live": "1"}
         shared = (
             ' hx-include="#fireflyer-dashboard input[name=yaml_text]"'
-            f' hx-vals="{context}"'
+            f' hx-vals="{escape(json.dumps(context), quote=True)}"'
         )
+        # A column picked from the list: the same re-fetch, carrying the pick
+        # (`hx-vals` outranks the old value the form would send).
+        def pick(c):
+            vals = escape(json.dumps({**context, "filter_column": c}), quote=True)
+            return (
+                f' hx-post="{FILTER_FIELDS_ENDPOINT}"'
+                ' hx-target="closest .ff-filter-fields" hx-swap="outerHTML"'
+                ' hx-include="#fireflyer-dashboard input[name=yaml_text]"'
+                f' hx-vals="{vals}"'
+            )
         refetch = (
             f' hx-post="{FILTER_FIELDS_ENDPOINT}" hx-trigger="change"'
             ' hx-target="closest .ff-filter-fields" hx-swap="outerHTML"' + shared
@@ -456,31 +488,63 @@ def filter_fields(
         )
     return (
         '<span class="ff-filter-fields">'
-        f'<select class="ff-input ff-column-select" name="filter_column" aria-label="Column"{need}{refetch}>'
-        f'{_column_options(listed, column, types)}</select>'
-        f'<select class="ff-input" name="filter_op" aria-label="Operator"{off}{refetch}>'
-        f'{_options(filter_ops(kind, column, op), op)}</select>'
-        f'{_values_control(op, values, choices, kind, need + off, search, anchor)}'
+        f'{_column_picker(listed, column, types, need, pick)}'
+        f'<select class="ff-input ff-op-select" name="filter_op" aria-label="Operator"{off}{refetch}>'
+        f'{_op_options(filter_ops(kind, column, op), op)}</select>'
+        f'{_values_control(op, values, choices, kind, need + off, search, anchor, extent)}'
         '</span>'
     )
 
 
-def _column_options(columns, current, types) -> str:
-    """The column picker's options, each led by its type glyph. A customizable
-    select (`appearance: base-select`) draws the glyph, and `<selectedcontent>`
-    carries it into the closed control; a browser without one shows the
-    options' text — the glyph character and the name, so the type still reads."""
-    options = "".join(
-        f'<option value="{escape(c, quote=True)}"{" selected" if c == current else ""}>'
-        f'{type_glyph(types.get(c))} <span>{escape(c)}</span></option>'
+def _op_options(ops, current) -> str:
+    """The op dropdown's options: the symbol shown, the word as its title and
+    accessible name."""
+    return "".join(
+        f'<option value="{value}"{" selected" if value == current else ""}'
+        f' title="{OP_WORDS[value]}" aria-label="{OP_WORDS[value]}">{symbol}</option>'
+        for value, symbol in ops
+    )
+
+
+def _column_picker(columns, current, types, need="", pick=None) -> str:
+    """The column field: the chosen column with its type icon, opening a list
+    of every column, each led by its icon. Not a <select>: only Chrome/Edge
+    135+ can draw an icon inside one — everywhere else a native menu shows the
+    options' text alone. A `<details>` and buttons render the same in every
+    browser, and need no script: in the dashboard's panel each button is an
+    htmx re-fetch of the row (`pick(column)` gives its attributes); in the
+    editor's forms its script reads `data-column` and does the same.
+
+    The pick is submitted from a `hidden` text input, not `type="hidden"`: a
+    `hidden` field still validates, so `required` (`need`) holds the panel's +
+    back until a column is chosen."""
+    if current:
+        shown = f'{type_glyph(types.get(current))}<span class="ff-colpick-name">{escape(current)}</span>'
+    else:
+        shown = '<span class="ff-placeholder">Column</span>'
+    items = "".join(
+        f'<button type="button" class="ff-colpick-item{" is-selected" if c == current else ""}"'
+        f' data-column="{escape(c, quote=True)}"{pick(c) if pick else ""}>'
+        f'{type_glyph(types.get(c))}<span>{escape(c)}</span></button>'
         for c in columns
     )
-    # The empty option doubles as the placeholder the closed picker shows.
-    placeholder = '<option value=""><span class="ff-placeholder">Column</span></option>'
-    return f'<button><selectedcontent></selectedcontent></button>{placeholder}{options}'
+    chevron = (
+        '<svg class="ff-colpick-chevron" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
+        '<path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"'
+        ' stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    )
+    return (
+        '<details class="ff-colpick">'
+        f'<summary class="ff-input ff-colpick-field" aria-label="Column">{shown}{chevron}</summary>'
+        f'<input name="filter_column" value="{escape(current, quote=True)}" hidden{need}>'
+        f'<div class="ff-colpick-list" role="listbox" aria-label="Columns">{items}</div>'
+        '</details>'
+    )
 
 
-def _values_control(op, values, choices, kind=None, attrs="", search="", anchor="") -> str:
+def _values_control(
+    op, values, choices, kind=None, attrs="", search="", anchor="", extent=None
+) -> str:
     """`attrs` (` required`, ` disabled`) go on the text and date inputs. Not on
     the checkboxes: `required` there would demand every box ticked — "at least
     one" is the panel's CSS's job."""
@@ -489,6 +553,13 @@ def _values_control(op, values, choices, kind=None, attrs="", search="", anchor=
         picker = _day_range(values, "required" in attrs, anchor)
         if picker:
             return picker
+    if op == "between" and kind == NUMBER_KIND:
+        low, high = (list(values) + ["", ""])[:2]
+        mn, mx, whole = extent if extent else (None, None, False)
+        return number_range.render(
+            low, high, (mn, mx) if extent else None,
+            integer=whole, required="required" in attrs,
+        )
     if op not in PICKABLE_OPS or choices is None:
         text = ", ".join(values)
         return (
@@ -575,10 +646,16 @@ def parse_filters(form) -> list[dict]:
             rows[-1]["values"].append(raw)
         elif key in ("filter_from", "filter_to"):     # a date picker
             rows[-1][key] = (raw or "").strip()
+        elif key in ("filter_low", "filter_high"):    # a number range
+            rows[-1][key] = (raw or "").strip()
     for row in rows:
         first, last = row.pop("filter_from", ""), row.pop("filter_to", "")
         if first and last:
             row["values"] = filters_mod.day_bounds(first, last) or []
+        # Both ends inclusive on numbers, so taken as typed.
+        low, high = row.pop("filter_low", ""), row.pop("filter_high", "")
+        if low and high and _is_number(low) and _is_number(high):
+            row["values"] = [low, high]
     return [r for r in rows if r["column"] and r["values"]]
 
 
@@ -588,10 +665,10 @@ class FilterListParam(Param):
     button."""
     kind = "filters"
 
-    def _row(self, columns, column="", op="in", values=(), choices=None, types=None) -> str:
+    def _row(self, columns, column="", op="in", values=(), choices=None, types=None, extent=None) -> str:
         return (
             '<div class="ff-filter-row">'
-            f'{filter_fields(columns, column, op, values, choices, types=types)}'
+            f'{filter_fields(columns, column, op, values, choices, types=types, extent=extent)}'
             '<button type="button" class="ff-filter-del" title="Remove filter"'
             f' aria-label="Remove filter">{icon("close")}</button>'
             '</div>'
@@ -602,9 +679,14 @@ class FilterListParam(Param):
         for f in (value or []):
             column = f.get("column", "")
             choices = ctx.column_values(column) if ctx.column_values and column else None
+            op = f.get("op", "in")
+            extent = (
+                ctx.column_extent(column)
+                if ctx.column_extent and op == "between" and ctx.column_types.get(column) == NUMBER_KIND
+                else None
+            )
             rows.append(self._row(
-                ctx.columns, column, f.get("op", "in"), f.get("values", []), choices,
-                ctx.column_types,
+                ctx.columns, column, op, f.get("values", []), choices, ctx.column_types, extent,
             ))
         template = self._row(ctx.columns, types=ctx.column_types)  # cloned by the add button
         return self._wrap(

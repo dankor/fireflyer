@@ -715,17 +715,14 @@ def test_the_filter_indicator_uses_the_display_name(orders_parquet):
     token = _row_tokens(dash.render_cell("t", cf_tokens=[]))[0]
     cell = dash.render_cell("t", cf_tokens=[token])
 
-    # Drop the source cell: this test is about the column *label*, and the row
-    # now leads with which chart set the filter.
-    rows = [
-        # The text past the source cell, minus the column's type glyph.
-        " ".join(re.sub(r"<[^>]+>", " ", re.sub(r'<span class="ff-type-glyph"[^>]*>[^<]*</span>', "", r).split("</td>", 1)[1]).split())
-        for r in re.findall(r'<tr class="src-\w+">(.*?)</tr>', cell, re.S)
-    ]
+    from conftest import panel_rows
+
+    # This test is about the column *label* — not where the filter came from.
+    rows = [f"{column} {op} {values}" for _, _, column, op, values in panel_rows(cell)]
     # Which group lands first isn't fixed without a `sort:`, so match the label
     # and the value the token actually carried.
     value = token.split("status=")[1]
-    assert rows == [f"Order status in {value}"]
+    assert rows == [f"Order status = {value}"]
 
 
 def test_the_relabelled_columns_description_reaches_the_header_card(orders_parquet):

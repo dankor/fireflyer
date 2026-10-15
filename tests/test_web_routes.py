@@ -349,7 +349,8 @@ def test_the_panels_fields_refetch_as_a_value_picker(client):
     assert re.findall(r'name="filter_value" value="([^"]+)"', html) == [
         "cancelled", "paid", "pending", "shipped",
     ]
-    assert html.count('hx-post="/filter/fields"') == 2        # column + op
+    # The op select, and each column in the column list, re-fetch the row.
+    assert 'name="filter_op"' in html and html.count('hx-post="/filter/fields"') > 2
     # The builder's re-fetch (editor JS) gets the same fields, minus htmx.
     builder = client.post("/filter/fields", data={
         "yaml_text": _YAML, "filter_dataset": "orders",
@@ -392,10 +393,10 @@ def test_the_ops_follow_the_column_kind(client):
         }).text
 
     date = fields("at", "between")
-    assert '<option value="between" selected>' in date and 'class="ff-range' in date
+    assert '<option value=\"between\" selected ' in date and 'class="ff-range' in date
     text = fields("status", "between")
     assert 'value="between"' not in text
-    assert '<option value="in" selected>' in text and 'name="filter_value"' in text
+    assert '<option value=\"in\" selected ' in text and 'name="filter_value"' in text
 
 
 def test_a_picked_day_range_adds_a_global_filter(client):
@@ -413,9 +414,9 @@ def test_a_column_calc_is_typed_from_its_data(client):
     }).text
     from fireflyer.params import type_glyph
 
-    assert f'{type_glyph("date")} <span>at</span>' in html
-    assert f'{type_glyph("text")} <span>status</span>' in html
-    assert f'{type_glyph("number")} <span>amount</span>' in html
+    assert f'{type_glyph("date")}<span>at</span></button>' in html
+    assert f'{type_glyph("text")}<span>status</span></button>' in html
+    assert f'{type_glyph("number")}<span>amount</span></button>' in html
 
 
 def test_the_search_route_returns_only_the_list(client):
@@ -458,8 +459,8 @@ def test_editing_loads_the_filter_into_the_bottom_row(client):
     html = client.post("/filter/edit", data={
         "yaml_text": _YAML, "filter_dataset": "orders", "cid": "b", "token": token,
     }).text
-    assert '<option value="status" selected>' in html
-    assert '<option value="ni" selected>' in html and 'value="paid" checked' in html
+    assert '<input name="filter_column" value="status" hidden required>' in html
+    assert '<option value=\"ni\" selected ' in html and 'value="paid" checked' in html
     replace = re.search(r'<input name="replace" value="([^"]*)" hidden>', html).group(1)
     assert html_mod.unescape(replace) == token
     assert 'title="Save filter"' in html and 'title="Cancel edit"' in html
@@ -543,3 +544,27 @@ def test_renaming_from_the_dataset_page_returns_to_it(client, tmp_path, monkeypa
     r = client.post("/datasets/revenue/rename", data={"name": "revenue", "description": "Yo"},
                     follow_redirects=False)
     assert r.headers["location"] == "/datasets"
+
+
+def test_a_number_column_offers_a_range_over_its_values(client):
+    html = client.post("/filter/fields", data={
+        "yaml_text": _YAML, "filter_dataset": "orders",
+        "filter_column": "amount", "filter_op": "between",
+    }).text
+    assert '<option value="between" selected' in html and 'class="ff-numrange"' in html
+    assert 'min="7" max="80" step="1"' in html          # the data's own extent
+
+
+def test_the_number_route_applies_a_drag(client):
+    html = client.get("/filter/number", params={
+        "filter_low": "", "filter_high": "", "slide_low": "20", "slide_high": "80",
+        "min": "7", "max": "80", "step": "1", "integer": "1", "changed": "slide_low",
+    }).text
+    assert 'name="filter_low" value="20"' in html and 'name="filter_high" value="80"' in html
+
+
+def test_a_number_range_adds_a_global_filter(client):
+    html = _filter(client, filter_column="amount", filter_op="between",
+                   filter_low="10", filter_high="42").text
+    want = filters_mod.global_token("amount", "between", ["10", "42"])
+    assert [html_mod.unescape(t) for t in _tokens(html)] == [want]

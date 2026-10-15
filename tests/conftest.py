@@ -74,3 +74,23 @@ def snapshot(request):
         assert actual == expected, f"snapshot mismatch ({path})"
 
     return check
+
+
+def panel_rows(html):
+    """The filter panel's rows as `(source role, source name, column, op,
+    values)` — what a viewer reads, minus the icons."""
+    from html import unescape
+
+    def text(fragment):
+        return unescape(" ".join(re.sub(r"<[^>]+>", " ", fragment).split()))
+
+    out = []
+    for role, body in re.findall(r'<tr class="src-(\w+)">(.*?)</tr>', html, re.S):
+        out.append((
+            role,
+            text(re.search(r'<span class="tip-name">(.*?)</span>', body, re.S).group(1)),
+            text(re.search(r'<span class="col-name"[^>]*>(.*?)</span>', body, re.S).group(1)),
+            text(re.search(r'<td class="op"[^>]*>(.*?)</td>', body, re.S).group(1)),
+            text(re.search(r'<td class="vals"[^>]*>(.*?)</td>', body, re.S).group(1)),
+        ))
+    return out

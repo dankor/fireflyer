@@ -174,6 +174,8 @@ def test_every_calcs_button_is_an_icon():
                  calcs_edit.render_form(yaml, "orders", "n")):
         # Not a customizable select's own `<button>` — that's the closed control.
         html = html.replace("<button><selectedcontent></selectedcontent></button>", "")
+        # Nor the column list's items: a column is a name, led by its type icon.
+        html = re.sub(r'<button type="button" class="ff-colpick-item.*?</button>', "", html, flags=re.S)
         buttons = re.findall(r"<button[^>]*>(.*?)</button>", html, re.S)
         assert buttons
         for inner in buttons:

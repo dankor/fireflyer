@@ -320,7 +320,7 @@ def _select_field(name: str, label: str, options, current: str) -> str:
 
 def render_form(
     text: str, dataset: str, key: str = "", columns=None,
-    column_values=None, column_types=None,
+    column_values=None, column_types=None, column_extent=None,
 ) -> str:
     """The add/edit calc form. Prefilled from the existing calc when
     `key` names one. `columns` populates the filter builder's column dropdowns;
@@ -338,6 +338,7 @@ def render_form(
             columns=list(columns or []),
             column_values=column_values,
             column_types=column_types or {},
+            column_extent=column_extent,
         ),
     )
 

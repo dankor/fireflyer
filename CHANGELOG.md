@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-16
+
+### Added
+
+- **Number ranges.** `between` (`↔`) works on number columns too: a *from* and
+  a *to* field over a long two-handle slider spanning the column's values, as a
+  shop filters on price — drag a handle or type a number. A dragged handle
+  lands on a round step (1 for whole numbers) without cutting off the rows
+  beneath it, and one left at an end keeps the column's exact min or max.
+
+### Changed
+
+- **`between` on numbers includes its upper bound** (`values: [10, 20]` matches
+  20); dates stay half-open, so a month still ends where the next begins. A
+  hand-written numeric `between` now also takes rows equal to its `high`.
+- **Filter rows lead with where the filter comes from, as an icon** — a lock
+  for one built into the chart, a globe for a global one, an arrow cursor for a
+  click's selection (red when this chart selected it, blue when another did) —
+  then the column's type icon and name. Hovering or clicking the icon names the
+  source: the chart, by its type icon and title, or just *Built-in* / *Global*.
+  The Source column is gone, which gives the values more room; they sit on one
+  line, ending in an ellipsis when long (hover for all of them).
+- **Operators read as symbols**: `=` for *in*, `≠` for *not in*, `↔` for
+  *between* — in the filter rows and every op dropdown, the word as the
+  symbol's title and accessible name. The YAML still says `in` / `ni` /
+  `between`.
+- **The filter table drops its column headings** (Column / Op / Values): a
+  funnel icon leads the divider between the dataset and its filters, and each
+  row says what it is by its icons.
+- **The filter row's column field shows type icons in every browser.** It was
+  a `<select>`, which can draw an icon in its options only in Chrome/Edge 135+
+  — elsewhere the native menu showed bare names. It is now a small dropdown of
+  buttons, each column led by its type icon, the same everywhere (the
+  dashboard's panel, the chart builder, the calcs manager). Its "Column"
+  placeholder is no longer listed as a choice.
+- A managed dataset's date in the filter panel reads *Last updated at …*.
+
 ## [0.15.0] - 2026-10-13
 
 ### Added
@@ -903,7 +940,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/dankor/fireflyer/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/dankor/fireflyer/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/dankor/fireflyer/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/dankor/fireflyer/compare/v0.13.0...v0.14.0

@@ -719,7 +719,7 @@ def test_a_calc_relabelling_a_column_is_listed_once(orders_parquet):
         "charts:", f"calcs:\n  {orders_parquet}:\n    status: {{name: Order status, formula: status}}\n\ncharts:", 1
     )
     html = ce.filter_fields_for(doc, orders_parquet, column="status")
-    assert html.count('<option value="status"') == 1
+    assert html.count('data-column="status"') == 1
 
 
 def test_values_sort_by_the_columns_own_type(orders_parquet):

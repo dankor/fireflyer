@@ -745,9 +745,7 @@ body.fireflyer-resizing-col * {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding-bottom: 6px;
-  margin-bottom: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  margin-bottom: 8px;
 }
 .fireflyer-filter-ds .ds-name { font-weight: 600; }
 .fireflyer-filter-ds .ds-title { display: flex; align-items: center; gap: 5px; }
@@ -790,9 +788,9 @@ body.fireflyer-resizing-col * {
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
 }
-/* The filters, as a table: source, column, operator, values. The source column
-   is the point of it — a narrowed chart is no use if you can't tell which chart
-   to click to undo it. */
+/* The filters, as a table: column, operator, values. Each row leads with where
+   the filter comes from — an icon, named on hover or click — then the column's
+   type: a narrowed chart is no use if you can't tell what is narrowing it. */
 .fireflyer-filter-table {
   border-collapse: collapse;
   width: 100%;
@@ -804,68 +802,115 @@ body.fireflyer-resizing-col * {
      widths below as given; the last column absorbs the remainder. */
   table-layout: fixed;
 }
-.fireflyer-filter-table th:nth-child(1) { width: 144px; }   /* source  */
-.fireflyer-filter-table th:nth-child(2) { width: 100px; }   /* column  */
-.fireflyer-filter-table th:nth-child(3) { width: 60px; }    /* op      */
-.fireflyer-filter-table th:nth-child(5) { width: 34px; }    /* edit, remove */
-.fireflyer-filter-table th {
-  text-align: left;
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-weight: 600;
-  opacity: 0.5;
-  padding: 0 8px 3px 0;
-  white-space: nowrap;
+/* The widths, on the <colgroup> — the table has no header row to carry them. */
+.fireflyer-filter-table col.c-col { width: 150px; }   /* source, type, column */
+.fireflyer-filter-table col.c-op { width: 18px; }     /* =, ≠, ↔ — one glyph wide */
+.fireflyer-filter-table col.c-act { width: 34px; }    /* edit, remove */
+/* The filters' header: a funnel leading the divider between the dataset and
+   its filters — the line runs on from the icon, so the icon labels it. */
+.fireflyer-filter-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.fireflyer-filter-head svg { flex: none; opacity: 0.55; }
+.fireflyer-filter-head::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
 }
 .fireflyer-filter-table td {
   padding: 2px 8px 2px 0;
   vertical-align: top;
 }
-.fireflyer-filter-table td:last-child, .fireflyer-filter-table th:last-child {
+.fireflyer-filter-table td:last-child {
   padding-right: 0;
 }
-/* A chart title can be a sentence ("Orders by day, stacked by status"), so it
-   ellipsizes rather than wrapping; the full text is in the cell's `title`.
-   Deliberately not `display: flex` — that takes the cell out of table layout,
-   and the column widths above stop applying to it. */
-.fireflyer-filter-table .src {
+/* Source icon, type icon, column name — on one line, the name ellipsized (its
+   full text is in its `title`). Not `display: flex`: that takes the cell out of
+   table layout, and the column widths above stop applying to it. The cell
+   doesn't clip either, so the source's tooltip can leave it. */
+.fireflyer-filter-table .col {
+  color: var(--ff-green);
   font-weight: 600;
+  white-space: nowrap;
+}
+.fireflyer-filter-table .col-name {
+  display: inline-block;
+  max-width: calc(100% - 38px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.fireflyer-filter-table .col .ff-type-glyph { margin-right: 4px; }
+/* The source icon. What this chart selects is what it is doing *to others*;
+   what arrives from another chart is being done *to it* — red and blue, the
+   badge's own emitter / filtered colours. A typed (global) filter has no chart
+   colour to borrow, and a built-in one is quiet: it's part of the chart. */
+.fireflyer-src {
+  position: relative;
+  display: inline-flex;
+  margin-right: 5px;
+  vertical-align: -2px;
+  border-radius: 3px;
+  cursor: help;
+  outline: none;
+}
+.fireflyer-src > svg { width: 13px; height: 13px; }
+.fireflyer-src:focus-visible { box-shadow: 0 0 0 2px var(--ff-accent); }
+.src-emitter .fireflyer-src { color: var(--ff-danger); }
+.src-incoming .fireflyer-src { color: var(--ff-accent); }
+.src-global .fireflyer-src { color: var(--ff-tooltip-ink); }
+.src-declared .fireflyer-src { color: var(--ff-tooltip-ink); opacity: 0.55; }
+/* Its name, shown on hover — or focus, which a click gives it (`tabindex`), so
+   it works on touch too. Light on the dark panel, like the dataset's ⓘ. A
+   chart source leads with the chart's type icon; this chart's own selection
+   says so. The bubble ignores the pointer, so it never swallows a click. */
+.fireflyer-src-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: -6px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  background: #fff;
+  color: #20242b;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px var(--ff-shadow-strong);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.fireflyer-src-tip svg { width: 13px; height: 13px; flex: none; opacity: 0.75; }
+.fireflyer-src-tip .tip-note { font-weight: 400; opacity: 0.55; }
+.fireflyer-src:hover .fireflyer-src-tip,
+.fireflyer-src:focus .fireflyer-src-tip { opacity: 1; visibility: visible; }
+/* The op as a symbol — =, ≠, ↔ — set a size up so it reads at a glance; the
+   word is the cell's title. */
+.fireflyer-filter-table .op {
+  color: var(--ff-faint);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  padding-right: 0;        /* the column is the glyph plus a hair of air */
+}
+/* The flexible column: it takes whatever the others leave, on one line, ending
+   in an ellipsis when the values run long — the cell's `title` holds them all.
+   Wrapping kept every value in view, but a long `in` list grew the row into a
+   paragraph and pushed the rest of the panel down. */
+.fireflyer-filter-table .vals {
+  color: var(--ff-tooltip-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.fireflyer-filter-table .src svg {
-  width: 12px;
-  height: 12px;
-  vertical-align: -2px;
-  margin-right: 5px;
-  opacity: 0.8;
-}
-/* What this chart emits is what it is doing *to others*; what arrives from
-   elsewhere is what is being done *to it*. Colouring the source says which
-   without a legend, matching the badge's own emitter/filtered colours. */
-.fireflyer-filter-table .src-emitter .src { color: var(--ff-danger); }
-.fireflyer-filter-table .src-incoming .src { color: var(--ff-accent); }
-.fireflyer-filter-table .src-declared .src { opacity: 0.6; font-style: italic; }
-/* Typed, not clicked: no chart colour to borrow, so the panel's own ink. */
-.fireflyer-filter-table .src-global .src { color: var(--ff-tooltip-ink); }
-.fireflyer-filter-table .col { color: var(--ff-green); font-weight: 600; }
-.fireflyer-filter-table .op {
-  color: var(--ff-faint);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-/* `overflow-wrap`, not `word-break`: the latter split "refunded" across two
-   lines mid-word. This breaks a word only when it cannot fit at all. */
-/* The flexible column: it takes whatever the other three leave. `overflow-wrap`
-   rather than `word-break`, so a value breaks only when it cannot fit — the
-   latter split "refunded" across two lines mid-word. */
-.fireflyer-filter-table .vals {
-  color: var(--ff-tooltip-ink);
-  overflow-wrap: break-word;
 }
 .fireflyer-filter-tooltip-title {
   font-size: 10px;
@@ -937,48 +982,140 @@ body.fireflyer-resizing-col * {
   outline: 0;
 }
 .fireflyer-filter-add .ff-input:focus { border-color: var(--ff-accent); }
-/* The column picker shows each column's type glyph (a customizable select;
-   browsers without one draw a native select with the glyph as text). */
-.fireflyer-filter-add .ff-column-select,
-.fireflyer-filter-add .ff-column-select::picker(select) { appearance: base-select; }
-.fireflyer-filter-add .ff-column-select::picker(select) {
-  padding: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 4px;
-  background: var(--ff-tooltip-bg);
-  color: var(--ff-tooltip-ink);
-  box-shadow: 0 6px 18px var(--ff-shadow-strong);
+/* `between` on a number column (`number_range.html`): from / to, over a long
+   two-handle slider spanning the column's values. Two range inputs share one
+   track; only their handles take the pointer. The shaded stretch between them
+   is drawn from `--lo` / `--hi` (0..1), set by the server — offset by half a
+   handle, so it ends under each handle's centre. */
+.fireflyer-filter-add .ff-numrange { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.fireflyer-filter-add .ff-numrange-fields { display: flex; align-items: center; gap: 4px; }
+.fireflyer-filter-add .ff-numrange-fields .ff-input { flex: 1 1 0; min-width: 0; font-variant-numeric: tabular-nums; }
+.fireflyer-filter-add .ff-numrange-dash { opacity: 0.5; }
+.fireflyer-filter-add .ff-numrange-track { --thumb: 14px; position: relative; height: 30px; }
+.fireflyer-filter-add .ff-numrange-track::before,
+.fireflyer-filter-add .ff-numrange-track::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  height: 4px;
+  border-radius: 2px;
 }
-.fireflyer-filter-add .ff-column-select > button,
-.fireflyer-filter-add .ff-column-select option {
+.fireflyer-filter-add .ff-numrange-track::before {
+  left: calc(var(--thumb) / 2);
+  right: calc(var(--thumb) / 2);
+  background: rgba(255, 255, 255, 0.16);
+}
+.fireflyer-filter-add .ff-numrange-track::after {
+  left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--lo));
+  width: calc((100% - var(--thumb)) * (var(--hi) - var(--lo)));
+  background: var(--ff-accent);
+}
+.fireflyer-filter-add .ff-numrange-track input[type="range"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: none;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.fireflyer-filter-add .ff-numrange-track.is-low-top input[name="slide_low"] { z-index: 2; }
+.fireflyer-filter-add .ff-numrange-track input[type="range"]::-webkit-slider-runnable-track { background: none; border: 0; }
+.fireflyer-filter-add .ff-numrange-track input[type="range"]::-moz-range-track { background: none; border: 0; }
+.fireflyer-filter-add .ff-numrange-track input[type="range"]::-webkit-slider-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: 2px solid var(--ff-accent);
+  border-radius: 50%;
+  background: #fff;
+  cursor: grab;
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.fireflyer-filter-add .ff-numrange-track input[type="range"]::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  box-sizing: border-box;
+  border: 2px solid var(--ff-accent);
+  border-radius: 50%;
+  background: #fff;
+  cursor: grab;
+  pointer-events: auto;
+}
+.fireflyer-filter-add .ff-numrange-track input[type="range"]:focus-visible { outline: none; }
+.fireflyer-filter-add .ff-numrange-track input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(32, 167, 201, 0.4); }
+/* The column's own min and max, under the track's ends. */
+.fireflyer-filter-add .ff-numrange-ends {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+/* The column field (`params._column_picker`): the chosen column with its type
+   icon, opening a list of every column with theirs — buttons, so the icons
+   show in every browser (a <select> draws them only in Chrome/Edge 135+). */
+.fireflyer-filter-add .ff-colpick { position: relative; flex: 0 1 34%; min-width: 0; }
+.fireflyer-filter-add .ff-colpick-field {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+  list-style: none;
+  cursor: pointer;
+  white-space: nowrap;
 }
-/* The picker's own closed-state button: no chrome of its own — the select
-   around it is the control. */
-.fireflyer-filter-add .ff-column-select > button {
-  flex: 1 1 auto;
-  padding: 0;
+.fireflyer-filter-add .ff-colpick-field::-webkit-details-marker { display: none; }
+.fireflyer-filter-add .ff-colpick-name { overflow: hidden; text-overflow: ellipsis; }
+.fireflyer-filter-add .ff-colpick-chevron { margin-left: auto; flex: none; opacity: 0.7; }
+.fireflyer-filter-add .ff-colpick[open] > .ff-colpick-field { border-color: var(--ff-accent); }
+.fireflyer-filter-add .ff-colpick .ff-type-glyph { margin-right: 0; }
+.fireflyer-filter-add .ff-colpick-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 100%;
+  max-height: 260px;
+  overflow: auto;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: var(--ff-tooltip-bg);
+  box-shadow: 0 6px 18px var(--ff-shadow-strong);
+}
+.fireflyer-filter-add .ff-colpick-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
   border: 0;
+  border-radius: 3px;
   background: none;
   color: inherit;
   font: inherit;
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
 }
+.fireflyer-filter-add .ff-colpick-item:hover,
+.fireflyer-filter-add .ff-colpick-item:focus-visible { background: rgba(255, 255, 255, 0.1); outline: none; }
+.fireflyer-filter-add .ff-colpick-item.is-selected { color: var(--ff-accent); }
 .fireflyer-filter-add .ff-placeholder { opacity: 0.55; }
 /* Op and values mean nothing until a column is picked. */
 .fireflyer-filter-add .ff-input:disabled { opacity: 0.4; cursor: not-allowed; }
-.fireflyer-filter-add .ff-column-select option {
-  min-height: 22px;
-  padding: 3px 6px;
-  border-radius: 3px;
-  font-size: 11px;
-}
-.fireflyer-filter-add .ff-column-select option:hover,
-.fireflyer-filter-add .ff-column-select option:focus-visible { background: rgba(255, 255, 255, 0.1); }
-.fireflyer-filter-add .ff-column-select option::checkmark { display: none; }
-.fireflyer-filter-add .ff-column-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fireflyer-filter-add { align-items: flex-start; }
 .fireflyer-filter-add .ff-filter-fields { display: contents; }
 /* `in` / `not in` on a column with a manageable number of values: a checkbox
@@ -1111,7 +1248,6 @@ body.fireflyer-resizing-col * {
   border-radius: 0;
   background: color-mix(in srgb, var(--ff-accent) 18%, transparent);
 }
-.fireflyer-filter-add select.ff-input { flex: 0 1 34%; }
 .fireflyer-filter-add select[name="filter_op"] { flex: 0 0 auto; }
 .fireflyer-filter-add input.ff-input { flex: 1 1 auto; }
 /* The + itself — a direct child, so the rule can't reach the column picker's
@@ -1159,11 +1295,11 @@ body.fireflyer-resizing-col * {
   display: inline-flex;
   flex: none;
   margin-right: 5px;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 400;
   vertical-align: -2px;
 }
 .fireflyer-filter-panel .ff-type-glyph svg { width: 13px; height: 13px; }
-.fireflyer-filter-add .ff-column-select .ff-type-glyph { margin-right: 0; }
 </style><div id="fireflyer-dashboard" class="fireflyer-dashboard" hx-history="false">
   <input type="hidden" name="yaml_text" value="name: Test dashboard
 charts:
@@ -1192,9 +1328,11 @@ layout:
     <div class="fireflyer-filter-ds">
       <span class="ds-title"><span class="ds-name"><TEST_DATA>/orders.parquet</span></span>
       <span class="ds-updated">—</span>
+    </div><div class="fireflyer-filter-head" role="heading" aria-level="3" aria-label="Filters" title="Filters">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2.5 3h11L9.3 8.3v4.2L6.7 13.8V8.3z"/></svg>
     </div>
     <div class="fireflyer-filter-tooltip-empty">No active filters</div><form class="fireflyer-filter-add" id="ff-add-a" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"open_filter": "a"}'>
-      <span class="ff-filter-fields"><select class="ff-input ff-column-select" name="filter_column" aria-label="Column" required hx-post="/filter/fields" hx-trigger="change" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;}"><button><selectedcontent></selectedcontent></button><option value=""><span class="ff-placeholder">Column</span></option><option value="id"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span> <span>id</span></option><option value="status"><span class="ff-type-glyph" title="text"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/><path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/></svg></span> <span>status</span></option><option value="amount"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span> <span>amount</span></option><option value="day"><span class="ff-type-glyph" title="text"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/><path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/></svg></span> <span>day</span></option><option value="lat"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span> <span>lat</span></option><option value="lng"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span> <span>lng</span></option></select><select class="ff-input" name="filter_op" aria-label="Operator" disabled hx-post="/filter/fields" hx-trigger="change" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;}"><option value="in" selected>in</option><option value="ni">not in</option></select><input class="ff-input" type="text" name="filter_values" aria-label="Values" value="" placeholder="comma, separated" required disabled></span>
+      <span class="ff-filter-fields"><details class="ff-colpick"><summary class="ff-input ff-colpick-field" aria-label="Column"><span class="ff-placeholder">Column</span><svg class="ff-colpick-chevron" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></summary><input name="filter_column" value="" hidden required><div class="ff-colpick-list" role="listbox" aria-label="Columns"><button type="button" class="ff-colpick-item" data-column="id" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;id&quot;}"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span><span>id</span></button><button type="button" class="ff-colpick-item" data-column="status" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;status&quot;}"><span class="ff-type-glyph" title="text"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/><path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/></svg></span><span>status</span></button><button type="button" class="ff-colpick-item" data-column="amount" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;amount&quot;}"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span><span>amount</span></button><button type="button" class="ff-colpick-item" data-column="day" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;day&quot;}"><span class="ff-type-glyph" title="text"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/><path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/></svg></span><span>day</span></button><button type="button" class="ff-colpick-item" data-column="lat" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;lat&quot;}"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span><span>lat</span></button><button type="button" class="ff-colpick-item" data-column="lng" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;lng&quot;}"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span><span>lng</span></button></div></details><select class="ff-input ff-op-select" name="filter_op" aria-label="Operator" disabled hx-post="/filter/fields" hx-trigger="change" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;}"><option value="in" selected title="in" aria-label="in">=</option><option value="ni" title="not in" aria-label="not in">≠</option></select><input class="ff-input" type="text" name="filter_values" aria-label="Values" value="" placeholder="comma, separated" required disabled></span>
 <button type="submit" title="Add a global filter" aria-label="Add a global filter">
   <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
 </button>
@@ -1633,9 +1771,11 @@ layout:
     <div class="fireflyer-filter-ds">
       <span class="ds-title"><span class="ds-name"><TEST_DATA>/orders.parquet</span></span>
       <span class="ds-updated">—</span>
+    </div><div class="fireflyer-filter-head" role="heading" aria-level="3" aria-label="Filters" title="Filters">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2.5 3h11L9.3 8.3v4.2L6.7 13.8V8.3z"/></svg>
     </div>
     <div class="fireflyer-filter-tooltip-empty">No active filters</div><form class="fireflyer-filter-add" id="ff-add-b" hx-post="/dashboard" hx-target="#fireflyer-dashboard" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[type=hidden]" hx-vals='{"open_filter": "b"}'>
-      <span class="ff-filter-fields"><select class="ff-input ff-column-select" name="filter_column" aria-label="Column" required hx-post="/filter/fields" hx-trigger="change" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;}"><button><selectedcontent></selectedcontent></button><option value=""><span class="ff-placeholder">Column</span></option><option value="id"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span> <span>id</span></option><option value="status"><span class="ff-type-glyph" title="text"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/><path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/></svg></span> <span>status</span></option><option value="amount"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span> <span>amount</span></option><option value="day"><span class="ff-type-glyph" title="text"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/><path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/></svg></span> <span>day</span></option><option value="lat"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span> <span>lat</span></option><option value="lng"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span> <span>lng</span></option></select><select class="ff-input" name="filter_op" aria-label="Operator" disabled hx-post="/filter/fields" hx-trigger="change" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;}"><option value="in" selected>in</option><option value="ni">not in</option></select><input class="ff-input" type="text" name="filter_values" aria-label="Values" value="" placeholder="comma, separated" required disabled></span>
+      <span class="ff-filter-fields"><details class="ff-colpick"><summary class="ff-input ff-colpick-field" aria-label="Column"><span class="ff-placeholder">Column</span><svg class="ff-colpick-chevron" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></summary><input name="filter_column" value="" hidden required><div class="ff-colpick-list" role="listbox" aria-label="Columns"><button type="button" class="ff-colpick-item" data-column="id" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;id&quot;}"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span><span>id</span></button><button type="button" class="ff-colpick-item" data-column="status" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;status&quot;}"><span class="ff-type-glyph" title="text"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/><path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/></svg></span><span>status</span></button><button type="button" class="ff-colpick-item" data-column="amount" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;amount&quot;}"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span><span>amount</span></button><button type="button" class="ff-colpick-item" data-column="day" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;day&quot;}"><span class="ff-type-glyph" title="text"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/><path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/></svg></span><span>day</span></button><button type="button" class="ff-colpick-item" data-column="lat" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;lat&quot;}"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span><span>lat</span></button><button type="button" class="ff-colpick-item" data-column="lng" hx-post="/filter/fields" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;, &quot;filter_column&quot;: &quot;lng&quot;}"><span class="ff-type-glyph" title="number"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6 3.5 4.5V11.5"/><path d="M6 6a1.5 1.5 0 0 1 3 0c0 1.4-3 2.6-3 5.5h3"/><path d="M11 4.6h2.6l-1.6 2.2a1.9 1.9 0 1 1-1.2 3.6"/></svg></span><span>lng</span></button></div></details><select class="ff-input ff-op-select" name="filter_op" aria-label="Operator" disabled hx-post="/filter/fields" hx-trigger="change" hx-target="closest .ff-filter-fields" hx-swap="outerHTML" hx-include="#fireflyer-dashboard input[name=yaml_text]" hx-vals="{&quot;filter_dataset&quot;: &quot;<TEST_DATA>/orders.parquet&quot;, &quot;live&quot;: &quot;1&quot;}"><option value="in" selected title="in" aria-label="in">=</option><option value="ni" title="not in" aria-label="not in">≠</option></select><input class="ff-input" type="text" name="filter_values" aria-label="Values" value="" placeholder="comma, separated" required disabled></span>
 <button type="submit" title="Add a global filter" aria-label="Add a global filter">
   <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
 </button>

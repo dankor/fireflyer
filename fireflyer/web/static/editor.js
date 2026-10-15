@@ -1358,6 +1358,23 @@ async function refreshFilterRow(row) {
   const res = await fetch('/filter/fields', { method: 'POST', body: fd });
   if (res.ok) fields.outerHTML = await res.text();
 }
+// The column field is a list of buttons, not a <select> (see `_column_picker`
+// in params.py). In the builder and calcs manager a pick is ours to apply —
+// the dashboard's own panel does it over htmx.
+document.addEventListener('click', e => {
+  const item = e.target.closest('.ff-colpick-item');
+  const row = item && item.closest('.ff-filter-row');
+  if (row) {
+    e.preventDefault();
+    row.querySelector('input[name=filter_column]').value = item.dataset.column;
+    item.closest('.ff-colpick').open = false;
+    refreshFilterRow(row);
+  }
+  // A click anywhere else closes an open column list, as a native menu would.
+  for (const open of document.querySelectorAll('.ff-colpick[open]')) {
+    if (!open.contains(e.target)) open.open = false;
+  }
+});
 document.addEventListener('change', e => {
   const name = e.target.name;
   if (name !== 'filter_column' && name !== 'filter_op') return;
