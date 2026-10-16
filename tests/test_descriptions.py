@@ -117,15 +117,19 @@ def test_the_datasets_list_shows_the_description_as_a_tip():
     assert _tip(render_datasets([_ds("")])) is None
 
 
-def test_the_dataset_page_edits_its_name_and_description_in_place():
-    """No edit button in its toolbar: the name itself is the control, with a
-    description box under it, as a dashboard's name is in the editor."""
+def test_the_dataset_page_edits_its_name_and_description_from_its_title():
+    """No edit button in its toolbar: the title — the name with the
+    description under it — is the control, opening a card with a field for
+    each, as a dashboard's title is in the editor."""
     page = render_dataset_detail(_ds(), ["id"], [[1]])
     topbar = page[page.index("<header"):page.index("</header>")]
     name = re.search(r'<span class="tname"[^>]*>', topbar).group(0)
-    assert 'contenteditable="plaintext-only"' in name
+    assert "contenteditable" not in topbar
+    assert re.search(r'<span class="thead" id="ds-title-head" role="button"', topbar)
+    assert 'id="ds-title-sub">Q3 orders<' in topbar
     assert 'data-action="/datasets/orders/rename"' in name
-    assert 'id="ds-title-about" hidden' in topbar and "<textarea" in topbar
+    assert 'id="ds-title-about" role="dialog"' in topbar
+    assert 'id="ds-title-name-input"' in topbar and "<textarea" in topbar
     assert 'title="Edit"' not in topbar and "openDsRename" not in page
     # No ⓘ either — a click on the name shows the description; the name carries it.
     assert _tip(topbar) is None and 'data-description="Q3 orders"' in name

@@ -171,7 +171,9 @@ def schema(text: str, store=None) -> dict:
     - `datasets` — `{name: [columns]}`: the dashboard's inline ones and the
       store's managed ones, column calcs included;
     - `calcs` — `{dataset: [keys]}` for the calcs that are values (what a
-      chart's `calc:` takes).
+      chart's `calc:` takes);
+    - `icons` — `{type: svg}`, each chart type's own `icon.svg`, for the
+      editor's list of charts.
     Best-effort throughout: YAML that doesn't parse still completes keys."""
     charts = {
         name: {
@@ -213,4 +215,5 @@ def schema(text: str, store=None) -> dict:
         calcs[str(dataset)] = [k for k in defs if k not in columns]
         datasets.setdefault(str(dataset), [])
         datasets[str(dataset)] = list(dict.fromkeys(datasets[str(dataset)] + sorted(columns)))
-    return {"charts": charts, "datasets": datasets, "calcs": calcs}
+    icons = {name: cls.ICON for name, cls in CHART_TYPES.items()}
+    return {"charts": charts, "datasets": datasets, "calcs": calcs, "icons": icons}

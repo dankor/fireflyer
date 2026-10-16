@@ -23,6 +23,7 @@
   "@codemirror/autocomplete": "/static/vendor/codemirror-autocomplete@6.20.3.mjs",
   "@codemirror/lint": "/static/vendor/codemirror-lint@6.9.7.mjs",
   "@codemirror/lang-yaml": "/static/vendor/codemirror-lang-yaml@6.1.3.mjs",
+  "@codemirror/merge": "/static/vendor/codemirror-merge@6.12.2.mjs",
   "@codemirror/streamparser": "/static/vendor/codemirror-streamparser@6.0.0.mjs",
   "@lezer/common": "/static/vendor/lezer-common@1.5.3.mjs",
   "@lezer/lr": "/static/vendor/lezer-lr@1.4.11.mjs",
@@ -31,12 +32,13 @@
   "style-mod": "/static/vendor/style-mod@4.1.4.mjs",
   "w3c-keyname": "/static/vendor/w3c-keyname@2.2.8.mjs",
   "crelt": "/static/vendor/crelt@1.0.7.mjs",
-  "@marijn/find-cluster-break": "/static/vendor/marijn-find-cluster-break@1.0.4.mjs"
+  "@marijn/find-cluster-break": "/static/vendor/marijn-find-cluster-break@1.0.4.mjs",
+  "fireflyer/diff-view": "__FF_DIFF_VIEW__"
 }}
 </script>
 __FF_STYLES__
 </head>
-<body>
+<body data-dash-id="__FF_DASH_ID__">
 <header class="topbar">
   <div class="topbar-left">
     __FF_NAV__
@@ -45,6 +47,7 @@ __FF_STYLES__
   </div>
   <div class="topbar-right">
     __FF_PATHDD__
+    <!-- Compare versions: the saved history and what's unsaved, side by side. -->
     __FF_SAVE__
     __FF_THEME__
     __FF_USER_MENU__
@@ -91,6 +94,21 @@ __FF_STYLES__
   <button type="button" data-add-kind="separator">Separator</button>
   <button type="button" data-add-kind="tab">Tab</button>
 </div>
+<!-- Compare versions (static/diff-view.js): two YAMLs side by side, each side
+     any saved version or what's in the editor now. Over the whole workspace,
+     under the topbar. -->
+<section class="ff-diff" id="ff-diff" hidden aria-label="Compare versions">
+  <div class="ff-diff-bar">
+    <select class="ff-diff-pick" id="ff-diff-a" aria-label="Left side"></select>
+    <button type="button" class="ff-diff-icon" id="ff-diff-swap" title="Swap sides" aria-label="Swap sides">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h12l-3-3M17 17H5l3 3"/></svg>
+    </button>
+    <select class="ff-diff-pick" id="ff-diff-b" aria-label="Right side"></select>
+    <span class="ff-diff-stats" id="ff-diff-stats"></span>
+    <button type="button" class="ff-diff-restore" id="ff-diff-restore" hidden></button>
+  </div>
+  <div class="ff-diff-body" id="ff-diff-body"></div>
+</section>
 <!-- Transient error toast (replaces the old topbar status text). -->
 <div class="ff-toast" id="ff-toast" hidden></div>
 __FF_SCRIPT__

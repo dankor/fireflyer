@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import FastAPI, File, Form, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -135,21 +135,26 @@ def _name_and_description(yaml_text: str) -> tuple[str, str]:
 
 
 def _dash_name_html(name: str, description: str = "") -> str:
-    # Leads the left group (after the back button). Editable in place (wired by
-    # static/editor.js); two-way with the YAML `name:`.
-    # The ⓘ is always there (hidden when empty) so editing `description:` in
-    # the YAML can show it without a page reload — run() refreshes it.
-    # Renaming (a click on the name, outside view mode) also opens the
-    # description box beneath it. The description rides on the name itself —
-    # no ⓘ: clicking the name already shows it, and in view mode it is the
-    # name's tooltip. editor.js keeps it in step with the YAML.
+    # Leads the left group (after the back button): the name, and under it the
+    # description's first line, small and ellipsized. The two are one button —
+    # a click opens a card beneath them (static/editor.js) with a field for
+    # each, which writes the YAML's `name:` and `description:`; in view mode
+    # the card only reads, and opens only when there's a description to read.
+    # editor.js keeps all of it in step with the YAML.
+    desc = escape(description, quote=True)
+    hidden = "" if description else " hidden"
     return (
         '<span class="ff-dash-title">'
-        f'<span class="ff-dash-name" id="ff-dash-name"'
-        f' data-description="{escape(description, quote=True)}">{escape(name)}</span>'
-        '<span class="ff-dash-about" id="ff-dash-about" hidden>'
+        '<span class="ff-dash-head" id="ff-dash-head" role="button" aria-haspopup="dialog">'
+        f'<span class="ff-dash-name" id="ff-dash-name" data-description="{desc}">{escape(name)}</span>'
+        f'<span class="ff-dash-sub" id="ff-dash-sub"{hidden}>{escape(description)}</span>'
+        "</span>"
+        '<span class="ff-dash-about" id="ff-dash-about" role="dialog" aria-label="Name and description" hidden>'
+        '<input id="ff-dash-name-input" type="text" aria-label="Dashboard name" placeholder="Name"'
+        ' spellcheck="false" autocomplete="off">'
         '<textarea id="ff-dash-about-text" rows="3" placeholder="Add a description"'
-        ' aria-label="Dashboard description" spellcheck="true"></textarea></span>'
+        ' aria-label="Dashboard description" spellcheck="true"></textarea>'
+        "</span>"
         "</span>"
     )
 
@@ -182,6 +187,7 @@ _MODE_LABELS = {
     "view": "View",
     "edit": "Edit — drag, add and rearrange charts",
     "code": "YAML",
+    "diff": "Compare versions",
     "chat": "AI assistant",
     "docs": "Chart reference",
     "calcs": "Calcs",
@@ -194,6 +200,7 @@ _MODE_ICONS = {
     "view": _ICON.format('<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>'),
     "edit": _ICON.format('<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
     "code": _ICON.format('<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>'),
+    "diff": _ICON.format('<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/><path d="M6 9h1M6 13h1M17 11h1M17 15h1"/>'),
     "chat": _ICON.format(
         '<rect x="4" y="9" width="16" height="11" rx="2"/>'      # head
         '<path d="M12 4.5V9"/><circle cx="12" cy="3.5" r="1.2"/>'  # antenna
@@ -209,7 +216,7 @@ def _mode_switch() -> str:
     buttons = "".join(
         f'<button type="button" data-mode="{mode}" title="{_MODE_LABELS[mode]}"'
         f' aria-label="{_MODE_LABELS[mode]}">{_MODE_ICONS[mode]}</button>'
-        for mode in ("view", "edit", "code", "chat", "calcs", "docs")
+        for mode in ("view", "edit", "code", "diff", "chat", "calcs", "docs")
     )
     return (
         '<div class="ff-theme ff-modes" id="ff-modes" role="group" '
@@ -311,6 +318,7 @@ def render_editor_page(
     save: str = "",
     theme: str = "",
     user_menu: str = "",
+    dash_id: str = "",
 ) -> str:
     """The editor page seeded with `yaml_text` and topbar pieces — left: `nav`
     (back button + switch) + editable `dash_name`; right: `path_dropdown` (local
@@ -327,6 +335,10 @@ def render_editor_page(
         page.replace("__FF_STYLES__", styles)
         .replace("__FF_SCRIPT__", assets.script("editor.js") + "\n" + assets.module("yaml-editor.js"))
         .replace("__FF_CHAT__", CHAT_PANEL)
+        # Which dashboard: its version history, and the key its unsaved draft
+        # is kept under in the browser ("" for the plain single-dashboard editor).
+        .replace("__FF_DASH_ID__", escape(dash_id, quote=True))
+        .replace("__FF_DIFF_VIEW__", assets.url("diff-view.js"))
         .replace("__FF_NAV__", nav)
         .replace("__FF_MODES__", _mode_switch())
         .replace("__FF_DASH_NAME__", dash_name)
@@ -374,7 +386,11 @@ def _dash_store(request: Request):
     if app.state.store is not None:
         return app.state.store
     path = _active_path(request)
-    return paths_mod.PathDashboardStore(f"{PATHS_BASE}/{path}") if path else None
+    if not path:
+        return None
+    return paths_mod.PathDashboardStore(
+        f"{PATHS_BASE}/{path}", history=f"{_DATA_BASE}/{path}/history"
+    )
 
 
 def _dataset_store(request: Request):
@@ -544,6 +560,7 @@ def portal_open(dash_id: str, request: Request) -> HTMLResponse:
         save=_save_html(row.id),
         user_menu=user_menu,
         theme=theme,
+        dash_id=row.id,
     )
     return HTMLResponse(page)
 
@@ -553,10 +570,33 @@ async def portal_save(
     dash_id: str, request: Request, yaml_text: str = Form("")
 ) -> dict:
     try:
-        _dash_store(request).save(dash_id, yaml_text)
+        _dash_store(request).save(dash_id, yaml_text, author=_current_author(request))
         return {"ok": True}
     except DashboardError as exc:
         return {"ok": False, "error": str(exc)}
+
+
+@app.get("/d/{dash_id}/versions")
+def dashboard_versions(dash_id: str, request: Request):
+    """The dashboard's saved versions, newest first: number, Unix time, author.
+    The compare view lists them; it fetches one's YAML when it's picked."""
+    store = _dash_store(request)
+    if store is None or store.get(dash_id) is None:
+        return JSONResponse({"error": "no such dashboard"}, status_code=404)
+    return {"versions": [
+        {"version": v.version, "created_at": v.created_at, "author": v.author}
+        for v in store.versions(dash_id)
+    ]}
+
+
+@app.get("/d/{dash_id}/versions/{number}")
+def dashboard_version(dash_id: str, number: int, request: Request):
+    store = _dash_store(request)
+    found = store.version(dash_id, number) if store is not None else None
+    if found is None:
+        return JSONResponse({"error": "no such version"}, status_code=404)
+    return {"version": found.version, "created_at": found.created_at,
+            "author": found.author, "yaml": found.yaml}
 
 
 @app.post("/d/{dash_id}/delete")
@@ -666,7 +706,10 @@ async def dataset_rename(
     if store is not None and new != old_name:
         for row in store.list():
             if old_name in Dashboard.dataset_names(row.yaml):
-                store.save(row.id, rename_dataset_ref(row.yaml, old_name, new))
+                store.save(
+                    row.id, rename_dataset_ref(row.yaml, old_name, new),
+                    author=_current_author(request),
+                )
     back = f"/datasets/{quote(new)}" if next == "detail" else "/datasets"
     return RedirectResponse(back, status_code=303)
 

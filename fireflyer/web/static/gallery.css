@@ -20,24 +20,33 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
 /* Detail context in the topbar: name + small description under it. */
 /* The name, then its ⓘ beside it (the description used to sit underneath). */
 .topbar-title { position:relative; display:flex; align-items:center; line-height:1.2; }
-/* A dataset's name, edited in place (gallery.js `dsTitle`). */
-.topbar-title .tname[contenteditable] { padding:2px 6px; margin-left:-6px; border-radius:4px;
-  outline:0; cursor:text; }
-.topbar-title .tname[contenteditable]:hover,
-.topbar-title .tname[contenteditable]:focus { background:var(--bg); }
-.topbar-title .tname[contenteditable]:focus { box-shadow:0 0 0 2px var(--accent); }
-/* The description box that opens under the name while renaming. */
-.ff-title-about { position:absolute; top:calc(100% + 8px); left:-6px; z-index:60; width:340px;
-  padding:8px; background:var(--panel); border:1px solid var(--border); border-radius:6px;
+/* A dataset's name with its description's first line under it: one button,
+   opening the card below to edit both (gallery.js `dsTitle`) — as a
+   dashboard's title does in the editor. */
+.topbar-title .thead { display:inline-flex; flex-direction:column; justify-content:center;
+  min-width:0; max-width:360px; padding:3px 8px; margin-left:-8px; border-radius:6px;
+  cursor:pointer; outline:0; }
+.topbar-title .thead:hover, .topbar-title .thead.is-open { background:var(--bg); }
+.topbar-title .thead:focus-visible { box-shadow:0 0 0 2px var(--accent); }
+.topbar-title .tname { font-weight:600; font-size:14px; line-height:1.25;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.topbar-title .tsub { font-size:11px; line-height:1.25; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.topbar-title .tsub[hidden] { display:none; }
+/* The card: a name field over a description field. */
+.ff-title-about { position:absolute; top:calc(100% + 6px); left:-8px; z-index:60; width:360px;
+  display:flex; flex-direction:column; gap:6px;
+  padding:8px; background:var(--panel); border:1px solid var(--border); border-radius:8px;
   box-shadow:0 8px 24px rgba(0,0,0,.18); }
 .ff-title-about[hidden] { display:none; }
-.ff-title-about textarea { display:block; width:100%; box-sizing:border-box; resize:vertical;
-  min-height:56px; padding:7px 9px; border:1px solid var(--border); border-radius:4px;
-  background:var(--bg); color:var(--text); font:inherit; font-size:13px; line-height:1.4; outline:0; }
-.ff-title-about textarea:focus { border-color:var(--accent); }
-.ff-title-error { display:block; margin-top:6px; color:#e04355; font-size:12px; }
+.ff-title-about input, .ff-title-about textarea { display:block; width:100%; box-sizing:border-box;
+  padding:7px 9px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg); color:var(--text); font:inherit; outline:0; }
+.ff-title-about input { font-size:14px; font-weight:600; }
+.ff-title-about textarea { resize:vertical; min-height:64px; font-size:13px; line-height:1.4; }
+.ff-title-about input:focus, .ff-title-about textarea:focus { border-color:var(--accent); }
+.ff-title-error { display:block; color:#e04355; font-size:12px; }
 .ff-title-error[hidden] { display:none; }
-.topbar-title .tname { font-weight:600; font-size:15px; }
 /* Column type icon: a small monospaced glyph badge. */
 .type-icon { display:inline-flex; align-items:center; justify-content:center;
   width:18px; height:18px; border-radius:4px; font-size:11px; font-weight:700;

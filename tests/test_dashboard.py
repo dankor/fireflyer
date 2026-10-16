@@ -671,7 +671,9 @@ def test_the_badge_names_the_dataset_and_when_it_changed():
     )
     assert found.group(1) == "orders"
     assert found.group(2) == "d"                  # the store's description, as the ⓘ's tip
-    assert found.group(3).startswith("Last updated at 20")
+    assert found.group(3) == "Last updated at "
+    # UTC to the second as written; the editor shows it in local time.
+    assert re.search(r'Last updated at <time datetime="20[^"]+">20\d\d-\d\d-\d\d \d\d:\d\d:\d\d UTC</time>', html)
 
 
 def test_inline_data_is_labelled_rather_than_dated():

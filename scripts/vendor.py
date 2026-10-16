@@ -36,6 +36,7 @@ MODULES = {
     "@codemirror/autocomplete": "6.20.3",
     "@codemirror/lint": "6.9.7",
     "@codemirror/lang-yaml": "6.1.3",
+    "@codemirror/merge": "6.12.2",
     "@codemirror/streamparser": "6.0.0",
     "@lezer/common": "1.5.3",
     "@lezer/lr": "1.4.11",

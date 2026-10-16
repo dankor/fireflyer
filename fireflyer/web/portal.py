@@ -17,6 +17,7 @@ params/config_edit logic is kept unit-testable.
 from __future__ import annotations
 
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,6 +39,17 @@ _SCHEMA = (
     " yaml TEXT NOT NULL,"
     " created_at TEXT NOT NULL,"
     " updated_at TEXT NOT NULL)"
+)
+# Every saved state of every dashboard, numbered 1, 2, 3… per dashboard, with
+# who saved it and when (Unix seconds). What the editor's compare view diffs.
+_VERSIONS_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS dashboard_versions ("
+    " dashboard_id TEXT NOT NULL,"
+    " version INTEGER NOT NULL,"
+    " yaml TEXT NOT NULL,"
+    " author TEXT NOT NULL DEFAULT '',"
+    " created_at BIGINT NOT NULL,"
+    " PRIMARY KEY (dashboard_id, version))"
 )
 
 
@@ -66,6 +78,73 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+@dataclass
+class DashboardVersion:
+    """One saved state of a dashboard. `yaml` is "" in a listing — fetched on
+    its own when a version is opened."""
+    version: int
+    created_at: int        # Unix seconds; the browser shows it in local time
+    author: str
+    yaml: str = ""
+
+
+def _unix(iso: str) -> int:
+    try:
+        return int(datetime.fromisoformat(iso).timestamp())
+    except ValueError:
+        return int(time.time())
+
+
+class _SqlVersions:
+    """Version history over SQL, shared by both stores. A store supplies
+    `_run(sql, params)` — `?` placeholders, the store adapts them — and these
+    record a version on create and save, list them, and fetch one.
+
+    A save that changes nothing records nothing. A dashboard saved before
+    history existed gets its stored state recorded as version 1 on its first
+    save, so even an old dashboard can be compared with its first edit."""
+
+    def _latest(self, id: str):
+        return self._run(
+            "SELECT version, yaml FROM dashboard_versions WHERE dashboard_id = ?"
+            " ORDER BY version DESC LIMIT 1", (id,),
+        ).fetchone()
+
+    def _record(self, id: str, yaml: str, author: str, at: int | None = None) -> int:
+        latest = self._latest(id)
+        if latest and latest[1] == yaml:
+            return latest[0]
+        number = latest[0] + 1 if latest else 1
+        self._run(
+            "INSERT INTO dashboard_versions (dashboard_id, version, yaml, author, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (id, number, yaml, author, at if at is not None else int(time.time())),
+        )
+        return number
+
+    def _baseline(self, id: str) -> None:
+        """Record what's stored now as version 1, if this dashboard has none."""
+        if self._latest(id) is None:
+            row = self.get(id)
+            if row is not None:
+                self._record(id, row.yaml, row.author, _unix(row.updated_at))
+
+    def versions(self, id: str) -> list[DashboardVersion]:
+        """Newest first, without their YAML."""
+        rows = self._run(
+            "SELECT version, created_at, author FROM dashboard_versions"
+            " WHERE dashboard_id = ? ORDER BY version DESC", (id,),
+        ).fetchall()
+        return [DashboardVersion(int(v), int(at), a) for v, at, a in rows]
+
+    def version(self, id: str, number: int) -> DashboardVersion | None:
+        row = self._run(
+            "SELECT version, created_at, author, yaml FROM dashboard_versions"
+            " WHERE dashboard_id = ? AND version = ?", (id, number),
+        ).fetchone()
+        return DashboardVersion(int(row[0]), int(row[1]), row[2], row[3]) if row else None
+
+
 def _name_of(yaml_text: str) -> str:
     """The dashboard's display name, from the YAML's required top-level `name:`
     key. Also validates: `from_yaml` raises DashboardError on an invalid or
@@ -74,14 +153,20 @@ def _name_of(yaml_text: str) -> str:
     return Dashboard.from_yaml(yaml_text).name
 
 
-class SqliteStore:
+class SqliteStore(_SqlVersions):
     """Local/test store. `:memory:` for tests, a file path for local portal dev."""
 
     def __init__(self, path: str = ":memory:"):
         # check_same_thread=False: uvicorn serves requests off a threadpool.
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.execute(_SCHEMA)
+        self._conn.execute(_VERSIONS_SCHEMA)
         self._conn.commit()
+
+    def _run(self, sql: str, params=()):
+        cursor = self._conn.execute(sql, params)
+        self._conn.commit()
+        return cursor
 
     def list(self) -> list[DashboardRow]:
         rows = self._conn.execute(
@@ -106,23 +191,28 @@ class SqliteStore:
             (new_id, name, author, yaml, now, now),
         )
         self._conn.commit()
+        self._record(new_id, yaml, author)
         return new_id
 
-    def save(self, id: str, yaml: str) -> None:
+    def save(self, id: str, yaml: str, author: str = "") -> None:
         # Name is re-derived from the YAML; author (the creator) is left as-is.
+        # `author` is who saved — recorded on the version, not the dashboard.
         name = _name_of(yaml)
+        self._baseline(id)
         self._conn.execute(
             "UPDATE dashboards SET name = ?, yaml = ?, updated_at = ? WHERE id = ?",
             (name, yaml, _now(), id),
         )
         self._conn.commit()
+        self._record(id, yaml, author)
 
     def delete(self, id: str) -> None:
         self._conn.execute("DELETE FROM dashboards WHERE id = ?", (id,))
+        self._conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", (id,))
         self._conn.commit()
 
 
-class PostgresStore:
+class PostgresStore(_SqlVersions):
     """Runtime store. Same schema, `%s` placeholders; imports psycopg lazily so
     this module stays importable without the `.[portal]` extra installed."""
 
@@ -131,6 +221,10 @@ class PostgresStore:
 
         self._conn = psycopg.connect(dsn, autocommit=True)
         self._conn.execute(_SCHEMA)
+        self._conn.execute(_VERSIONS_SCHEMA)
+
+    def _run(self, sql: str, params=()):
+        return self._conn.execute(sql.replace("?", "%s"), params)
 
     def list(self) -> list[DashboardRow]:
         rows = self._conn.execute(
@@ -156,18 +250,23 @@ class PostgresStore:
             " VALUES (%s, %s, %s, %s, %s, %s)",
             (new_id, name, author, yaml, now, now),
         )
+        self._record(new_id, yaml, author)
         return new_id
 
-    def save(self, id: str, yaml: str) -> None:
+    def save(self, id: str, yaml: str, author: str = "") -> None:
         # Name is re-derived from the YAML; author (the creator) is left as-is.
+        # `author` is who saved — recorded on the version, not the dashboard.
         name = _name_of(yaml)
+        self._baseline(id)
         self._conn.execute(
             "UPDATE dashboards SET name = %s, yaml = %s, updated_at = %s WHERE id = %s",
             (name, yaml, _now(), id),
         )
+        self._record(id, yaml, author)
 
     def delete(self, id: str) -> None:
         self._conn.execute("DELETE FROM dashboards WHERE id = %s", (id,))
+        self._conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = %s", (id,))
 
 
 def make_store(dsn: str | None):
@@ -223,8 +322,15 @@ def info_tip(text: str, el_id: str = "") -> str:
     )
 
 
+def _stamp(iso: str) -> str:
+    """A stored UTC time as `<time>`: `2026-10-16 14:52:07 UTC` as written, which
+    gallery.js turns into the viewer's local time in the same shape."""
+    text = iso.replace("T", " ")[:19]
+    return f'<time datetime="{escape(iso)}">{escape(text)} UTC</time>' if text else ""
+
+
 def _row(row: DashboardRow) -> str:
-    updated = escape(row.updated_at.replace("T", " ")[:16])
+    updated = _stamp(row.updated_at)
     author = escape(row.author) if row.author else "—"
     name = escape(row.name)
     return (
@@ -420,7 +526,7 @@ def _upload_dialog(action: str, heading: str, ok_label: str, dialog_id: str, nam
 
 def _dataset_row(ds: Dataset) -> str:
     href = f"/datasets/{quote(ds.name)}"
-    updated = escape(ds.updated_at.replace("T", " ")[:16])
+    updated = _stamp(ds.updated_at)
     author = escape(ds.author) if ds.author else "—"
     return (
         "<tr>"
@@ -537,19 +643,26 @@ def render_dataset_detail(
         )
         usage_dialog = ""
 
-    # Header (back + name/description + actions) lives in the topbar. The name
-    # is edited in place, as a dashboard's is in the editor: a click renames it
-    # and opens a description box under it (gallery.js `dsTitle`), so the
-    # toolbar needs neither an edit button nor an ⓘ.
+    # Header (back + name/description + actions) lives in the topbar, as a
+    # dashboard's does in the editor: the name with the description's first
+    # line under it, together one button opening a card with a field for each
+    # (gallery.js `dsTitle`), so the toolbar needs neither an edit button nor
+    # an ⓘ.
+    desc = escape(ds.description, quote=True)
     tname = (
+        '<span class="thead" id="ds-title-head" role="button" tabindex="0" aria-haspopup="dialog"'
+        ' aria-label="Rename or describe the dataset">'
         f'<span class="tname" id="ds-title-name" data-name="{escape(ds.name, quote=True)}"'
-        f' data-description="{escape(ds.description, quote=True)}"'
-        f' data-action="/datasets/{quote(ds.name)}/rename"'
-        ' contenteditable="plaintext-only" spellcheck="false" title="Click to rename or describe">'
+        f' data-description="{desc}" data-action="/datasets/{quote(ds.name)}/rename">'
         f'{escape(ds.name)}</span>'
+        f'<span class="tsub" id="ds-title-sub"{"" if ds.description else " hidden"}>'
+        f"{escape(ds.description)}</span>"
+        "</span>"
     )
     tabout = (
-        '<span class="ff-title-about" id="ds-title-about" hidden>'
+        '<span class="ff-title-about" id="ds-title-about" role="dialog" aria-label="Name and description" hidden>'
+        '<input id="ds-title-name-input" type="text" aria-label="Dataset name" placeholder="Name"'
+        ' spellcheck="false" autocomplete="off">'
         '<textarea id="ds-title-about-text" rows="3" placeholder="Add a description"'
         ' aria-label="Dataset description"></textarea>'
         '<span class="ff-title-error" id="ds-title-error" hidden></span></span>'

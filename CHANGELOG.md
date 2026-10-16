@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-16
+
+### Added
+
+- **Version history.** Every save of a dashboard is kept as a numbered
+  version, with when (shown in your local time) and who saved it. A save that
+  changes nothing adds no version. In the portal it lives in a
+  `dashboard_versions` table; in local paths mode, beside the path's datasets
+  (`<FIREFLYER_DATA>/<path>/history/`), never in your dashboards folder. A
+  dashboard from before history gets its last state as version 1 on its next
+  save.
+- **Compare versions.** A compare mode, next to code in the mode switch, shows two YAMLs side
+  by side, as a git client shows a diff: changed lines and words marked,
+  unchanged stretches folded, a +added −removed count. Pick either side from
+  any saved version or "Now" (unsaved edits included), swap them, and restore
+  an older version into the editor as an ordinary unsaved edit. What's
+  compared is in the address bar (`?compare=v3..v5`), so a link or a reload
+  opens the same comparison — unless there are unsaved edits, which a link
+  couldn't show.
+- **Unsaved work survives closing the window.** Unsaved edits are kept in the
+  browser and restored when the dashboard is opened again, with a note — and a
+  pointer to compare versions if the saved dashboard has changed since.
+
+- **Jump around the YAML.** A row of chips above the code editor, one per
+  top-level key (`name`, `calcs`, `charts`, `layout`, …), takes you to its
+  line; the chip of the section you're in is lit. `charts` opens a list of
+  every chart, each with its type's icon, and `layout` — when it's split into
+  tabs — a list of the tabs (from the ▾; the name itself still jumps to the
+  key). A hop highlights the key's whole block.
+- **Links to lines.** As on GitHub: click a line number to highlight it,
+  shift-click for a range, and the address bar says so (`?line=12`,
+  `?line=12-20`); outline hops do the same. A link with it opens the code
+  editor on those lines. The highlight follows edits above it.
+
+### Changed
+
+- **The demo dashboard is a compact tour of every feature**, each shown once
+  and explained in a line or two: built-in chart filters (`in`, `ni` and
+  `between`, on dates and on numbers), a row span, tabs, headers and rules,
+  every chart type and its options, every calc kind (overlay and `str2dt`
+  columns, every aggregate, conditional aggregates, derived ratios), and a
+  second inline dataset with its own calcs. Shorter than before (361 lines,
+  from 447), with the same 120 orders.
+- The dashboard's description shows under its name in the editor's top bar —
+  one small line, cut with an ellipsis, whole on hover.
+- Renaming and describing a dashboard or a dataset happen in a small card
+  under its title (a name field over a description field) rather than by
+  editing the title in place; the title — now with the description's first
+  line under it — follows as you type, clicking away keeps the change, Esc
+  undoes it. In the dashboard's view mode the card shows the description,
+  read-only.
+- The code editor's fold and problem gutters are narrower.
+- Times read one way everywhere — `2026-10-16 14:52:07`, to the second, in your
+  local time: the dashboards and datasets lists, a chart's "Last updated at",
+  the compare view's versions, the restored-draft note. A dashboard exported
+  as plain HTML, with no script to convert it, says it in UTC.
+
 ## [0.17.0] - 2026-10-16
 
 ### Added
@@ -968,7 +1025,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/dankor/fireflyer/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/dankor/fireflyer/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/dankor/fireflyer/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/dankor/fireflyer/compare/v0.14.1...v0.15.0
