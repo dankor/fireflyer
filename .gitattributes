@@ -1,0 +1,4 @@
+# Third-party browser code, downloaded by scripts/vendor.py and committed so the
+# editor works offline. Marked so GitHub leaves it out of the language stats and
+# collapses its diffs — an upgrade shouldn't bury the real changes in a PR.
+fireflyer/web/static/vendor/** linguist-vendored linguist-generated

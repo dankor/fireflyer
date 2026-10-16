@@ -29,6 +29,12 @@ def script(name: str) -> str:
     return f'<script src="{_url(name)}"></script>'
 
 
+def module(name: str) -> str:
+    """An ES module — deferred by nature, so it runs once the page is parsed,
+    after the classic scripts before it."""
+    return f'<script type="module" src="{_url(name)}"></script>'
+
+
 def favicons() -> str:
     """The tab icon every page links: `favicon.svg`, the logo redrawn to read
     at 16px (see its comment). SVG only — every current browser takes one."""

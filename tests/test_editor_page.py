@@ -324,3 +324,59 @@ def test_the_editor_script_declares_the_state_it_uses():
     }
     missing = sorted(n for n in needed if n not in declared)
     assert not missing, f"used but never declared: {missing}"
+
+
+# --- the YAML code editor ------------------------------------------------------
+
+
+def _import_map():
+    import json
+    import re as _re
+
+    page = render_editor_page(DEFAULT_YAML, theme=_theme_switch())
+    raw = _re.search(r'<script type="importmap">(.*?)</script>', page, _re.S).group(1)
+    return page, json.loads(raw)["imports"]
+
+
+def test_the_code_editor_is_linked_as_a_module_after_the_editor_script():
+    page, _ = _import_map()
+    assert '<script type="module" src="/static/yaml-editor.js?v=' in page
+    assert page.index("/static/editor.js?v=") < page.index("/static/yaml-editor.js?v=")
+    # The textarea stays — it's what every other control reads and writes.
+    assert '<textarea id="code"' in page
+
+
+def test_the_editor_needs_no_network():
+    """Every script the editor page loads is our own: htmx and CodeMirror are
+    vendored (scripts/vendor.py), so the editor works offline."""
+    import re as _re
+
+    page, imports = _import_map()
+    for src in _re.findall(r'<script[^>]*\bsrc="([^"]+)"', page):
+        assert src.startswith("/static/"), src
+    for name, url in imports.items():
+        assert _re.fullmatch(r"/static/vendor/[\w.-]+@\d+\.\d+\.\d+\.mjs", url), url
+        assert (STATIC_DIR / url.removeprefix("/static/")).is_file(), url
+
+
+def test_every_vendored_module_resolves_through_the_import_map():
+    """A vendored file importing a package the map doesn't name — or a URL —
+    would fail in the browser (or reach for the network)."""
+    import re as _re
+
+    _, imports = _import_map()
+    for url in imports.values():
+        source = (STATIC_DIR / url.removeprefix("/static/")).read_text()
+        for spec in _re.findall(r'(?:from\s*|import\s*\(?\s*)"([^"]+)"', source):
+            assert spec in imports, f"{url} imports {spec!r}"
+
+
+def test_the_import_map_covers_every_import_the_editor_makes():
+    """An unmapped bare import fails the whole module in the browser — the
+    textarea then stays, but the editor never appears."""
+    import re as _re
+
+    _, imports = _import_map()
+    source = (STATIC_DIR / "yaml-editor.js").read_text()
+    used = set(_re.findall(r"from '([^']+)'", source))
+    assert used and used <= set(imports), used - set(imports)

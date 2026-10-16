@@ -568,3 +568,11 @@ def test_a_number_range_adds_a_global_filter(client):
                    filter_low="10", filter_high="42").text
     want = filters_mod.global_token("amount", "between", ["10", "42"])
     assert [html_mod.unescape(t) for t in _tokens(html)] == [want]
+
+
+def test_the_yaml_editor_asks_for_problems_and_completions_at_once(client):
+    data = client.post("/yaml/assist", json={"yaml": _YAML.replace("calc: n}", "calc: n, bogus: 1}")}).json()
+    (problem,) = data["problems"]
+    assert "'bogus' isn't a key a bar chart takes" in problem["message"]
+    assert data["schema"]["datasets"]["orders"][:2] == ["id", "day"]
+    assert data["schema"]["calcs"]["orders"] == ["n"]
