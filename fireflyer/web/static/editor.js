@@ -394,6 +394,9 @@ modeSwitch.addEventListener('click', e => {
 
 // Esc leaves any panel. Move mode and the modal handle their own Esc first.
 document.addEventListener('keydown', e => {
+  // Not when something used it already — the YAML editor's Esc closes its
+  // search bar or completion list first, and only a free Esc leaves the panel.
+  if (e.defaultPrevented) return;
   if (e.key === 'Escape' && currentMode !== 'view' && !inMove()) setMode('view');
 });
 

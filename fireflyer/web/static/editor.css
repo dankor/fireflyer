@@ -8,6 +8,14 @@
   --accent: #20a7c9;
   --accent-hover: #1a8aa6;
   --error: #e04355;
+  /* YAML editor syntax (yaml-editor.js). */
+  --yaml-key: #0b62c4;
+  --yaml-string: #1a7f37;
+  --yaml-number: #b35900;
+  --yaml-keyword: #8250df;
+  --yaml-comment: #6e7781;
+  --yaml-punct: #57606a;
+  --yaml-meta: #bf3989;
 }
 /* Editor chrome dark palette. The topbar toggle sets `data-ff-theme` on
    <html>; that same attribute also themes the dashboard preview and every
@@ -24,6 +32,13 @@
     --accent: #20a7c9;
     --accent-hover: #48c4e0;
     --error: #e04355;
+    --yaml-key: #6cb6ff;
+    --yaml-string: #8ddb8c;
+    --yaml-number: #f69d50;
+    --yaml-keyword: #dcbdfb;
+    --yaml-comment: #8b949e;
+    --yaml-punct: #9aa5b4;
+    --yaml-meta: #f47067;
   }
 }
 :root[data-ff-theme="dark"] {
@@ -36,6 +51,13 @@
   --accent: #20a7c9;
   --accent-hover: #48c4e0;
   --error: #e04355;
+  --yaml-key: #6cb6ff;
+  --yaml-string: #8ddb8c;
+  --yaml-number: #f69d50;
+  --yaml-keyword: #dcbdfb;
+  --yaml-comment: #8b949e;
+  --yaml-punct: #9aa5b4;
+  --yaml-meta: #f47067;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%;
@@ -222,6 +244,10 @@ html, body { margin: 0; padding: 0; height: 100%;
   font-size: 13px; line-height: 1.5; color: var(--text); background: var(--panel);
   tab-size: 2;
 }
+/* The YAML pane's code editor (yaml-editor.js) fills it and scrolls itself; the
+   textarea it mirrors stays underneath, hidden, as the one source of truth. */
+#ff-yaml .pane-body { display: flex; flex-direction: column; overflow: hidden; }
+#ff-yaml .ff-yaml-editor { flex: 1 1 auto; min-height: 0; }
 #output { padding: 16px; }
 /* The output pane scrolls vertically only. Filter-indicator tooltips escape
    their cells (cells are overflow:visible) and, while hidden, still reserve

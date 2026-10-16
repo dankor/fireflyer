@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from fireflyer import config_edit
 from fireflyer import date_range
 from fireflyer import number_range
+from fireflyer import yaml_assist
 from fireflyer import filters as filters_mod
 from fireflyer import calcs_edit
 from fireflyer.datasets import DatasetError, DatasetStore
@@ -324,7 +325,7 @@ def render_editor_page(
     styles = assets.favicons() + "\n" + assets.stylesheets("editor.css", "nav.css", "profile.css")
     return (
         page.replace("__FF_STYLES__", styles)
-        .replace("__FF_SCRIPT__", assets.script("editor.js"))
+        .replace("__FF_SCRIPT__", assets.script("editor.js") + "\n" + assets.module("yaml-editor.js"))
         .replace("__FF_CHAT__", CHAT_PANEL)
         .replace("__FF_NAV__", nav)
         .replace("__FF_MODES__", _mode_switch())
@@ -965,6 +966,22 @@ async def filter_fields(request: Request) -> str:
         resolve=_dataset_store(request).source,
         live=bool(form.get("live")),
     )
+
+
+class AssistRequest(BaseModel):
+    yaml: str = ""
+
+
+@app.post("/yaml/assist")
+async def yaml_assist_route(request: Request, req: AssistRequest) -> dict:
+    """The YAML editor's question, asked after each pause in typing: what's
+    wrong with this dashboard, and where (`problems`); and what can complete
+    here (`schema`). One request for both, since both need the current text."""
+    store = _dataset_store(request)
+    return {
+        "problems": yaml_assist.lint(req.yaml, datasets=store),
+        "schema": yaml_assist.schema(req.yaml, store),
+    }
 
 
 @app.post("/filter/edit", response_class=HTMLResponse)

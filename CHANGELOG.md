@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-16
+
+### Added
+
+- **A code editor for the YAML.** The `code` panel is now a real editor
+  (CodeMirror 6, vendored — no npm, no build, works offline): syntax
+  highlighting that follows the theme, line numbers, folding, bracket
+  matching, multiple cursors and rectangular selection, search and replace
+  (Cmd/Ctrl+F), go-to-line, toggle comment (Cmd/Ctrl+/), smart indentation
+  where Tab indents with two spaces (YAML forbids tab characters), and Alt+Z
+  to wrap long lines.
+- **Live problems.** As you type, the dashboard is checked the way the
+  renderer would: a YAML syntax error is underlined where it is (and says
+  where an unclosed bracket opened), a dashboard error on the token it's about
+  — in plain words (`'bogus' isn't a key a bar chart takes`) — with a gutter
+  marker and a count in the status bar.
+- **Completion that knows the dashboard**: top-level keys; each chart's keys
+  for its `type:`; chart types; datasets; the chart's dataset's columns and
+  calcs; `op` values; chart ids in the layout — in block and `{...}` style.
+  Tab or Enter accepts.
+- A status bar: line and column, cursors and selection, and ✓ Valid or the
+  problem count (click it for the list).
+- **The editor works offline.** CodeMirror and htmx are served from
+  `static/vendor/` (fetched once by `scripts/vendor.py`) instead of a CDN, so
+  the editor makes no outside requests — the map chart's tiles aside, which
+  are online-only images. Should the editor ever fail to load, the plain text
+  area is still there and works.
+
 ## [0.16.0] - 2026-10-16
 
 ### Added
@@ -940,7 +968,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/dankor/fireflyer/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/dankor/fireflyer/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/dankor/fireflyer/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/dankor/fireflyer/compare/v0.14.0...v0.14.1
