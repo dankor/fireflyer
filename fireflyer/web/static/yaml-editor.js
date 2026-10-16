@@ -21,12 +21,17 @@
 // characters), live problems from the server's own parse, completion that
 // knows the dashboard (keys per chart type, chart types, datasets and their
 // columns, calcs, ops, chart ids in the layout), and a status bar.
+//
+// Lines can be linked, as on GitHub: a click on a line number (shift-click for
+// a range) or on an outline chip selects and highlights them and puts them in
+// the address bar, `?line=12` or `?line=12-20`; a link with it opens the code
+// panel there. The highlight follows edits, and the address bar with it.
 
-import {EditorState, Compartment} from '@codemirror/state';
+import {EditorState, Compartment, StateEffect, StateField, RangeSet} from '@codemirror/state';
 import {
   EditorView, Decoration, MatchDecorator, ViewPlugin, keymap, lineNumbers,
   highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, drawSelection,
-  dropCursor, rectangularSelection, crosshairCursor, showPanel,
+  dropCursor, rectangularSelection, crosshairCursor, showPanel, GutterMarker, gutterLineClass,
 } from '@codemirror/view';
 import {defaultKeymap, history, historyKeymap, indentWithTab} from '@codemirror/commands';
 import {
@@ -40,10 +45,11 @@ import {
 import {linter, lintGutter, lintKeymap, diagnosticCount, openLintPanel} from '@codemirror/lint';
 import {yaml} from '@codemirror/lang-yaml';
 import {tags as t} from '@lezer/highlight';
+import {initDiff} from 'fireflyer/diff-view';
 
 function mount(ta) {
   // The latest answer from /yaml/assist: what completion can offer.
-  let schema = {charts: {}, datasets: {}, calcs: {}};
+  let schema = {charts: {}, datasets: {}, calcs: {}, icons: {}};
   // Line wrapping, toggled with Alt+Z as in VS Code and remembered per browser
   // (a viewer's preference; storage may be off, so any failure means "off").
   const wrapping = new Compartment();
@@ -63,7 +69,8 @@ function mount(ta) {
   const view = new EditorView({
     parent: ta.parentElement,
     state: EditorState.create({doc: ta.value, extensions: [
-      lineNumbers(),
+      lineNumbers({domEventHandlers: {mousedown: linkFromGutter}}),
+      linked,
       highlightActiveLineGutter(),
       highlightSpecialChars(),
       history(),
@@ -89,9 +96,11 @@ function mount(ta) {
       scalarColours,
       linter(problems, {delay: 450}),
       lintGutter(),
+      showPanel.of(v => outline(v, () => schema)),
       showPanel.of(statusBar),
       wrapping.of(wrapOn() ? EditorView.lineWrapping : []),
       editorTheme,
+      fillPanel,
       keymap.of([
         // A run of the preview, as in the plain textarea.
         {key: 'Mod-Enter', run: () => { if (window.run) window.run(); return true; }},
@@ -102,6 +111,8 @@ function mount(ta) {
         ...foldKeymap, ...completionKeymap, ...lintKeymap, indentWithTab,
       ]),
       EditorView.updateListener.of(update => {
+        // Edits move linked lines; the address bar follows them.
+        if (update.startState.field(linked) !== update.state.field(linked)) writeLineParam(update.state);
         if (update.docChanged && !applying) {
           nativeValue.set.call(ta, update.state.doc.toString());
           ta.dispatchEvent(new Event('input', {bubbles: true}));
@@ -131,6 +142,7 @@ function mount(ta) {
   });
   ta.focus = () => view.focus();
   ta.cmView = view;                    // a handle for anything that needs the editor itself
+  followLineLinks(view);
   ta.hidden = true;
   view.dom.classList.add('ff-yaml-editor');
 
@@ -417,8 +429,290 @@ function statusBar(view) {
   return {dom, bottom: true, update: u => update(u.state)};
 }
 
+// --- outline: a chip per top-level key, to hop there --------------------------
+// `charts` is a menu of every chart, each with its type's icon, and `layout`,
+// when it's split into tabs, a menu of its tabs.
+// The chip of the section the cursor is in is lit, so it doubles as a "you are
+// here". Rebuilt only when the keys or charts change, not on every keystroke.
+
+// Each top-level key with its line; for `charts` each chart's id, line and type
+// (from `type:` in its block, or a flow mapping on the id's own line); for a
+// tabbed `layout` each tab's name and line. Tab names are free text, so may be
+// quoted or have spaces: `"Sales & ops":`.
+const MENUS = {charts: 'chart', layout: 'tab'};
+const tabOf = text => {
+  const m = text.match(/^\s*(?:"([^"]+)"|'([^']+)'|([^\s#'"\-[{][^:#]*?))\s*:(?:\s|$)/);
+  return m ? (m[1] || m[2] || m[3]) : null;
+};
+function sections(doc) {
+  const out = [];
+  let charts = null, childIndent = null, current = null, kind = null;
+  for (let n = 1; n <= doc.lines; n++) {
+    const text = doc.line(n).text;
+    if (blank(text)) continue;
+    const ind = indentOf(text);
+    if (ind === 0) {
+      const key = keyOf(text);
+      if (!key) continue;
+      kind = MENUS[key] || null;
+      out.push({key, line: n, items: kind ? [] : null, kind});
+      charts = kind ? out[out.length - 1].items : null;
+      childIndent = current = null;
+      continue;
+    }
+    if (!charts) continue;
+    if (childIndent === null) childIndent = ind;
+    if (ind === childIndent && kind === 'tab') {
+      const tab = tabOf(text);
+      current = null;
+      if (tab) charts.push({id: tab, line: n, type: ''});
+    } else if (ind === childIndent) {
+      const id = keyOf(text);
+      const inline = text.match(/\btype\s*:\s*([\w-]+)/);
+      current = id ? {id, line: n, type: inline ? inline[1] : ''} : null;
+      if (current) charts.push(current);
+    } else if (kind === 'chart' && current && !current.type) {
+      const m = text.match(/^\s*type\s*:\s*([\w-]+)/);
+      if (m) current.type = m[1];
+    }
+  }
+  return out;
+}
+
+// An outline hop links the key's whole block: its line down to the last line
+// that belongs to it — deeper-indented, or a `- ` item at its own indent (YAML
+// allows a list flush under its key). Trailing blank and comment lines are left
+// out: a comment above the next key is that key's.
+function jumpTo(view, line) {
+  linkLines(view, line, blockEnd(view.state.doc, line), 'start');
+}
+
+function blockEnd(doc, line) {
+  const own = indentOf(doc.line(line).text);
+  let last = line;
+  for (let n = line + 1; n <= doc.lines; n++) {
+    const text = doc.line(n).text;
+    if (blank(text)) continue;
+    const ind = indentOf(text);
+    if (ind < own || (ind === own && !/^\s*-(\s|$)/.test(text))) break;
+    last = n;
+  }
+  return last;
+}
+
+// --- linked lines: `?line=12` / `?line=12-20` -------------------------------
+const LINE_PARAM = 'line';
+const setLinked = StateEffect.define();
+
+// The linked span as document positions — {from, to}, both at line starts — so
+// edits above it carry it along. Null when nothing is linked.
+const linked = StateField.define({
+  create: () => null,
+  update(span, tr) {
+    for (const e of tr.effects) if (e.is(setLinked)) return e.value;
+    if (!span || !tr.docChanged) return span;
+    const from = tr.changes.mapPos(span.from, 1), to = tr.changes.mapPos(span.to, -1);
+    const doc = tr.state.doc;
+    return {from: doc.lineAt(from).from, to: doc.lineAt(Math.max(from, to)).from};
+  },
+  provide: field => [
+    EditorView.decorations.from(field, span => (view => lineMarks(view.state.doc, span, Decoration.line({class: 'cm-ff-linked'})))),
+    gutterLineClass.compute([field], state => lineMarks(state.doc, state.field(field), linkedGutter)),
+  ],
+});
+const linkedGutter = new class extends GutterMarker { elementClass = 'cm-ff-linked-gutter'; }();
+
+function lineMarks(doc, span, mark) {
+  if (!span) return RangeSet.empty;
+  const marks = [];
+  for (let n = doc.lineAt(span.from).number, last = doc.lineAt(span.to).number; n <= last; n++) {
+    marks.push(mark.range(doc.line(n).from));
+  }
+  return RangeSet.of(marks);
+}
+
+// Link lines first..last (1-based): highlight them, put the cursor at the
+// start — not a selection, which the next keystroke would type over — scroll
+// there (`start` for an outline hop, `center` for a link) and write the address
+// bar.
+function linkLines(view, first, last, y = 'center') {
+  const doc = view.state.doc;
+  const clamp = n => Math.min(Math.max(1, n), doc.lines);
+  [first, last] = [clamp(Math.min(first, last)), clamp(Math.max(first, last))];
+  const from = doc.line(first).from;
+  view.dispatch({
+    selection: {anchor: from},
+    effects: [setLinked.of({from, to: doc.line(last).from}), EditorView.scrollIntoView(from, {y, yMargin: 8})],
+  });
+  view.focus();
+}
+
+// A click on a line number links that line; a shift-click stretches the link
+// from the line already linked, as on GitHub.
+function linkFromGutter(view, block, event) {
+  if (event.button !== 0) return false;
+  const doc = view.state.doc;
+  const line = doc.lineAt(block.from).number;
+  const span = view.state.field(linked);
+  const anchor = event.shiftKey && span ? doc.lineAt(span.from).number : line;
+  const other = event.shiftKey && span && line < anchor ? doc.lineAt(span.to).number : anchor;
+  event.preventDefault();
+  linkLines(view, Math.min(line, other), Math.max(line, other));
+  return true;
+}
+
+function writeLineParam(state) {
+  const span = state.field(linked);
+  let value = null;
+  if (span) {
+    const [a, b] = [state.doc.lineAt(span.from).number, state.doc.lineAt(span.to).number];
+    value = a === b ? `${a}` : `${a}-${b}`;
+  }
+  setUrlParam(LINE_PARAM, value);
+}
+
+function setUrlParam(name, value) {
+  const url = new URL(location.href);
+  if (value) url.searchParams.set(name, value);
+  else url.searchParams.delete(name);
+  // `window.` — `history` alone is CodeMirror's undo history, imported above.
+  if (url.href !== location.href) window.history.replaceState(window.history.state, '', url);
+}
+
+// A link with `?line=` opens the code panel on those lines; leaving the panel
+// drops the parameter (and the highlight), as the compare view does its own.
+function followLineLinks(view) {
+  const editor = window.ffEditor;
+  const m = /^(\d+)(?:-(\d+))?$/.exec(new URLSearchParams(location.search).get(LINE_PARAM) || '');
+  if (!editor) return;
+  editor.onModeChange(mode => {
+    if (mode !== 'code' && view.state.field(linked)) view.dispatch({effects: setLinked.of(null)});
+  });
+  if (!m) return;
+  editor.setMode('code');
+  // After the panel is shown, so the editor has a size to scroll in.
+  requestAnimationFrame(() => linkLines(view, +m[1], +(m[2] || m[1])));
+}
+
+function outline(view, getSchema) {
+  const dom = document.createElement('div');
+  dom.className = 'cm-ff-outline';
+  let found = [], signature = '', menu = null;
+
+  function button(className, text, title, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = className;
+    b.textContent = text;
+    b.title = title;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  // A chip jumps to its key. One with a list (`charts`, a tabbed `layout`) is
+  // split: the name still jumps to the key, the ▾ beside it opens the list.
+  // A flat layout (no tabs) has nothing to pick from: a plain chip.
+  function chip(section) {
+    const go = () => { closeMenu(); jumpTo(view, section.line); };
+    const goTitle = `Go to ${section.key}: (line ${section.line})`;
+    if (!(section.items && section.items.length)) {
+      const b = button('cm-ff-chip', section.key, goTitle, go);
+      b.dataset.key = section.key;
+      return b;
+    }
+    const n = section.items.length;
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-ff-chip has-menu';
+    wrap.dataset.key = section.key;
+    const more = button('cm-ff-chip-more', '▾', `${n} ${section.kind}${n === 1 ? '' : 's'} — pick one to jump to it`,
+      () => (menu ? closeMenu() : openMenu(wrap, section)));
+    more.setAttribute('aria-haspopup', 'menu');
+    wrap.append(button('cm-ff-chip-go', section.key, goTitle, go), more);
+    return wrap;
+  }
+
+  function openMenu(anchor, section) {
+    menu = document.createElement('div');
+    menu.className = 'cm-ff-menu';
+    const icons = getSchema().icons || {};
+    function item(entry) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cm-ff-menu-item';
+      if (section.kind === 'chart') {
+        const icon = document.createElement('span');
+        icon.className = 'icon';
+        // The chart type's own icon.svg, from the server's schema — trusted
+        // markup, never the YAML's text.
+        icon.innerHTML = icons[entry.type] || '';
+        b.append(icon);
+        b.title = entry.type ? `${entry.id} (${entry.type})` : entry.id;
+      }
+      const name = document.createElement('span');
+      name.className = 'id';
+      name.textContent = entry.id;
+      b.append(name);
+      b.addEventListener('click', () => { closeMenu(); jumpTo(view, entry.line); });
+      return b;
+    }
+    menu.append(...section.items.map(item));
+    // Arrows move through the list, Enter (the button's own) jumps, Esc closes.
+    menu.addEventListener('keydown', e => {
+      const items = [...menu.querySelectorAll('.cm-ff-menu-item')];
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown') { e.preventDefault(); (items[i + 1] || items[i]).focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); (items[i - 1] || items[i]).focus(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(); view.focus(); }
+    });
+    dom.append(menu);
+    menu.style.left = `${anchor.offsetLeft}px`;
+    anchor.classList.add('is-open');
+    anchor.querySelector('.cm-ff-chip-more').setAttribute('aria-expanded', 'true');
+    menu.firstChild.focus();
+    setTimeout(() => document.addEventListener('mousedown', outside), 0);
+  }
+  function outside(e) { if (menu && !dom.contains(e.target)) closeMenu(); }
+  function closeMenu() {
+    if (!menu) return;
+    menu.remove();
+    menu = null;
+    document.removeEventListener('mousedown', outside);
+    for (const b of dom.querySelectorAll('[aria-expanded]')) b.removeAttribute('aria-expanded');
+    for (const c of dom.querySelectorAll('.is-open')) c.classList.remove('is-open');
+  }
+
+  function rebuild(state) {
+    found = sections(state.doc);
+    const next = JSON.stringify(found);
+    if (next === signature) return;
+    signature = next;
+    closeMenu();
+    dom.replaceChildren(...found.map(chip));
+    dom.hidden = !found.length;
+  }
+  // Light the chip of the section holding the cursor.
+  function locate(state) {
+    const line = state.doc.lineAt(state.selection.main.head).number;
+    let here = null;
+    for (const s of found) if (s.line <= line) here = s.key;
+    for (const b of dom.querySelectorAll('.cm-ff-chip')) b.classList.toggle('is-here', b.dataset.key === here);
+  }
+  rebuild(view.state);
+  locate(view.state);
+  return {
+    dom, top: true,
+    update(u) {
+      if (u.docChanged) rebuild(u.state);
+      if (u.docChanged || u.selectionSet) locate(u.state);
+    },
+  };
+}
+
+// The editor fills the YAML panel; the compare view's panes size to their text.
+const fillPanel = EditorView.theme({'&': {height: '100%'}});
+
 const editorTheme = EditorView.theme({
-  '&': {height: '100%', color: 'var(--text)', backgroundColor: 'var(--panel)', fontSize: '13px'},
+  '&': {color: 'var(--text)', backgroundColor: 'var(--panel)', fontSize: '13px'},
   '&.cm-focused': {outline: 'none'},
   '.cm-scroller': {fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', lineHeight: '1.6'},
   '.cm-content': {padding: '10px 0', caretColor: 'var(--text)'},
@@ -430,10 +724,16 @@ const editorTheme = EditorView.theme({
   '.cm-matchingBracket, &.cm-focused .cm-matchingBracket':
     {backgroundColor: 'color-mix(in srgb, var(--accent) 22%, transparent)', outline: '1px solid color-mix(in srgb, var(--accent) 50%, transparent)'},
   '.cm-gutters': {backgroundColor: 'var(--panel)', color: 'var(--muted)', border: 'none', borderRight: '1px solid var(--border)'},
-  '.cm-lineNumbers .cm-gutterElement': {padding: '0 8px 0 14px', minWidth: '28px', opacity: '0.7'},
+  // A tight gutter: numbers, then a narrow fold column and a narrow problems
+  // column — each only as wide as its marker.
+  // A line number is a link to its line (see linkFromGutter).
+  '.cm-lineNumbers .cm-gutterElement': {padding: '0 4px 0 10px', minWidth: '24px', opacity: '0.7', cursor: 'pointer'},
+  '.cm-foldGutter .cm-gutterElement': {padding: '0 1px', width: '10px'},
+  '.cm-gutter-lint': {width: '10px'},
+  '.cm-gutter-lint .cm-gutterElement': {padding: '0'},
   '.cm-activeLineGutter': {backgroundColor: 'transparent', color: 'var(--text)'},
   '.cm-activeLineGutter.cm-gutterElement': {opacity: '1'},
-  '.cm-ff-fold': {display: 'inline-block', width: '12px', cursor: 'pointer', opacity: '0.45', fontSize: '12px'},
+  '.cm-ff-fold': {display: 'inline-block', width: '10px', cursor: 'pointer', opacity: '0.45', fontSize: '12px', textAlign: 'center'},
   '.cm-ff-fold:hover': {opacity: '1'},
   '.cm-foldPlaceholder': {backgroundColor: 'color-mix(in srgb, var(--accent) 14%, transparent)', border: 'none', color: 'var(--text)', padding: '0 6px', borderRadius: '3px'},
   '.cm-tooltip': {backgroundColor: 'var(--panel)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '6px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', overflow: 'hidden'},
@@ -446,7 +746,7 @@ const editorTheme = EditorView.theme({
   '.cm-diagnostic': {padding: '6px 10px', borderLeftWidth: '3px'},
   '.cm-diagnostic-error': {borderLeftColor: 'var(--error)'},
   '.cm-lintRange-error': {backgroundImage: 'none', textDecoration: 'wavy underline var(--error)', textUnderlineOffset: '3px'},
-  '.cm-lint-marker': {width: '0.9em', height: '0.9em'},
+  '.cm-lint-marker': {width: '8px', height: '8px', marginTop: '6px'},
   '.cm-panels': {backgroundColor: 'var(--panel)', color: 'var(--text)'},
   '.cm-panels-top': {borderBottom: '1px solid var(--border)'},
   '.cm-panels-bottom': {borderTop: '1px solid var(--border)'},
@@ -459,6 +759,26 @@ const editorTheme = EditorView.theme({
   '.cm-searchMatch-selected': {backgroundColor: 'color-mix(in srgb, var(--accent) 40%, transparent)'},
   '.cm-yaml-number': {color: 'var(--yaml-number)'},
   '.cm-yaml-keyword': {color: 'var(--yaml-keyword)'},
+  '.cm-ff-linked': {backgroundColor: 'color-mix(in srgb, var(--yaml-number) 16%, transparent)'},
+  '.cm-ff-linked-gutter': {color: 'var(--text)', opacity: '1', fontWeight: '600'},
+  '.cm-ff-outline': {position: 'relative', display: 'flex', flexWrap: 'wrap', gap: '4px', padding: '6px 10px', fontSize: '12px'},
+  '.cm-ff-chip': {border: '1px solid var(--border)', borderRadius: '999px', background: 'none', color: 'var(--muted)', padding: '1px 9px', font: 'inherit', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', cursor: 'pointer', lineHeight: '1.6'},
+  '.cm-ff-chip:hover': {color: 'var(--text)', borderColor: 'var(--muted)'},
+  '.cm-ff-chip.is-here': {color: 'var(--accent)', borderColor: 'var(--accent)'},
+  // The split chip: one pill, two buttons, a hairline between them.
+  '.cm-ff-chip.has-menu': {display: 'inline-flex', padding: '0', cursor: 'default', overflow: 'hidden'},
+  '.cm-ff-chip-go, .cm-ff-chip-more': {border: 'none', background: 'none', color: 'inherit', font: 'inherit', cursor: 'pointer', lineHeight: '1.6'},
+  '.cm-ff-chip-go': {padding: '1px 6px 1px 9px'},
+  '.cm-ff-chip-more': {padding: '1px 7px 1px 5px', fontSize: '10px', borderLeft: '1px solid var(--border)'},
+  '.cm-ff-chip-go:hover, .cm-ff-chip-more:hover, .cm-ff-chip.is-open .cm-ff-chip-more':
+    {color: 'var(--text)', backgroundColor: 'color-mix(in srgb, var(--text) 8%, transparent)'},
+  '.cm-ff-chip.is-here .cm-ff-chip-more': {borderLeftColor: 'color-mix(in srgb, var(--accent) 50%, transparent)'},
+  '.cm-ff-menu': {position: 'absolute', top: '100%', zIndex: '20', marginTop: '2px', minWidth: '180px', maxWidth: 'calc(100% - 20px)', maxHeight: '20em', overflowY: 'auto', backgroundColor: 'var(--panel)', border: '1px solid var(--border)', borderRadius: '6px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', padding: '4px'},
+  '.cm-ff-menu-item': {display: 'flex', width: '100%', gap: '8px', alignItems: 'center', border: 'none', background: 'none', color: 'var(--text)', padding: '3px 8px', borderRadius: '4px', font: 'inherit', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12.5px', textAlign: 'left', cursor: 'pointer'},
+  '.cm-ff-menu-item .id': {overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'},
+  '.cm-ff-menu-item .icon': {display: 'inline-flex', flex: '0 0 auto', width: '14px', height: '14px', color: 'var(--muted)'},
+  '.cm-ff-menu-item .icon svg': {width: '14px', height: '14px'},
+  '.cm-ff-menu-item:hover, .cm-ff-menu-item:focus': {outline: 'none', backgroundColor: 'color-mix(in srgb, var(--accent) 18%, transparent)'},
   '.cm-ff-status': {display: 'flex', alignItems: 'center', gap: '14px', padding: '4px 12px', fontSize: '11.5px', color: 'var(--muted)', fontVariantNumeric: 'tabular-nums'},
   '.cm-ff-status-meta': {marginLeft: 'auto'},
   '.cm-ff-status-health': {border: 'none', background: 'none', padding: '0', font: 'inherit', color: 'var(--muted)', cursor: 'pointer'},
@@ -469,3 +789,5 @@ const editorTheme = EditorView.theme({
 // is a `const`, and doesn't exist until its line has run.
 const textarea = document.getElementById('code');
 if (textarea) mount(textarea);
+// The compare view reads with the editor's look: YAML colours, scalars, theme.
+initDiff([yaml(), syntaxHighlighting(yamlStyle), scalarColours, editorTheme]);

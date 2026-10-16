@@ -115,19 +115,19 @@ def test_the_switch_has_one_segment_per_mode_and_no_text():
     switch = page[page.index('id="ff-modes"') :]
     switch = switch[: switch.index("</div>")]
     assert re.findall(r'data-mode="(\w+)"', switch) == [
-        "view", "edit", "code", "chat", "calcs", "docs"
+        "view", "edit", "code", "diff", "chat", "calcs", "docs"
     ]
     # No segment carries a text label; each carries a tooltip instead.
     assert not re.search(r">\s*[A-Za-z]+\s*</button>", switch)
     buttons = re.findall(r"<button[^>]*>", switch)
-    assert len(buttons) == 6
+    assert len(buttons) == 7
     for button in buttons:                       # meaning lives in the tooltip
         assert "title=" in button and "aria-label=" in button
 
 
 def test_the_buttons_the_switch_replaced_are_gone():
     page = _page()
-    for gone in ('id="ff-chat-btn"', 'id="ff-calcs-btn"', 'id="ff-docs-btn"',
+    for gone in ('id="ff-diff-btn"', 'id="ff-chat-btn"', 'id="ff-calcs-btn"', 'id="ff-docs-btn"',
                  'id="toggle"', 'id="pane-resizer"'):
         assert gone not in page, gone
 
@@ -355,8 +355,11 @@ def test_the_editor_needs_no_network():
     for src in _re.findall(r'<script[^>]*\bsrc="([^"]+)"', page):
         assert src.startswith("/static/"), src
     for name, url in imports.items():
-        assert _re.fullmatch(r"/static/vendor/[\w.-]+@\d+\.\d+\.\d+\.mjs", url), url
-        assert (STATIC_DIR / url.removeprefix("/static/")).is_file(), url
+        if name.startswith("fireflyer/"):        # our own modules, versioned by mtime
+            assert _re.fullmatch(r"/static/[\w-]+\.js\?v=\d+", url), url
+        else:                                     # third-party: vendored, pinned
+            assert _re.fullmatch(r"/static/vendor/[\w.-]+@\d+\.\d+\.\d+\.mjs", url), url
+        assert (STATIC_DIR / url.removeprefix("/static/").split("?")[0]).is_file(), url
 
 
 def test_every_vendored_module_resolves_through_the_import_map():
@@ -366,7 +369,7 @@ def test_every_vendored_module_resolves_through_the_import_map():
 
     _, imports = _import_map()
     for url in imports.values():
-        source = (STATIC_DIR / url.removeprefix("/static/")).read_text()
+        source = (STATIC_DIR / url.removeprefix("/static/").split("?")[0]).read_text()
         for spec in _re.findall(r'(?:from\s*|import\s*\(?\s*)"([^"]+)"', source):
             assert spec in imports, f"{url} imports {spec!r}"
 
@@ -377,6 +380,16 @@ def test_the_import_map_covers_every_import_the_editor_makes():
     import re as _re
 
     _, imports = _import_map()
-    source = (STATIC_DIR / "yaml-editor.js").read_text()
+    source = "".join((STATIC_DIR / f).read_text() for f in ("yaml-editor.js", "diff-view.js"))
     used = set(_re.findall(r"from '([^']+)'", source))
     assert used and used <= set(imports), used - set(imports)
+
+
+def test_the_compare_button_and_view_are_on_the_page():
+    page, imports = _import_map()
+    # Compare is a mode, right after code.
+    modes = re.findall(r'data-mode="(\w+)" title="[^"]*" aria-label="[^"]*"><svg', page)
+    assert modes[:4] == ["view", "edit", "code", "diff"]
+    assert 'aria-label="Compare versions"' in page
+    assert '<section class="ff-diff" id="ff-diff" hidden' in page
+    assert imports["fireflyer/diff-view"].startswith("/static/diff-view.js?v=")

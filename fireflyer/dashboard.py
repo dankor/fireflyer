@@ -629,16 +629,18 @@ class Dashboard:
         description, not the render."""
         if name in self._inline_names:
             description = self._inline_descriptions.get(name, "")
-            return {"name": name, "updated": "", "inline": True, "description": description}
-        updated = description = ""
+            return {"name": name, "updated": "", "updated_iso": "", "inline": True, "description": description}
+        updated = updated_iso = description = ""
         if self._dataset_meta is not None:
             try:
                 meta = self._dataset_meta(name)
-                updated = (getattr(meta, "updated_at", "") or "").replace("T", " ")[:16]
+                updated_iso = getattr(meta, "updated_at", "") or ""
+                # UTC as stored; the editor shows it in the viewer's local time.
+                updated = updated_iso.replace("T", " ")[:19] + " UTC" if updated_iso else ""
                 description = (getattr(meta, "description", "") or "").strip()
             except Exception:
-                updated = description = ""
-        return {"name": name, "updated": updated, "inline": False, "description": description}
+                updated = updated_iso = description = ""
+        return {"name": name, "updated": updated, "updated_iso": updated_iso, "inline": False, "description": description}
 
     def _render_chart(
         self,

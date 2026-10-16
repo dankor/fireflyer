@@ -7,11 +7,11 @@ const toastEl = document.getElementById('ff-toast');
 // Transient error toast — replaces the old topbar status line for the rare
 // config-edit failure messages. Auto-hides after a few seconds.
 let toastTimer = null;
-function flash(msg) {
+function flash(msg, ms) {
   toastEl.textContent = msg;
   toastEl.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(function() { toastEl.hidden = true; }, 3000);
+  toastTimer = setTimeout(function() { toastEl.hidden = true; }, ms || 3000);
 }
 
 // Theme switch — a 3-segment Auto / Light / Dark control. Sets `data-ff-theme`
@@ -79,11 +79,73 @@ async function run() {
 // Two independent "dirty" notions: the preview is *stale* vs the last render
 // (drives Refresh), and the YAML is *unsaved* vs what's stored (drives Save).
 const saveBtn = document.getElementById('ff-save');       // portal only
-const nameEl = document.getElementById('ff-dash-name');   // editable title
+const nameEl = document.getElementById('ff-dash-name');   // the title (see the card below)
 let savedYaml = codeEl.value;
 
 function markStale() { outPane.classList.add('stale'); }
-function updateSaveState() { if (saveBtn) saveBtn.hidden = (codeEl.value === savedYaml); }
+function updateSaveState() {
+  if (saveBtn) saveBtn.hidden = (codeEl.value === savedYaml);
+  keepDraft();
+}
+
+// --- the unsaved draft, kept in the browser ---------------------------------
+// What's in the editor and not saved survives closing the window: it's kept in
+// localStorage per dashboard (a viewer's own working state, never shared) on
+// every change, dropped once saved or undone, and restored when the page opens.
+// Storage may be off (a private window); then nothing is kept, nothing breaks.
+const dashId = document.body.dataset.dashId || '';
+const DRAFT_KEY = 'ff-draft:' + (dashId || location.pathname);
+function keepDraft() {
+  try {
+    if (codeEl.value === savedYaml) localStorage.removeItem(DRAFT_KEY);
+    else localStorage.setItem(DRAFT_KEY, JSON.stringify({yaml: codeEl.value, base: savedYaml, at: Date.now()}));
+  } catch (e) { /* not kept */ }
+}
+// Every time the editor shows, one shape in the viewer's own zone:
+// `2026-10-16 14:52:07`. Server-rendered times come as <time datetime> in UTC
+// (the server doesn't know the zone) and are rewritten here as they arrive.
+function stamp(when) {
+  const d = new Date(when);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    + ` ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+function localizeTimes(root) {
+  for (const t of root.querySelectorAll('time[datetime]')) {
+    const at = Date.parse(t.getAttribute('datetime'));
+    // Only on a change: this write is itself a mutation the observer sees.
+    if (!isNaN(at) && t.textContent !== stamp(at)) t.textContent = stamp(at);
+  }
+}
+if (typeof MutationObserver !== 'undefined') {
+  new MutationObserver(() => localizeTimes(outEl)).observe(outEl, {childList: true, subtree: true});
+}
+
+(function restoreDraft() {
+  let draft = null;
+  try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { return; }
+  if (!draft || typeof draft.yaml !== 'string' || draft.yaml === codeEl.value) return;
+  codeEl.value = draft.yaml;               // savedYaml stays the server's: it's unsaved
+  const when = stamp(draft.at);
+  // Someone saved since the draft was started: say so, and point at the diff.
+  const moved = draft.base !== savedYaml;
+  flash(moved
+    ? `Restored your unsaved changes from ${when}. The saved dashboard has changed since — compare versions to see how.`
+    : `Restored your unsaved changes from ${when}.`, moved ? 9000 : 5000);
+})();
+
+// For other modules (the compare view): the text, the last-saved text, which
+// dashboard, and a way to set the text — as an outside edit would, unsaved.
+window.ffEditor = {
+  dashId,
+  get yaml() { return codeEl.value; },
+  get savedYaml() { return savedYaml; },
+  setYaml(text) { codeEl.value = text; run(); },
+  flash,
+  stamp,
+  setMode,
+  onModeChange(hook) { modeHooks.push(hook); },
+};
 
 // Title <-> YAML `name:` key (two-way). Read/rewrite the top-level line.
 function yamlName(text) {
@@ -95,23 +157,20 @@ function yamlName(text) {
   return v;
 }
 function setYamlName(text, name) { return text.replace(/^name:.*$/m, 'name: ' + JSON.stringify(name)); }
-// Renaming also opens a box under the name for the dashboard's description. It
-// is filled from the ⓘ (what the server parsed, so any YAML form of it) and
-// writes a top-level `description:` back, as the name writes `name:`. Blur or
-// Cmd/Ctrl+Enter keeps the text, Esc puts the old one back; the box closes once
-// focus leaves both the name and the box.
+// The name and description: the topbar shows both (the description's first
+// line, small, under the name), and a click opens a card beneath them with a
+// field for each — the name rewrites `name:`, the description `description:`.
+// While you type the topbar follows; clicking away or Cmd/Ctrl+Enter keeps the
+// change, Esc puts both back. In view mode, which is for reading, the card is
+// read-only and opens only when there's a description to read.
 const titleEl = document.querySelector('.ff-dash-title');
+const headEl = document.getElementById('ff-dash-head');
+const subEl = document.getElementById('ff-dash-sub');
 const aboutEl = document.getElementById('ff-dash-about');
+const aboutName = document.getElementById('ff-dash-name-input');
 const aboutText = document.getElementById('ff-dash-about-text');
-let aboutBefore = '';
-function openAbout() {
-  if (!aboutEl || !aboutEl.hidden) return;
-  // View mode reads it, so with nothing to read there's nothing to open.
-  if (aboutText.readOnly && !nameEl.dataset.description) return;
-  aboutBefore = nameEl.dataset.description || '';
-  aboutText.value = aboutBefore;
-  aboutEl.hidden = false;
-}
+let before = null;                               // {name, desc} while the card is open
+
 // Drops the key — with the indented lines under it, should it be a `|` / `>`
 // block — and, unless `desc` is empty, writes it back right after `name:`.
 // JSON.stringify gives a double-quoted YAML string, newlines escaped.
@@ -122,62 +181,99 @@ function setYamlDescription(text, desc) {
   if (!/^name:.*$/m.test(without)) return line + '\n' + without;
   return without.replace(/^name:.*$/m, m => m + '\n' + line);
 }
-if (aboutText) {
-  aboutText.addEventListener('keydown', e => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); aboutText.blur(); }
-    else if (e.key === 'Escape') { e.preventDefault(); aboutText.value = aboutBefore; aboutText.blur(); }
+
+const readOnlyTitle = () => currentMode === 'view';
+
+function showHead(name, desc) {
+  nameEl.textContent = name;
+  subEl.textContent = desc;
+  subEl.hidden = !desc;
+  headEl.title = desc;
+}
+
+function openCard() {
+  if (!aboutEl || before) return;
+  const desc = nameEl.dataset.description || '';
+  if (readOnlyTitle() && !desc) return;
+  before = {name: yamlName(codeEl.value), desc};
+  aboutName.value = before.name;
+  aboutText.value = desc;
+  aboutEl.hidden = false;
+  headEl.classList.add('is-open');
+  headEl.setAttribute('aria-expanded', 'true');
+  if (!readOnlyTitle()) { aboutName.focus(); aboutName.select(); }
+}
+
+// keep: write what's in the fields to the YAML; otherwise put the topbar back.
+function closeCard(keep) {
+  if (!before) return;
+  const was = before;
+  before = null;
+  aboutEl.hidden = true;
+  headEl.classList.remove('is-open');
+  headEl.setAttribute('aria-expanded', 'false');
+  const name = aboutName.value.trim() || was.name;   // a name can't be empty
+  const desc = aboutText.value.trim();
+  if (!keep || readOnlyTitle()) { showHead(was.name, was.desc); return; }
+  let text = codeEl.value;
+  if (name !== was.name) text = setYamlName(text, name);
+  if (desc !== was.desc) text = setYamlDescription(text, desc);
+  if (text !== codeEl.value) {
+    codeEl.value = text;
+    nameEl.dataset.description = desc;
+    updateSaveState();          // an unsaved change, not a preview change
+  }
+  showHead(name, desc);
+}
+
+if (headEl && aboutEl) {
+  headEl.addEventListener('click', () => (before ? closeCard(true) : openCard()));
+  headEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); before ? closeCard(true) : openCard(); }
   });
-  aboutText.addEventListener('blur', () => {
+  // The topbar follows the fields as you type.
+  aboutName.addEventListener('input', () => { nameEl.textContent = aboutName.value.trim() || before.name; });
+  aboutText.addEventListener('input', () => {
     const desc = aboutText.value.trim();
-    if (desc === aboutBefore) return;
-    codeEl.value = setYamlDescription(codeEl.value, desc);
-    aboutBefore = desc;
-    setDashDescription(desc);
-    updateSaveState();          // an unsaved change, as a rename is
+    subEl.textContent = desc;
+    subEl.hidden = !desc;
   });
-  titleEl.addEventListener('focusout', e => {
-    if (!titleEl.contains(e.relatedTarget)) aboutEl.hidden = true;
+  aboutEl.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeCard(false); headEl.focus(); }
+    else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); closeCard(true); headEl.focus(); }
+    // Enter in the name moves on to the description, as a form's next field.
+    else if (e.key === 'Enter' && e.target === aboutName) { e.preventDefault(); aboutText.focus(); }
+  });
+  // A click anywhere else keeps the change, as leaving a field does.
+  document.addEventListener('mousedown', e => {
+    if (before && !titleEl.contains(e.target)) closeCard(true);
   });
 }
 
-// The YAML's `description:`, kept on the name: the box above edits it, and in
-// view mode it's the name's tooltip. Filled from /execute's answer, so any YAML
-// form of the text works.
+// The YAML's `description:`, kept on the name. Filled from /execute's answer,
+// so any YAML form of the text works.
 function setDashDescription(text) {
   if (!nameEl) return;
   nameEl.dataset.description = text;
+  if (!before) showHead(nameEl.textContent, text);
   syncTitleEditable();
 }
 
-// The name is renamed (and described) by clicking it — except in view mode,
-// which is for reading the dashboard: there the name is plain text, and a click
-// opens the same box read-only, to read the description (when there is one).
+// View mode reads: the head is a button only when there's something to read.
 function syncTitleEditable() {
-  if (!nameEl) return;
-  const editable = currentMode !== 'view';
-  const description = nameEl.dataset.description || '';
-  if (document.activeElement === nameEl || (aboutEl && aboutEl.contains(document.activeElement))) {
-    document.activeElement.blur();             // a mode switch mid-edit: close it
-  }
-  if (aboutEl) {
-    aboutEl.hidden = true;
-    aboutEl.classList.toggle('is-readonly', !editable);
-    aboutText.readOnly = !editable;
-  }
-  if (editable) {
-    nameEl.setAttribute('contenteditable', 'plaintext-only');
-    nameEl.setAttribute('tabindex', '0');
-    nameEl.title = 'Click to rename or describe';
-  } else {
-    nameEl.removeAttribute('contenteditable');
-    // Focusable only when a click has something to show.
-    if (description) nameEl.setAttribute('tabindex', '0');
-    else nameEl.removeAttribute('tabindex');
-    nameEl.title = description ? 'Click for the description' : '';
-  }
+  if (!headEl) return;
+  closeCard(true);                               // a mode switch mid-edit keeps it
+  const view = readOnlyTitle();
+  const desc = nameEl.dataset.description || '';
+  const inert = view && !desc;
+  aboutEl.classList.toggle('is-readonly', view);
+  aboutName.readOnly = aboutText.readOnly = view;
+  headEl.classList.toggle('is-inert', inert);
+  if (inert) headEl.removeAttribute('tabindex'); else headEl.setAttribute('tabindex', '0');
+  headEl.setAttribute('aria-label', view ? 'Dashboard description' : 'Rename or describe the dashboard');
 }
 function syncNameFromYaml() {
-  if (nameEl && document.activeElement !== nameEl) nameEl.textContent = yamlName(codeEl.value);
+  if (nameEl && !before) nameEl.textContent = yamlName(codeEl.value);
 }
 
 // A manual YAML edit greys out the (now stale) preview and reveals the refresh
@@ -196,7 +292,7 @@ async function doSave() {
       body: new URLSearchParams({yaml_text: codeEl.value}),
     });
     const data = await res.json();
-    if (data.ok) { savedYaml = codeEl.value; saveBtn.textContent = 'Saved \u2713'; }
+    if (data.ok) { savedYaml = codeEl.value; keepDraft(); saveBtn.textContent = 'Saved \u2713'; }
     else { saveBtn.textContent = 'Save failed'; console.warn('Save failed:', data.error || ''); }
   } catch (e) { saveBtn.textContent = 'Save failed'; }
   finally {
@@ -213,29 +309,6 @@ if (saveBtn) {
   // Guard against losing unsaved edits by navigating away (logo / ☰ / reload).
   window.addEventListener('beforeunload', function(e) {
     if (!saveBtn.hidden) { e.preventDefault(); e.returnValue = ''; }
-  });
-}
-
-if (nameEl) {
-  nameEl.setAttribute('spellcheck', 'false');
-  // Editable or not is setMode's call (via syncTitleEditable): it runs at
-  // startup, after `currentMode` exists — calling it here would be too early.
-  nameEl.addEventListener('keydown', function(e) {
-    if (aboutText && aboutText.readOnly) {          // view mode: reading only
-      if (e.key === 'Escape') nameEl.blur();
-      return;
-    }
-    // Enter commits the name and moves on to the description below it.
-    if (e.key === 'Enter') { e.preventDefault(); if (aboutText) aboutText.focus(); else nameEl.blur(); }
-    else if (e.key === 'Escape') { e.preventDefault(); nameEl.textContent = yamlName(codeEl.value); nameEl.blur(); }
-  });
-  nameEl.addEventListener('focus', openAbout);
-  nameEl.addEventListener('blur', function() {
-    const nm = nameEl.textContent.trim();
-    if (!nm || nm === yamlName(codeEl.value)) { nameEl.textContent = yamlName(codeEl.value); return; }
-    codeEl.value = setYamlName(codeEl.value, nm);   // rewrite the YAML `name:` key
-    nameEl.textContent = nm;
-    updateSaveState();   // renaming is an unsaved change (but not a preview change)
   });
 }
 
@@ -354,9 +427,13 @@ const layoutEl = document.getElementById('layout');
 // The dashboard itself is full width in every mode; a panel floats over it
 // rather than halving it. Mode is a class on `.layout`, so the CSS can hide the
 // editing affordances without the JS touching each one.
-const MODES = { view: null, edit: null, code: 'ff-yaml', chat: 'ff-chat', docs: 'ff-docs', calcs: 'ff-calcs' };
+// `diff` has no side panel: comparing two YAMLs wants the whole width, so
+// diff-view.js shows its own full-width view while the mode is on.
+const MODES = { view: null, edit: null, code: 'ff-yaml', diff: null, chat: 'ff-chat', docs: 'ff-docs', calcs: 'ff-calcs' };
 const modeSwitch = document.getElementById('ff-modes');
 let currentMode = 'view';
+
+const modeHooks = [];
 
 function setMode(mode) {
   if (!(mode in MODES)) return;
@@ -379,6 +456,9 @@ function setMode(mode) {
   syncTitleEditable();
   if (mode === 'calcs') loadCalcs();
   if (mode === 'code') codeEl.focus();
+  // Other modules (the compare view, the code editor's line links) follow the
+  // mode through ffEditor.onModeChange.
+  for (const hook of modeHooks) hook(mode);
   if (mode === 'chat') {
     const t = document.getElementById('chat-text');
     if (t) t.focus();

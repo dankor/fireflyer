@@ -16,6 +16,10 @@
   --yaml-comment: #6e7781;
   --yaml-punct: #57606a;
   --yaml-meta: #bf3989;
+  --diff-add-line: #e6ffec;
+  --diff-add-word: #abf2bc;
+  --diff-del-line: #ffebe9;
+  --diff-del-word: #ffc1bc;
 }
 /* Editor chrome dark palette. The topbar toggle sets `data-ff-theme` on
    <html>; that same attribute also themes the dashboard preview and every
@@ -39,6 +43,10 @@
     --yaml-comment: #8b949e;
     --yaml-punct: #9aa5b4;
     --yaml-meta: #f47067;
+    --diff-add-line: rgba(46, 160, 67, 0.15);
+    --diff-add-word: rgba(46, 160, 67, 0.4);
+    --diff-del-line: rgba(248, 81, 73, 0.15);
+    --diff-del-word: rgba(248, 81, 73, 0.4);
   }
 }
 :root[data-ff-theme="dark"] {
@@ -58,6 +66,10 @@
   --yaml-comment: #8b949e;
   --yaml-punct: #9aa5b4;
   --yaml-meta: #f47067;
+  --diff-add-line: rgba(46, 160, 67, 0.15);
+  --diff-add-word: rgba(46, 160, 67, 0.4);
+  --diff-del-line: rgba(248, 81, 73, 0.15);
+  --diff-del-word: rgba(248, 81, 73, 0.4);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%;
@@ -69,38 +81,42 @@ html, body { margin: 0; padding: 0; height: 100%;
   padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border);
 }
 .topbar-left, .topbar-right { display: flex; align-items: center; gap: 14px; }
-/* The dashboard's name and its ⓘ: one item, the icon right beside the name
-   (whose own padding, for its hover background, is the space between them). */
-.ff-dash-title { position: relative; display: inline-flex; align-items: center; min-width: 0; }
-/* The description box that opens under the name while renaming. */
+/* The dashboard's name with its description's first line under it: one
+   button, opening the card below to edit both (or, in view mode, read them). */
+.ff-dash-title { position: relative; display: inline-flex; min-width: 0; }
+.topbar .ff-dash-head { display: inline-flex; flex-direction: column; justify-content: center;
+  min-width: 0; max-width: 360px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  outline: none; }
+.topbar .ff-dash-head:hover, .topbar .ff-dash-head.is-open { background: var(--bg); }
+.topbar .ff-dash-head:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+/* View mode with nothing to read: plain text, no button. */
+.topbar .ff-dash-head.is-inert { cursor: default; background: none; }
+.topbar .ff-dash-name { font-size: 14px; font-weight: 600; line-height: 1.25; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar .ff-dash-sub { font-size: 11px; line-height: 1.25; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar .ff-dash-sub[hidden] { display: none; }
+/* The card: a name field over a description field. */
 .ff-dash-about { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
-  width: 340px; padding: 8px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+  display: flex; flex-direction: column; gap: 6px;
+  width: 360px; padding: 8px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 .ff-dash-about[hidden] { display: none; }
-.ff-dash-about textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical;
-  min-height: 56px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 4px;
-  background: var(--bg); color: var(--text); font: inherit; font-size: 13px; line-height: 1.4;
-  outline: 0; }
-.ff-dash-about textarea:focus { border-color: var(--accent); }
-/* Read-only (view mode): the description as text, sized to it, not a field. */
-.ff-dash-about.is-readonly textarea { border: 0; background: none; padding: 0; min-height: 0;
-  resize: none; cursor: default; field-sizing: content; }
+.ff-dash-about input, .ff-dash-about textarea { display: block; width: 100%; box-sizing: border-box;
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: var(--text); font: inherit; outline: 0; }
+.ff-dash-about input { font-size: 14px; font-weight: 600; }
+.ff-dash-about textarea { resize: vertical; min-height: 64px; font-size: 13px; line-height: 1.4; }
+.ff-dash-about input:focus, .ff-dash-about textarea:focus { border-color: var(--accent); }
+/* Read-only (view mode): the description as text, not a field — the name is
+   already right above it. */
+.ff-dash-about.is-readonly { padding: 10px 12px; }
+.ff-dash-about.is-readonly input { display: none; }
+.ff-dash-about.is-readonly input, .ff-dash-about.is-readonly textarea { border: 0; background: none;
+  padding: 0; min-height: 0; resize: none; cursor: default; }
+.ff-dash-about.is-readonly textarea { field-sizing: content; color: var(--text); }
 /* Dot setting the nav group off from the dashboard name (paths mode). */
 .topbar .ff-sep { color: var(--muted); }
-/* Dashboard title in the left group, after the back button.
-   Click-to-rename: editable in place; capped width with ellipsis so a long
-   name doesn't push the right group (grows to full text while focused). */
-.topbar .ff-dash-name { font-size: 14px; font-weight: 600; color: var(--text);
-  white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis;
-  padding: 3px 8px; border-radius: 4px; cursor: text; outline: none; }
-/* Only an editable name (outside view mode) invites a click. */
-.topbar .ff-dash-name:not([contenteditable]) { cursor: default; }
-/* View mode: a name with a description opens it, read-only, on click. */
-.topbar .ff-dash-name[tabindex]:not([contenteditable]) { cursor: pointer; }
-.topbar .ff-dash-name[tabindex]:not([contenteditable]):hover { background: var(--bg); }
-.topbar .ff-dash-name[contenteditable]:hover { background: var(--bg); }
-.topbar .ff-dash-name:focus { background: var(--bg); overflow: visible; max-width: none;
-  box-shadow: 0 0 0 2px var(--accent); }
 /* 3-segment icon theme switch: Auto (A) / Light (sun) / Dark (moon). */
 .topbar .ff-theme { display: inline-flex; border: 1px solid var(--border);
   border-radius: 6px; overflow: hidden; }
@@ -246,8 +262,43 @@ html, body { margin: 0; padding: 0; height: 100%;
 }
 /* The YAML pane's code editor (yaml-editor.js) fills it and scrolls itself; the
    textarea it mirrors stays underneath, hidden, as the one source of truth. */
-#ff-yaml .pane-body { display: flex; flex-direction: column; overflow: hidden; }
+/* isolation: CodeMirror stacks its panels (the key chips, search) at z-index
+   300; kept inside the code panel, so the topbar's popovers (the dashboard's
+   description, the profile menu) still open over them. */
+#ff-yaml .pane-body { display: flex; flex-direction: column; overflow: hidden; isolation: isolate; }
 #ff-yaml .ff-yaml-editor { flex: 1 1 auto; min-height: 0; }
+/* An icon button in the topbar (compare versions). */
+.ff-diff { position: fixed; top: 44px; left: 0; right: 0; bottom: 0; z-index: 40;
+  display: flex; flex-direction: column; background: var(--panel); }
+.ff-diff[hidden] { display: none; }
+.ff-diff-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border); background: var(--bg); }
+.ff-diff-pick { flex: 0 1 340px; min-width: 0; padding: 5px 8px; font: inherit; font-size: 12.5px;
+  color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
+.ff-diff-icon { display: inline-flex; padding: 5px; border: 0; border-radius: 4px;
+  background: none; color: var(--muted); cursor: pointer; }
+.ff-diff-icon svg { width: 15px; height: 15px; }
+.ff-diff-icon:hover { color: var(--text); background: var(--panel); }
+#ff-diff-close { margin-left: auto; }
+.ff-diff-stats { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.ff-diff-stats:not(.is-same) { color: var(--text); }
+.ff-diff-restore { padding: 5px 10px; font: inherit; font-size: 12.5px; border-radius: 4px;
+  border: 1px solid var(--accent); background: none; color: var(--accent); cursor: pointer; }
+.ff-diff-restore:hover { background: var(--accent); color: #fff; }
+.ff-diff-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.ff-diff-body .cm-mergeView { height: 100%; overflow: auto; }
+.ff-diff-body .cm-mergeViewEditor + .cm-mergeViewEditor { border-left: 1px solid var(--border); }
+/* Removed (left) red, added (right) green — the whole line soft, the changed
+   words stronger. From the theme, so both read in light and dark. */
+.ff-diff-body .cm-merge-a .cm-changedLine, .ff-diff-body .cm-deletedChunk { background: var(--diff-del-line); }
+.ff-diff-body .cm-merge-b .cm-changedLine { background: var(--diff-add-line); }
+.ff-diff-body .cm-merge-a .cm-changedText { background: var(--diff-del-word); text-decoration: none; }
+.ff-diff-body .cm-merge-b .cm-changedText { background: var(--diff-add-word); text-decoration: none; }
+.ff-diff-body .cm-changeGutter { width: 3px; padding: 0; }
+.ff-diff-body .cm-merge-a .cm-changedLineGutter { background: var(--error); }
+.ff-diff-body .cm-merge-b .cm-changedLineGutter { background: #2ea043; }
+.ff-diff-body .cm-collapsedLines { color: var(--muted); background: var(--bg);
+  font-size: 12px; padding: 4px 12px; cursor: pointer; }
 #output { padding: 16px; }
 /* The output pane scrolls vertically only. Filter-indicator tooltips escape
    their cells (cells are overflow:visible) and, while hidden, still reserve

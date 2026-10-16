@@ -576,3 +576,53 @@ def test_the_yaml_editor_asks_for_problems_and_completions_at_once(client):
     assert "'bogus' isn't a key a bar chart takes" in problem["message"]
     assert data["schema"]["datasets"]["orders"][:2] == ["id", "day"]
     assert data["schema"]["calcs"]["orders"] == ["n"]
+
+
+# --- version history -----------------------------------------------------------
+
+
+def test_the_versions_routes_list_and_fetch(client):
+    from fireflyer.web import app as app_mod
+    from fireflyer.web.portal import SqliteStore
+
+    store = SqliteStore(":memory:")
+    id = store.create("name: A\ncharts: {}\nlayout: []\n", "dana")
+    store.save(id, "name: B\ncharts: {}\nlayout: []\n", author="sam")
+    app_mod.app.state.store, saved = store, app_mod.app.state.store
+    try:
+        listed = client.get(f"/d/{id}/versions").json()["versions"]
+        assert [(v["version"], v["author"]) for v in listed] == [(2, "sam"), (1, "dana")]
+        assert isinstance(listed[0]["created_at"], int)
+        one = client.get(f"/d/{id}/versions/1").json()
+        assert one["yaml"].startswith("name: A") and one["author"] == "dana"
+        assert client.get(f"/d/{id}/versions/9").status_code == 404
+        assert client.get("/d/nope/versions").status_code == 404
+        # The editor page names its dashboard, for the history and its draft.
+        assert f'<body data-dash-id="{id}">' in client.get(f"/d/{id}").text
+    finally:
+        app_mod.app.state.store = saved
+
+
+def test_saving_records_who_saved(client, monkeypatch):
+    from fireflyer.web import app as app_mod
+    from fireflyer.web.portal import SqliteStore
+
+    store = SqliteStore(":memory:")
+    id = store.create("name: A\ncharts: {}\nlayout: []\n", "dana")
+    monkeypatch.setattr(app_mod, "_current_author", lambda request: "sam")
+    app_mod.app.state.store, saved = store, app_mod.app.state.store
+    try:
+        assert client.post(f"/d/{id}/save", data={"yaml_text": "name: B\ncharts: {}\nlayout: []\n"}).json()["ok"]
+        assert store.versions(id)[0].author == "sam"
+    finally:
+        app_mod.app.state.store = saved
+
+
+def test_the_title_is_one_button_opening_a_name_and_description_card(client):
+    page = client.get("/").text
+    head = page[page.index('id="ff-dash-head"') - 40 : page.index('id="ff-dash-about"')]
+    assert 'role="button"' in head and 'id="ff-dash-sub"' in head
+    assert "contenteditable" not in page[page.index('class="ff-dash-title"') : page.index("</header>")]
+    card = page[page.index('id="ff-dash-about"') :]
+    card = card[: card.index("</span>")]
+    assert 'id="ff-dash-name-input"' in card and 'id="ff-dash-about-text"' in card

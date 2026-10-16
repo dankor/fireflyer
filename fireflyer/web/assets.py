@@ -20,6 +20,12 @@ def _url(name: str) -> str:
     return f"/static/{name}?v={version}"
 
 
+def url(name: str) -> str:
+    """A static file's versioned URL — for an import-map entry, which a module
+    imports by name, so the version can't ride on a <script> tag."""
+    return _url(name)
+
+
 def stylesheets(*names: str) -> str:
     """`<link>` tags for `names`, in order — later files win the cascade."""
     return "\n".join(f'<link rel="stylesheet" href="{_url(n)}">' for n in names)

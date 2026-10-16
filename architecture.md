@@ -967,7 +967,11 @@ New routes, all gated behind the portal flag and addressing dashboards by
 * `GET /d/{id}` — the normal editor page, seeded with that dashboard's stored
   YAML and given a **Save** button (and a link back to the gallery).
 * `POST /d/{id}/save` — validate and persist the edited YAML.
-* `POST /d/{id}/delete` — remove it.
+* `POST /d/{id}/delete` — remove it (and its version history).
+* `GET /d/{id}/versions` — the dashboard's saved versions, newest first
+  (`version`, `created_at`, `author`; no YAML); `GET /d/{id}/versions/{n}` —
+  one version with its YAML. They feed the editor's compare view (see
+  **Version history**).
 
 ## Storage model
 
@@ -1002,6 +1006,50 @@ the core install and `pip install -e ".[test]"` never require a database. Store
 logic and the gallery HTML are pure functions in `portal.py` (not `app.py`), so
 they unit-test without the web stack — the tests use in-memory sqlite and never
 touch a live database, the same rule the AI-assistant tests follow.
+
+## Version history
+
+Every save is kept as a **version**: an integer counting up from 1 per
+dashboard, a **unix timestamp** (`created_at`, seconds — the browser shows it in
+the viewer's local time), the **author** who saved it (empty in local mode,
+which has no login — the UI then shows no name), and the full YAML. Versions are
+whole YAML snapshots, never diffs: the blob stays opaque, and any two versions
+compare directly.
+
+* `create` records version 1; `save` records the next one — unless the YAML is
+  unchanged from the latest version, so a no-op save adds nothing.
+* A dashboard that predates history gets its stored YAML recorded as version 1
+  (with its last-updated time and original author) on its next save, so the
+  first change always has something to compare against.
+* Deleting a dashboard deletes its history.
+* Portal stores keep versions in a second table, `dashboard_versions
+  (dashboard_id, version, yaml, author, created_at)`, keyed by
+  `(dashboard_id, version)`. Local paths mode keeps them as JSON files — see
+  **Local paths mode**.
+
+**Compare.** The editor's **compare** mode (in the mode switch, right after
+code) shows a split, side-by-side
+diff of two YAMLs, as git tools show one (`web/static/diff-view.js`, built on
+the vendored `@codemirror/merge`): changed lines and words highlighted,
+unchanged stretches folded, a `+added −removed` count. Each side is picked from
+**Now** (the editor's text, unsaved edits included) or any saved version —
+`v{n} · {local time} · {author}`. It opens on the most useful pair: the latest
+save against unsaved edits, or else the previous version against now. The
+sides swap, and the left one can be **restored** into the editor as an ordinary
+unsaved edit (undoable; nothing is saved until you save). The single-dashboard
+editor, which has no store, compares *now* with the text the page opened with.
+The two sides ride in the address bar as `?compare=v3..v5` (*now* with nothing
+unsaved is named as the latest version), so a link or a reload opens the same
+comparison; with unsaved edits — which no link could show — or no history, the
+parameter is dropped, as it is on leaving compare.
+
+**Unsaved work lives in the browser.** Unsaved edits are kept in
+`localStorage` (keyed by the dashboard id, or the page path when there is none)
+on every change, together with the saved text they were based on, and dropped
+once saved. Reopening the dashboard after the window was closed restores them,
+with a short note — which points to compare when the saved dashboard has
+changed since (someone else saved, or a file changed on disk). This is the
+browser's own state, per viewer and per device; the server stores only saves.
 
 ## Datasets tab
 
@@ -1103,6 +1151,11 @@ gallery and editor as portal, minus auth. The active path rides in an `ff_path` 
 * A path's **datasets are an isolated blob store per path** at
   `<FIREFLYER_DATA>/<path>/` — Parquet you upload through the web, kept out of
   your dashboard files (they're not part of what you commit or later upload).
+* A path's **version history** sits beside its datasets, at
+  `<FIREFLYER_DATA>/<path>/history/<id>/<n>.json` (`{version, created_at,
+  author, yaml}`) — never in the dashboards folder, which may be your git repo.
+  A dashboard file that existed before history gets its on-disk text as
+  version 1, timed by the file's modification time, on its next save.
 * On first run a **`demo` path is seeded** so the gallery opens on a working
   example: the starter dashboard in `demo/dashboards/`, plus the `orders`
   dataset it references in the demo path's blob store. Seeding is best-effort and

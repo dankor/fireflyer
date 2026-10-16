@@ -77,3 +77,10 @@ datasets:
 def test_the_schema_survives_yaml_that_does_not_parse():
     s = yaml_assist.schema("name: X\ncharts:\n  a: {type: pie\n")
     assert s["charts"] and s["datasets"] == {} and s["calcs"] == {}
+
+
+def test_the_schema_carries_each_chart_types_icon():
+    """For the editor's list of charts, an icon before each name."""
+    s = yaml_assist.schema("name: X\ncharts: {}\nlayout: []\n")
+    assert set(s["icons"]) == set(s["charts"])
+    assert all(svg.startswith("<svg") for svg in s["icons"].values())
