@@ -31,7 +31,7 @@ Hard rules (from `CLAUDE.md` / `architecture.md`, non-negotiable):
 ```
 fireflyer/chart/<name>/
 ├── __init__.py    # from fireflyer.chart.<name>.chart import <Class>; __all__ = ["<Class>"]
-├── chart.py       # @dataclass <Class>: reads CSV, aggregates, renders _TEMPLATE
+├── chart.py       # @dataclass <Class>: reads its data via scan_chart(self), renders _TEMPLATE
 ├── chart.html     # Jinja2 (autoescaped). First line: <style>{{ css|safe }}</style>
 ├── chart.css      # namespaced under .fireflyer-<name>; includes the card chrome
 ├── icon.svg       # REQUIRED: 16×16 viewBox, fill="none" stroke="currentColor"
@@ -404,6 +404,11 @@ recognised at a glance, not to be literal: a pie is a wedge, a bar is bars.
 - [ ] Wired into `chart/__init__.py`, `dashboard.py` `CHART_TYPES`, `chat.py` DSL,
       `app.py` `DEFAULT_YAML` (with examples).
 - [ ] `PARAMS` declared (one per constructor field); sync-guard test passes.
+- [ ] Data read **only** via `scan_chart(self)` (never `scan()`/`scan_parquet`):
+      it hands the chart just the columns its `PARAMS` declare (each param's
+      `reads`), so every column the chart uses must come from a column/calc/
+      filter param. `tests/test_chart_columns.py` enforces it — and it's what
+      lets the dataset page say which dashboards use which column.
 - [ ] `spec.md` matches actual behavior (including its "Editor params" and "Theming" lines).
 - [ ] Colors are `var(--ff-*)` tokens (theme blocks copied into `chart.css`); no
       hardcoded colors in CSS or inline SVG; `to_html` takes `theme=` and the root

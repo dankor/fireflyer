@@ -608,6 +608,11 @@ body.fireflyer-resizing-col * {
   transition: background 0.1s ease, width 0.1s ease;
 }
 .ff-move-zone:hover { background: rgba(32, 167, 201, 0.55); width: 16px; }
+/* Tab move: a slot between tabs in the tab bar — drop to put the tab there. */
+.ff-tab-zone { align-self: stretch; width: 10px; margin: 4px 2px; flex: 0 0 auto;
+  background: rgba(32, 167, 201, 0.18); border: 2px solid var(--ff-accent); border-radius: 4px;
+  cursor: pointer; transition: background 0.1s ease, width 0.1s ease; }
+.ff-tab-zone:hover { background: rgba(32, 167, 201, 0.55); width: 16px; }
 /* Merge zone — a bar down the centre of a chart, running into the row below it
    (drop here to make the moved chart span this chart's rows + one below). Filled
    more solidly so it reads as "merge", distinct from the outline side zones. */

@@ -79,13 +79,25 @@ async function run() {
 // Two independent "dirty" notions: the preview is *stale* vs the last render
 // (drives Refresh), and the YAML is *unsaved* vs what's stored (drives Save).
 const saveBtn = document.getElementById('ff-save');       // portal only
+const discardBtn = document.getElementById('ff-discard'); // beside it
 const nameEl = document.getElementById('ff-dash-name');   // the title (see the card below)
 let savedYaml = codeEl.value;
 
 function markStale() { outPane.classList.add('stale'); }
 function updateSaveState() {
-  if (saveBtn) saveBtn.hidden = (codeEl.value === savedYaml);
+  const clean = codeEl.value === savedYaml;
+  if (saveBtn) saveBtn.hidden = clean;
+  if (discardBtn) discardBtn.hidden = clean;
   keepDraft();
+}
+
+// Discard: back to the last save — the YAML, the preview, the kept draft.
+if (discardBtn) {
+  discardBtn.addEventListener('click', () => {
+    if (!confirm('Discard your unsaved changes?')) return;
+    codeEl.value = savedYaml;
+    run();
+  });
 }
 
 // --- the unsaved draft, kept in the browser ---------------------------------
@@ -148,15 +160,42 @@ window.ffEditor = {
 };
 
 // Title <-> YAML `name:` key (two-way). Read/rewrite the top-level line.
+// A one-line YAML value and the comment after it: `"X" # note` -> ['"X"', ' # note'].
+// A comment starts at a `#` after whitespace, outside quotes (YAML's rule — so
+// `C#` stays a name).
+function splitComment(raw) {
+  const v = raw.trim();
+  let end;
+  if (v.startsWith('"')) {
+    for (end = 1; end < v.length && v[end] !== '"'; end++) if (v[end] === '\\') end++;
+    end++;
+  } else if (v.startsWith("'")) {
+    for (end = 1; end < v.length; end++) {
+      if (v[end] === "'" && v[end + 1] === "'") end++;
+      else if (v[end] === "'") break;
+    }
+    end++;
+  } else {
+    const m = v.match(/(^|\s)#/);
+    end = m ? m.index : v.length;
+  }
+  return [v.slice(0, end).trim(), v.slice(end)];
+}
 function yamlName(text) {
   const m = text.match(/^name:[ \t]*(.*)$/m);
   if (!m) return '';
-  let v = m[1].trim();
+  const v = splitComment(m[1])[0];
   if (v.startsWith('"')) { try { return JSON.parse(v); } catch (e) { return v.slice(1, -1); } }
   if (v.startsWith("'") && v.endsWith("'")) return v.slice(1, -1).replace(/''/g, "'");
   return v;
 }
-function setYamlName(text, name) { return text.replace(/^name:.*$/m, 'name: ' + JSON.stringify(name)); }
+// Rewrites the value, keeping a comment after it.
+function setYamlName(text, name) {
+  return text.replace(/^name:[ \t]*(.*)$/m, (_, raw) => {
+    const comment = splitComment(raw)[1];
+    return 'name: ' + JSON.stringify(name) + (comment ? ' ' + comment.trim() : '');
+  });
+}
 // The name and description: the topbar shows both (the description's first
 // line, small, under the name), and a click opens a card beneath them with a
 // field for each — the name rewrites `name:`, the description `description:`.
@@ -281,10 +320,14 @@ function syncNameFromYaml() {
 // config-edit) call run() directly, which refreshes Save on its own.
 codeEl.addEventListener('input', function() { markStale(); updateSaveState(); syncNameFromYaml(); });
 
+// Save is an icon: dimmed while saving, a check for a moment once saved (the
+// floppy comes back), and a failure said in the toast.
+const SAVED_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
 async function doSave() {
   if (!saveBtn || saveBtn.hidden) return;   // nothing to save
-  const label = saveBtn.textContent;
-  saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+  const icon = saveBtn.innerHTML;
+  saveBtn.disabled = true;
+  let saved = false;
   try {
     const res = await fetch(saveBtn.dataset.saveUrl, {
       method: 'POST',
@@ -292,12 +335,14 @@ async function doSave() {
       body: new URLSearchParams({yaml_text: codeEl.value}),
     });
     const data = await res.json();
-    if (data.ok) { savedYaml = codeEl.value; keepDraft(); saveBtn.textContent = 'Saved \u2713'; }
-    else { saveBtn.textContent = 'Save failed'; console.warn('Save failed:', data.error || ''); }
-  } catch (e) { saveBtn.textContent = 'Save failed'; }
+    saved = !!data.ok;
+    if (saved) { savedYaml = codeEl.value; keepDraft(); saveBtn.innerHTML = SAVED_ICON; }
+    else flash('Save failed: ' + (data.error || 'unknown error'), 8000);
+  } catch (e) { flash('Save failed: ' + e, 8000); }
   finally {
     saveBtn.disabled = false;
-    setTimeout(function() { saveBtn.textContent = label; updateSaveState(); }, 1200);
+    if (discardBtn && saved) discardBtn.hidden = true;
+    setTimeout(function() { saveBtn.innerHTML = icon; updateSaveState(); }, saved ? 1000 : 0);
   }
 }
 
@@ -674,7 +719,35 @@ const chatForm = document.getElementById('chat-form');
 const chatLog = document.getElementById('chat-log');
 const chatText = document.getElementById('chat-text');
 const chatSend = document.getElementById('chat-send');
+const chatNew = document.getElementById('chat-new');
 const chatHistory = [];  // plain {role, content} text turns sent each request
+
+// The conversation is kept in the browser per dashboard — like the unsaved
+// draft — with the time of its last message, for seven days: localStorage has
+// no expiry of its own, so an older one is dropped when the page opens.
+const CHAT_KEY = 'ff-chat:' + (dashId || location.pathname);
+const CHAT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+function keepChat() {
+  try {
+    if (!chatHistory.length) localStorage.removeItem(CHAT_KEY);
+    else localStorage.setItem(CHAT_KEY, JSON.stringify({at: Date.now(), turns: chatHistory}));
+  } catch (e) { /* storage off: the conversation lasts as long as the page */ }
+  if (chatNew) chatNew.hidden = !chatHistory.length;
+}
+function restoreChat() {
+  let kept = null;
+  try { kept = JSON.parse(localStorage.getItem(CHAT_KEY) || 'null'); } catch (e) { return; }
+  if (!kept || !Array.isArray(kept.turns)) return;
+  if (Date.now() - kept.at > CHAT_TTL_MS) {   // expired
+    try { localStorage.removeItem(CHAT_KEY); } catch (e) { /* nothing kept */ }
+    return;
+  }
+  for (const turn of kept.turns) {
+    chatHistory.push(turn);
+    addChatMsg(turn.role, turn.content);
+  }
+  if (chatNew) chatNew.hidden = !chatHistory.length;
+}
 
 function addChatMsg(role, text) {
   const el = document.createElement('div');
@@ -704,6 +777,7 @@ async function sendChat(message) {
     addChatMsg('assistant', data.reply);
     chatHistory.push({role: 'user', content: message});
     chatHistory.push({role: 'assistant', content: data.reply});
+    keepChat();
     if (data.yaml) {
       codeEl.value = data.yaml;
       run();  // reflect the assistant's change in the output panel
@@ -728,6 +802,14 @@ if (chatForm) {
   chatText.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatForm.requestSubmit(); }
   });
+  // A new conversation: the log, what's sent, what's kept — all cleared.
+  chatNew.addEventListener('click', () => {
+    chatHistory.length = 0;
+    chatLog.replaceChildren();
+    keepChat();
+    chatText.focus();
+  });
+  restoreChat();
 }
 
 // --- Edit-chart modal -------------------------------------------------------
@@ -1255,18 +1337,43 @@ function enterItemMove(index, itemEl) {
   positionMoveDiscard();
   moveDiscard.hidden = false;
 }
-// Tab move: like a header/separator move, its only drop targets are the
-// between-row strips (already lit by ff-move-mode). Dropping moves the tab's
-// key line — reordering it and reassigning the rows that fall under it.
+// Tab move, two kinds of drop:
+//   - a zone in the tab bar, between tabs: the tab swaps places there with all
+//     its rows (/chart/config/tab-reorder). Not the two zones beside the tab
+//     itself — dropping there changes nothing.
+//   - a between-row strip (already lit by ff-move-mode): only the tab's key
+//     line moves, reassigning the rows that then fall under it. Not for the
+//     first tab, whose rows would be left with no tab: its strips are hidden.
 function enterTabMove(index, wrapEl) {
   moveTabIndex = index;
   const dash = dashboardEl();
   if (dash) {
     dash.classList.add('ff-move-mode');
     if (wrapEl) wrapEl.classList.add('ff-move-source');
+    addTabZones(dash, parseInt(index, 10));
+    if (parseInt(index, 10) === 0) {
+      dash.querySelectorAll('.fireflyer-add-row').forEach(s => s.classList.add('ff-move-hidden-strip'));
+    }
   }
   positionMoveDiscard();
   moveDiscard.hidden = false;
+}
+function addTabZones(dash, index) {
+  const bar = dash.querySelector('.fireflyer-tabs');
+  if (!bar) return;
+  const wraps = [...bar.querySelectorAll('.fireflyer-tab-wrap')];
+  // Zone `to` sits before tab `to`; the last one after every tab.
+  wraps.forEach((wrap, to) => {
+    if (to !== index && to !== index + 1) wrap.before(tabZone(to));
+  });
+  if (wraps.length !== index + 1) bar.append(tabZone(wraps.length));
+}
+function tabZone(to) {
+  const zone = document.createElement('div');
+  zone.className = 'ff-tab-zone';
+  zone.dataset.to = to;
+  zone.title = 'Move the tab here';
+  return zone;
 }
 function exitMove() {
   const dash = dashboardEl();
@@ -1274,6 +1381,7 @@ function exitMove() {
     dash.classList.remove('ff-move-mode');
     dash.querySelectorAll('.ff-move-source').forEach(el => el.classList.remove('ff-move-source'));
     dash.querySelectorAll('.ff-move-hidden-strip').forEach(el => el.classList.remove('ff-move-hidden-strip'));
+    dash.querySelectorAll('.ff-tab-zone').forEach(el => el.remove());
     const overlay = dash.querySelector('.ff-move-overlay');
     if (overlay) overlay.remove();
   }
@@ -1302,7 +1410,12 @@ outEl.addEventListener('click', e => {
   // Tab move: only a between-row strip is valid — it repositions the tab's
   // boundary there (reordering the tab and reassigning the rows below it).
   if (moveTabIndex !== null) {
-    if (strip) {
+    const tabZoneEl = e.target.closest('.ff-tab-zone');
+    if (tabZoneEl) {
+      const index = moveTabIndex;
+      exitMove();
+      postMove('/chart/config/tab-reorder', { index, to: tabZoneEl.dataset.to });
+    } else if (strip) {
       const index = moveTabIndex;
       exitMove();
       postMove('/chart/config/tab-move', { index, before: strip.dataset.before });
@@ -1530,4 +1643,15 @@ modalBox.addEventListener('submit', async e => {
   codeEl.value = data.yaml;
   closeModal();
   run();
+});
+
+// The topbar's dropdowns (path, profile) are native <details>, which stay open
+// until their own summary is clicked again: close one on a click outside it or
+// on Esc, so opening anything else never leaves two open at once.
+const TOPBAR_MENUS = 'details.ff-pathdd[open], details.ff-profile[open]';
+document.addEventListener('mousedown', e => {
+  for (const d of document.querySelectorAll(TOPBAR_MENUS)) if (!d.contains(e.target)) d.open = false;
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') for (const d of document.querySelectorAll(TOPBAR_MENUS)) d.open = false;
 });

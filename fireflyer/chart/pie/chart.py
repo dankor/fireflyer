@@ -14,7 +14,7 @@ from fireflyer.params import (
     CalcParam,
     TextParam,
 )
-from fireflyer.scan import scan
+from fireflyer.scan import scan_chart
 
 # Fixed categorical palette for slices — theme-independent, so a value keeps
 # its color across light and dark.
@@ -289,7 +289,7 @@ class Pie:
         # Lazy scan: Polars pushes the filter predicates and the column
         # projection into the Parquet read, so only what the calc and the
         # category column need is scanned, not the whole file.
-        lf = scan(self.dataset, self._resolve, self._calcs)
+        lf = scan_chart(self)
         preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
         if preds:
             lf = lf.filter(*preds)
@@ -345,7 +345,9 @@ class Pie:
             has_selection=bool(active),
             crossfilter=crossfilter,
             show_total=self.total,
-            total_display=_compact(grand_total or 0),
+            # The calc's own `format` when it has one, as the slices use; the
+            # compact short form only when it says nothing.
+            total_display=calcs.fmt(key, grand_total or 0) if calc.format else _compact(grand_total or 0),
             total_raw=calcs_mod.exact_value(grand_total),
             calc_name=calc_name,
             calc_desc=calc.description,

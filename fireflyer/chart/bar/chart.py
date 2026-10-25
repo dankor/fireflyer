@@ -15,7 +15,7 @@ from fireflyer.params import (
     IntParam,
     TextParam,
 )
-from fireflyer.scan import scan
+from fireflyer.scan import scan_chart
 
 # Categorical palette mirroring the pie chart's so the same `y` value gets the
 # same color across charts on a dashboard. Per the per-chart-CSS policy each
@@ -602,7 +602,7 @@ class Bar:
         # Lazy scan with predicate + projection pushdown: only x, y (+ calc /
         # filter columns) are read from the Parquet. Each (x, y) segment is
         # sized by the calc; drop empty/undefined groups.
-        lf = scan(self.dataset, self._resolve, self._calcs)
+        lf = scan_chart(self)
         schema = lf.collect_schema()
         preds = filters_mod.predicates(self.filters, schema.names())
         if preds:

@@ -18,7 +18,7 @@ from fireflyer.params import (
     ListParam,
     TextParam,
 )
-from fireflyer.scan import scan
+from fireflyer.scan import scan_chart
 
 # Row cap. Without measures it bounds the rows *read* (pushed into the scan).
 # With measures it bounds the **groups returned** instead — the aggregation
@@ -151,9 +151,10 @@ class Table:
         DatasetParam("dataset", "Dataset"),
         TextParam("title", "Title"),
         TextParam("description", "Description"),
-        ListParam("columns", "Columns", placeholder="all columns"),
-        ListParam("measures", "Measures", placeholder="none — show raw rows"),
-        ListParam("sort", "Sort", placeholder="-revenue, +status"),
+        ListParam("columns", "Columns", reads="columns", placeholder="all columns"),
+        ListParam("measures", "Measures", reads="calcs", placeholder="none — show raw rows"),
+        # Sort names the table's own output columns — read already, or measures.
+        ListParam("sort", "Sort", reads="none", placeholder="-revenue, +status"),
         BoolParam("search", "Search box"),
         IntParam("pagination", "Rows per page", minimum=0),
         FilterListParam("filters", "Filters"),
@@ -262,7 +263,7 @@ class Table:
 
     def _rows(self) -> pl.DataFrame:
         """The table's rows — raw or grouped, then sorted."""
-        lf = scan(self.dataset, self._resolve, self._calcs)
+        lf = scan_chart(self)
         df = self._aggregate(lf) if self.measures else self._raw(lf)
         names, descending = _sort_order(self.sort)
         # Sort by the keys the frame actually has. An unknown name is skipped

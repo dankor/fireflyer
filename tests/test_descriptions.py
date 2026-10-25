@@ -5,6 +5,7 @@ the editor's toolbar and in the gallery lists; a chart's, and its dataset's, at
 the top of the chart's filter panel."""
 
 import json
+import html as html_mod
 import re
 from html import unescape
 
@@ -15,7 +16,7 @@ from fireflyer import inline_data
 from fireflyer.dashboard import DashboardError
 from fireflyer.datasets import Column, Dataset
 from fireflyer.web.portal import (
-    DashboardRow, info_tip, render_dataset_detail, render_datasets, render_gallery,
+    DashboardRow, name_cell, render_dataset_detail, render_datasets, render_gallery,
 )
 
 _YAML = """name: Sales
@@ -86,19 +87,22 @@ def test_no_description_means_no_empty_blocks():
 # --- gallery + editor ------------------------------------------------------------
 
 
-def test_info_tip():
-    assert info_tip("") == ""
-    tip = info_tip('Says "hi" <b>')
-    assert 'data-tip="Says &quot;hi&quot; &lt;b&gt;"' in tip and "<b>" not in tip
-    assert 'tabindex="0"' in tip                     # reachable by keyboard
-    # The editor's is always there, hidden until the YAML has a description.
-    assert " hidden>" in info_tip("", el_id="ff-dash-desc")
+def _sub(html):
+    m = re.search(r'<span class="sub" title="([^"]*)">', html)
+    return html_mod.unescape(m.group(1)) if m else None
+
+
+def test_a_name_cell_puts_the_description_under_the_name():
+    cell = name_cell("/d/x", "Sales", 'Says "hi" <b>')
+    assert cell.startswith('<a class="name" href="/d/x">Sales</a><span class="sub"')
+    assert 'title="Says &quot;hi&quot; &lt;b&gt;"' in cell and "<b>" not in cell
+    assert name_cell("/d/x", "Sales") == '<a class="name" href="/d/x">Sales</a>'
 
 
 def test_the_dashboards_list_shows_each_description():
     row = DashboardRow(id="x", name="Sales", author="dana", yaml=_YAML, updated_at="2026-10-13T10:00:00")
     assert row.description == "Weekly revenue, refreshed every Monday."
-    assert _tip(render_gallery([row])) == "Weekly revenue, refreshed every Monday."
+    assert _sub(render_gallery([row])) == "Weekly revenue, refreshed every Monday."
     broken = DashboardRow(id="y", name="B", author="", yaml="name: [", updated_at="2026-10-13T10:00:00")
     assert broken.description == ""
 
@@ -111,17 +115,17 @@ def _ds(description="Q3 orders"):
     )
 
 
-def test_the_datasets_list_shows_the_description_as_a_tip():
-    assert _tip(render_datasets([_ds()])) == "Q3 orders"
+def test_the_datasets_list_shows_the_description_under_the_name():
+    assert _sub(render_datasets([_ds()])) == "Q3 orders"
     # (The dataset's own page: see the in-place edit test below.)
-    assert _tip(render_datasets([_ds("")])) is None
+    assert _sub(render_datasets([_ds("")])) is None
 
 
 def test_the_dataset_page_edits_its_name_and_description_from_its_title():
     """No edit button in its toolbar: the title — the name with the
     description under it — is the control, opening a card with a field for
     each, as a dashboard's title is in the editor."""
-    page = render_dataset_detail(_ds(), ["id"], [[1]])
+    page = render_dataset_detail(_ds())
     topbar = page[page.index("<header"):page.index("</header>")]
     name = re.search(r'<span class="tname"[^>]*>', topbar).group(0)
     assert "contenteditable" not in topbar

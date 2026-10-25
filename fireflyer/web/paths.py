@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fireflyer.dashboard import Dashboard, DashboardError
-from fireflyer.web.portal import DashboardRow, DashboardVersion
+from fireflyer.web.portal import DashboardRow, DashboardVersion, Use, _uses_of
 
 
 def list_paths(base: str) -> list[str]:
@@ -55,11 +55,13 @@ def _mtime(path: Path) -> str:
 
 class PathDashboardStore:
     """Dashboards as `<root>/dashboards/*.yaml`, keyed by filename stem; their
-    versions under `history` (a folder; None keeps no history)."""
+    versions under `history` (a folder; None keeps no history), and what they
+    read in `index` (a JSON file; None works it out on every read)."""
 
-    def __init__(self, root: str, history: str | None = None):
+    def __init__(self, root: str, history: str | None = None, index: str | None = None):
         self._dir = Path(root) / "dashboards"
         self._history = Path(history) if history else None
+        self._index_file = Path(index) if index else None
 
     def _path(self, stem: str) -> Path:
         # Stems are filenames only — reject anything with path separators.
@@ -119,6 +121,44 @@ class PathDashboardStore:
         folder = self._versions_dir(stem)
         if folder and folder.exists():
             shutil.rmtree(folder)
+
+    # --- what each dashboard reads ----------------------------------------------
+
+    def uses(self) -> list[Use]:
+        """What every dashboard reads (`Dashboard.uses`), from the index file.
+        The files are yours and may change outside the app — an edit, a `git
+        pull` — so each entry carries its file's modification time, and a
+        dashboard whose file changed (or is new) is indexed again; a deleted
+        one drops out."""
+        kept = self._load_index()
+        fresh, changed = {}, False
+        for path in sorted(self._dir.glob("*.yaml")) if self._dir.is_dir() else []:
+            mtime = path.stat().st_mtime
+            entry = kept.get(path.stem)
+            if not entry or entry.get("mtime") != mtime:
+                text = path.read_text()
+                entry = {"mtime": mtime, "name": self._row(path).name, "uses": _uses_of(text)}
+                changed = True
+            fresh[path.stem] = entry
+        if changed or set(fresh) != set(kept):
+            self._save_index(fresh)
+        return [
+            Use(stem, entry["name"], dataset, column)
+            for stem, entry in sorted(fresh.items(), key=lambda e: e[1]["name"])
+            for dataset, column in entry["uses"]
+        ]
+
+    def _load_index(self) -> dict:
+        try:
+            return json.loads(self._index_file.read_text()) if self._index_file else {}
+        except (OSError, ValueError):
+            return {}                              # missing or damaged: rebuilt
+
+    def _save_index(self, index: dict) -> None:
+        if self._index_file is None:
+            return
+        self._index_file.parent.mkdir(parents=True, exist_ok=True)
+        self._index_file.write_text(json.dumps(index, ensure_ascii=False))
 
     # --- versions -------------------------------------------------------------
 

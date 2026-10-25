@@ -17,6 +17,7 @@ Every file is checked before anything is written: one that would still reach
 for the network (an absolute URL or a root-relative esm.sh path) fails the run.
 """
 
+import json
 import re
 import sys
 import urllib.request
@@ -107,14 +108,14 @@ def main() -> None:
                 sys.exit(f"{name} imports packages not vendored: {sorted(missing)}")
     VENDOR.mkdir(parents=True, exist_ok=True)
     for old in VENDOR.glob("*"):
-        if old.name not in files and old.name != "README.md":
+        if old.name not in files and old.name not in ("README.md", "importmap.json"):
             old.unlink()
     for name, source in files.items():
         (VENDOR / name).write_text(source)
-    print(f"{len(files)} files in {VENDOR}")
-    print("\nimport map for editor.html:")
-    for package, url in imports.items():
-        print(f'  "{package}": "{url}",')
+    # The import map every page with code views loads (web/assets.py
+    # `import_map`): one URL per package.
+    (VENDOR / "importmap.json").write_text(json.dumps(imports, indent=2) + "\n")
+    print(f"{len(files)} files and importmap.json in {VENDOR}")
 
 
 if __name__ == "__main__":

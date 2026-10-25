@@ -2,9 +2,14 @@
 :root { color-scheme: light; --bg:#f5f6f8; --panel:#fff; --border:#e0e0e0;
   --text:#20242b; --muted:#5e6975; --accent:#20a7c9; --accent-hover:#1a8aa6;
   --danger:#e04355; }
-@media (prefers-color-scheme: dark) { :root { color-scheme: dark;
+/* Dark: the OS's choice unless the theme switch says Light, or the switch's
+   Dark (`data-ff-theme` on <html>, set by gallery.js). */
+@media (prefers-color-scheme: dark) { :root:not([data-ff-theme="light"]) { color-scheme: dark;
   --bg:#0f1620; --panel:#1b2635; --border:#2c384a; --text:#e6e8ec;
   --muted:#a3adbd; --accent:#20a7c9; --accent-hover:#48c4e0; --danger:#e5646f; } }
+:root[data-ff-theme="dark"] { color-scheme: dark;
+  --bg:#0f1620; --panel:#1b2635; --border:#2c384a; --text:#e6e8ec;
+  --muted:#a3adbd; --accent:#20a7c9; --accent-hover:#48c4e0; --danger:#e5646f; }
 html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
   font-family:-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
 .topbar { height:54px; display:flex; align-items:center; padding:0 16px;
@@ -52,15 +57,7 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
   width:18px; height:18px; border-radius:4px; font-size:11px; font-weight:700;
   font-family:ui-monospace,Menlo,monospace; background:var(--bg);
   border:1px solid var(--border); color:var(--muted); margin-right:8px; }
-.preview-wrap { overflow:auto; border:1px solid var(--border); border-radius:8px; }
-table.preview { border-collapse:collapse; width:100%; font-size:13px; }
-.preview th, .preview td { padding:7px 12px; border-bottom:1px solid var(--border);
-  text-align:left; white-space:nowrap; }
-.preview thead th { color:var(--muted); font-weight:600; background:var(--panel);
-  position:sticky; top:0; }
-/* Rounded by its corner cells, not `overflow:hidden` on the table: that clipped
-   a name's ⓘ tooltip at the table's edge, on the last row. `separate` borders
-   are what let the cells take the radius. */
+/* Rounded by its corner cells (`separate` borders let them take the radius). */
 table.dash-table { width:100%; border-collapse:separate; border-spacing:0; background:var(--panel);
   border:1px solid var(--border); border-radius:8px; }
 .dash-table thead th:first-child { border-top-left-radius:8px; }
@@ -75,6 +72,9 @@ table.dash-table { width:100%; border-collapse:separate; border-spacing:0; backg
 .dash-table tbody tr:hover { background:var(--bg); }
 .dash-table a.name { color:var(--text); font-weight:600; text-decoration:none; }
 .dash-table a.name:hover { color:var(--accent); }
+/* The description under a name, as the topbar's title shows it. */
+.dash-table .sub { display:block; max-width:420px; margin-top:2px; font-size:12px; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dash-table td.muted { color:var(--muted); }
 td.actions { text-align:right; white-space:nowrap; }
 td.actions form { display:inline; margin:0; }
@@ -111,3 +111,180 @@ dialog textarea { resize:vertical; min-height:52px; }
   color:var(--text); padding:7px 13px; }
 .dialog-actions .ok { background:var(--accent); border:0; color:#fff;
   padding:7px 15px; font-weight:500; }
+
+/* --- a dataset's columns (static/dataset-columns.js) ----------------------- */
+/* The mode switch: view / edit / code / compare, as the dashboard editor's. */
+.ds-modes { display:inline-flex; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.ds-modes button { display:inline-flex; background:var(--panel); color:var(--muted); border:0;
+  border-left:1px solid var(--border); padding:5px 8px; cursor:pointer; }
+.ds-modes button:first-child { border-left:0; }
+.ds-modes button svg { width:15px; height:15px; }
+.ds-modes button:hover { color:var(--text); }
+.ds-modes button.active { background:var(--accent); color:#fff; }
+/* The version chip, opening every version grouped by upload. */
+.ds-history { position:relative; }
+.ds-history summary { list-style:none; cursor:pointer; font:12px ui-monospace, Menlo, monospace;
+  padding:2px 8px; border:1px solid var(--border); border-radius:999px; color:var(--muted); }
+.ds-history summary::-webkit-details-marker { display:none; }
+.ds-history summary:hover, .ds-history[open] summary { color:var(--text); border-color:var(--muted); }
+.ds-history-menu { position:absolute; top:calc(100% + 6px); left:0; z-index:60; min-width:380px;
+  max-height:60vh; overflow:auto; padding:4px; background:var(--panel); border:1px solid var(--border);
+  border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.18); }
+.ds-major { position:relative; }
+.ds-major + .ds-major { border-top:1px solid var(--border); margin-top:4px; padding-top:4px; }
+/* An upload's trash: its own strip on the right, centred on the group — the
+   group's rows stop short of it, so a row's hover never runs under it. */
+.ds-major-delete { position:absolute; top:50%; right:2px; transform:translateY(-50%); margin:0; z-index:1; }
+.ds-major + .ds-major .ds-major-delete { top:calc(50% + 2px); }
+.ds-major-delete .act { width:26px; height:26px; }
+.ds-major:has(.ds-major-delete) .ds-ver { width:calc(100% - 34px); }
+.ds-ver { display:flex; width:100%; gap:12px; align-items:baseline; padding:5px 8px; border:0;
+  border-radius:4px; background:none; color:var(--text); font:inherit; font-size:12.5px;
+  text-align:left; cursor:pointer; }
+.ds-ver:hover { background:color-mix(in srgb, var(--accent) 14%, transparent); }
+.ds-ver-label { font-family:ui-monospace, Menlo, monospace; min-width:3.5em; }
+/* In use: a check; building: the spinner. */
+.ds-mark { margin-left:auto; display:inline-flex; align-self:center; color:var(--accent); }
+.ds-mark svg { width:15px; height:15px; }
+/* Save and Discard: one segmented group, styled like the mode switch's resting
+   segments — a floppy disk, and before it a cross. Shown only while there
+   are unsaved changes (the group itself goes once both buttons are hidden). */
+.ff-savebar { display:none; }
+.ff-savebar:has(> button:not([hidden])) { display:inline-flex; border:1px solid var(--border);
+  border-radius:6px; overflow:hidden; }
+.ff-savebar button { display:inline-flex; align-items:center; padding:5px 8px; border:0;
+  border-left:1px solid var(--border); background:var(--panel); color:var(--muted); cursor:pointer; }
+.ff-savebar button:first-child, .ff-savebar button[hidden] + button { border-left:0; }
+.ff-savebar button[hidden] { display:none; }
+.ff-savebar button svg { width:16px; height:16px; display:block; }
+.ff-savebar button:hover { background:var(--bg); color:var(--text); }
+.ff-savebar button:disabled { opacity:.6; cursor:default; }
+/* One line while a version builds, or why the last one failed. */
+.ds-status { display:flex; align-items:center; gap:8px; margin-bottom:14px; padding:8px 12px;
+  border-radius:6px; font-size:13px; background:var(--panel); border:1px solid var(--border); }
+.ds-status[hidden] { display:none; }
+.ds-status.is-error { color:var(--danger); border-color:color-mix(in srgb, var(--danger) 45%, transparent); }
+.ds-spin { width:12px; height:12px; border:2px solid var(--border); border-top-color:var(--accent);
+  border-radius:50%; animation:ds-spin .8s linear infinite; }
+@keyframes ds-spin { to { transform:rotate(360deg); } }
+/* The columns panel. */
+.ds-columns { margin-bottom:18px; border:1px solid var(--border); border-radius:8px;
+  background:var(--panel); overflow:hidden; }
+table.ds-cols { border-collapse:collapse; width:100%; font-size:13px; }
+.ds-cols th { text-align:left; padding:7px 12px; color:var(--muted); font-weight:600; font-size:12px;
+  border-bottom:1px solid var(--border); }
+.ds-cols td { padding:5px 12px; border-bottom:1px solid var(--border); vertical-align:middle; }
+.ds-cols tr:last-child td { border-bottom:0; }
+.ds-cols .muted { color:var(--muted); }
+.ds-cols .mono, .ds-cols input.mono { font-family:ui-monospace, Menlo, monospace; font-size:12px; }
+.col-name { font-weight:500; }
+.col-from, .col-source { margin-left:8px; color:var(--muted); font-size:12px; }
+.col-source { margin-left:0; font-family:ui-monospace, Menlo, monospace; }
+.col-icon { display:inline-flex; }
+.ds-cols td input, .ds-cols td select { width:100%; box-sizing:border-box; padding:4px 7px;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font:inherit; }
+.ds-cols td input:focus, .ds-cols td select:focus { outline:0; border-color:var(--accent); }
+.ds-cols td input:disabled { opacity:.45; }
+.ds-cols td input { min-width:180px; }
+.ds-cols td select { min-width:110px; }
+.ds-code { height:min(60vh, 520px); }
+.ds-code .cm-editor { height:100%; }
+.ds-columns[data-mode="compare"] { display:flex; flex-direction:column; height:min(70vh, 640px); }
+.ds-columns .ff-diff-bar { border-bottom:1px solid var(--border); }
+.ds-toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:80;
+  max-width:min(640px, 90vw); padding:10px 14px; border-radius:8px; background:var(--text);
+  color:var(--bg); font-size:13px; box-shadow:0 8px 24px rgba(0,0,0,.25); }
+.ds-toast[hidden] { display:none; }
+.dash-table td.mono { font-family:ui-monospace, Menlo, monospace; font-size:12.5px; }
+/* One line: long labels shrink, each cutting its value with an ellipsis
+   (whole on hover); the cell takes only the width that's left (`max-width:0` keeps its
+   content from widening the table). */
+.ds-columns[data-mode="view"] .ds-cols td.ex { width:100%; max-width:0; }
+/* "Dashboards" keeps its links on one line, beside the examples. */
+.ds-columns[data-mode="view"] .ds-cols td:last-child .refs { flex-wrap:nowrap; }
+/* …which must never push a column's name under its icon. */
+.ds-columns[data-mode="view"] .ds-cols td:first-child { white-space:nowrap; }
+.col-examples { display:flex; flex-wrap:nowrap; gap:4px; overflow:hidden;
+  /* When they don't all fit, the line fades out instead of stopping dead. */
+  -webkit-mask-image:linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image:linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+/* Monospace, so `--n` (the value's length) sizes a label exactly: a short value
+   keeps its own width, a long one shrinks to 8 characters before the rest. */
+.col-example { cursor:pointer; flex:0 1 auto; min-width:calc(min(var(--n, 8), 8) * 1ch + 16px); max-width:14em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  padding:1px 7px; border:1px solid var(--border); border-radius:4px; background:var(--bg);
+  color:var(--muted); font:11.5px ui-monospace, Menlo, monospace; }
+/* What a list row is tied to — a dashboard's datasets, a dataset's
+   dashboards — as small links; a dataset that isn't uploaded, unlinked. */
+.refs { display:flex; flex-wrap:wrap; gap:4px; }
+.ref { padding:1px 8px; border:1px solid var(--border); border-radius:999px; font-size:12px;
+  color:var(--text); text-decoration:none; white-space:nowrap; max-width:16em; overflow:hidden;
+  text-overflow:ellipsis; }
+a.ref:hover { border-color:var(--accent); color:var(--accent); }
+.ref.is-missing { color:var(--muted); border-style:dashed; }
+.ds-cols th { white-space:nowrap; }
+/* Edit mode: drop a column (✕), add one (＋). */
+.col-drop, .col-add { border:1px solid var(--border); border-radius:4px; background:none;
+  color:var(--muted); cursor:pointer; font-size:12px; line-height:1; padding:5px 8px; }
+.col-drop:hover, .col-add:hover { color:var(--text); border-color:var(--muted); }
+.col-add-row { padding:8px 12px; border-top:1px solid var(--border); }
+/* The name as wide as its field, the formula everything else, the ✕ its own. */
+.ds-columns[data-mode="edit"] .ds-cols td:first-child { width:1%; white-space:nowrap; }
+.ds-columns[data-mode="edit"] .ds-cols td:first-child input { width:240px; min-width:0; margin-left:6px; }
+.ds-columns[data-mode="edit"] .ds-cols td:nth-child(2) { width:100%; }
+.ds-columns[data-mode="edit"] .ds-cols td:last-child { width:1%; }
+.ds-columns[data-mode="edit"] .col-icon { display:inline-flex; width:26px; }
+/* View mode: a formula stays on one line beside its column. */
+.ds-columns[data-mode="view"] .ds-cols td.mono { white-space:nowrap; }
+/* View mode's filters live in the header: a type button before "Column", a
+   search behind a lens after it, and "Dashboards" as the dashboard picker. */
+.ds-th { display:inline-flex; align-items:center; gap:6px; }
+.ds-th-btn { display:inline-flex; padding:2px; border:1px solid transparent; border-radius:5px;
+  background:none; color:var(--muted); cursor:pointer; }
+.ds-th-btn[hidden] { display:none; }
+.ds-th-btn .type-icon { margin-right:0; }
+.ds-th-btn:hover { border-color:var(--border); color:var(--text); }
+.ds-th-btn.active { border-color:var(--accent); color:var(--accent); }
+.ds-th-search { width:200px; padding:2px 7px; border:1px solid var(--accent); border-radius:4px;
+  background:var(--bg); color:var(--text); font:inherit; font-size:12px; font-weight:400; outline:0; }
+.ds-th-search[hidden] { display:none; }
+.ds-cols th { position:relative; }
+.ds-th-label { gap:5px; font:inherit; font-weight:600; font-size:12px; align-items:center; }
+/* A filter that's on: its count, small, in the corner. */
+.ds-th-count[data-count]:not([data-count=""])::after { content:attr(data-count); margin-left:3px;
+  font-size:10px; font-weight:700; line-height:1; }
+/* The checkbox list a filter opens. */
+.ds-check-menu { position:absolute; top:calc(100% - 4px); left:8px; z-index:30; min-width:160px;
+  max-height:280px; overflow:auto; padding:4px; background:var(--panel); border:1px solid var(--border);
+  border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.18); text-transform:none; letter-spacing:0; }
+.ds-cols th:last-child .ds-check-menu { left:auto; right:8px; }
+.ds-check-item { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:4px;
+  color:var(--text); font-size:13px; font-weight:400; white-space:nowrap; cursor:pointer; }
+.ds-check-item:hover { background:color-mix(in srgb, var(--accent) 14%, transparent); }
+.ds-check-item input { margin:0; accent-color:var(--accent); }
+.ds-check-icon { display:inline-flex; }
+.ds-check-icon .type-icon { margin-right:0; }
+/* Service columns: a crossed-out eye beside the name; in edit, a toggle before ✕. */
+.col-service { display:inline-flex; margin-left:6px; color:var(--muted); vertical-align:middle; }
+.col-service svg, .col-service-toggle svg { width:14px; height:14px; }
+.col-actions { white-space:nowrap; }
+.col-service-toggle { display:inline-flex; margin-right:4px; padding:4px 6px; border:1px solid var(--border);
+  border-radius:4px; background:none; color:var(--muted); cursor:pointer; vertical-align:middle; }
+.col-service-toggle:hover { color:var(--text); border-color:var(--muted); }
+.col-service-toggle.active { color:var(--accent); border-color:var(--accent); }
+/* A filter list's first row: uncheck it all — only while something's checked. */
+.ds-check-reset { display:flex; align-items:center; gap:8px; width:100%; padding:5px 8px; margin-bottom:2px;
+  border:0; border-bottom:1px solid var(--border); border-radius:4px 4px 0 0; background:none;
+  color:var(--muted); font:inherit; font-size:13px; font-weight:400; cursor:pointer; text-align:left; }
+.ds-check-reset[hidden] { display:none; }
+.ds-check-reset:hover { color:var(--accent); }
+.col-example:hover { color:var(--text); border-color:var(--muted); }
+/* An example's whole value, on a click: plain text to select and copy. */
+.ds-value-pop { position:absolute; z-index:70; max-width:min(520px, 80vw); padding:8px 10px;
+  background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:6px;
+  box-shadow:0 8px 24px rgba(0,0,0,.2); font:12.5px ui-monospace, Menlo, monospace;
+  white-space:pre-wrap; word-break:break-all; user-select:text; cursor:text;
+  display:flex; align-items:flex-start; gap:8px; }
+.ds-value-text { flex:1 1 auto; min-width:0; }
+.ds-value-copy { flex:0 0 auto; display:inline-flex; padding:2px; border:1px solid var(--border); border-radius:4px;
+  background:none; color:var(--muted); cursor:pointer; user-select:none; }
+.ds-value-copy:hover { color:var(--text); border-color:var(--muted); }

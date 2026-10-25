@@ -19,6 +19,7 @@ Every widget subclasses `Param` and implements three things:
 ```python
 class MyParam(Param):
     kind = "mykind"                    # data-attr hook for the editor JS, if needed
+    reads = "none"                     # REQUIRED: what the value reads (see below)
 
     def render(self, value, ctx) -> str:   # autoescaped HTML input, name == self.name
         return self._wrap(f'<input class="ff-input" name="{escape(self.name, quote=True)}" ...>')
@@ -40,6 +41,16 @@ class MyParam(Param):
   app, `FakeForm` in tests). Return the Python value the constructor expects.
 - `to_yaml` returning `None` or an empty list/dict makes the emitter **drop the
   key** (e.g. an unset nullable `IntParam` like the map's `zoom`).
+- **`reads` is required** — what the value reads from the chart's dataset, one of
+  `params.READS`: `"none"`, `"column"` (a column name), `"columns"` (a list of
+  them — empty, with no calcs, means every column), `"calc"` / `"calcs"` (calc
+  keys: the columns their formulas and filters read) or `"filters"`. The base
+  class leaves it unset on purpose. A chart is handed only the columns its
+  params declare (`scan.scan_chart` ← `params.columns_read`), and the dataset
+  page's per-column Dashboards are built from the same declarations — so a widget that reads
+  a column it doesn't declare breaks its chart rather than going unnoticed.
+  `ListParam` takes it as a required argument (`reads="columns"|"calcs"|"none"`).
+  `tests/test_chart_columns.py` checks every chart's params.
 
 Existing widgets to reuse before writing a new one: `TextParam`, `DatasetParam`,
 `ColumnParam`, `CalcParam` (dropdown of the dataset's calc keys),

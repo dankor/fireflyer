@@ -2,13 +2,14 @@ import json
 import os
 import pathlib
 import re
+import threading
 import traceback
 from html import escape
 
 from dotenv import load_dotenv
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-from fastapi import FastAPI, File, Form, Request, Response, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -19,7 +20,8 @@ from fireflyer import number_range
 from fireflyer import yaml_assist
 from fireflyer import filters as filters_mod
 from fireflyer import calcs_edit
-from fireflyer.datasets import DatasetError, DatasetStore
+from fireflyer import column_map
+from fireflyer.datasets import DatasetError, DatasetStore, SqlCatalog
 from fireflyer.params import parse_filters
 from fireflyer.storage import make_object_store
 from fireflyer.chart.map.chart import Map
@@ -30,6 +32,7 @@ from fireflyer.dashboard import (
     DashboardError,
     filter_add_body,
     grain_state_html,
+    rename_column_refs,
     rename_dataset_ref,
     set_grain_token,
 )
@@ -79,7 +82,12 @@ def _object_store_config() -> dict:
     return {"base": os.environ.get("FIREFLYER_DATA", "data/datasets")}
 
 
-app.state.datasets = DatasetStore(make_object_store(_object_store_config()))
+# Each dataset's YAML (details, versions, column mappings) lives in the portal's
+# database in portal mode, and as a file beside its data locally.
+app.state.datasets = DatasetStore(
+    make_object_store(_object_store_config()),
+    SqlCatalog(os.environ.get("DATABASE_URL") or "portal.db") if PORTAL_ENABLED else None,
+)
 
 
 
@@ -114,6 +122,7 @@ if CHAT_ENABLED:
     CHAT_PANEL = """
       <div class="ff-docs-body chat-log" id="chat-log"></div>
       <form class="chat-input" id="chat-form">
+        <button type="button" class="chat-new" id="chat-new" title="New conversation" aria-label="New conversation" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         <textarea id="chat-text" spellcheck="false" placeholder="Ask to add or change charts, add calcs, resize rows…"></textarea>
         <button type="submit" class="chat-send" id="chat-send">Send</button>
       </form>"""
@@ -159,24 +168,30 @@ def _dash_name_html(name: str, description: str = "") -> str:
     )
 
 
+# Discard (a red cross) and Save (a floppy disk), on the dashboard editor and a
+# dataset's page; Save shows a check for a moment once saved.
+_DISCARD_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>'
+_SAVE_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h11l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 3v5h7V3"/><rect x="7" y="13" width="10" height="7" rx="1"/></svg>'
+
+
 def _save_html(dash_id: str) -> str:
-    # Hidden until there are unsaved changes (toggled by updateSaveState()).
-    return f'<button class="run" id="ff-save" data-save-url="/d/{dash_id}/save" hidden>Save</button>'
+    # Both hidden until there are unsaved changes (toggled by updateSaveState()):
+    # Discard puts the last save back, Save keeps the changes.
+    # One segmented group, styled like the mode switch's resting segments.
+    return (
+        '<span class="ff-savebar" role="group" aria-label="Unsaved changes">'
+        '<button class="ff-discard" id="ff-discard" type="button" title="Discard unsaved changes"'
+        f' aria-label="Discard unsaved changes" hidden>{_DISCARD_ICON}</button>'
+        f'<button class="ff-save" id="ff-save" data-save-url="/d/{dash_id}/save" title="Save (⌘/Ctrl+S)"'
+        f' aria-label="Save" hidden>{_SAVE_ICON}</button>'
+        "</span>"
+    )
 
 
 # Icon-only theme switch. Inline SVG (stroke=currentColor so it inherits the
 # segment colour): "A" for auto, sun for light, moon for dark. No text labels —
 # `title`/`aria-label` carry the meaning.
 _ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{}</svg>'
-_THEME_ICONS = {
-    "auto": _ICON_SVG.format('<path d="M5 20 12 4l7 16M7.5 14h9"/>'),
-    "light": _ICON_SVG.format(
-        '<circle cx="12" cy="12" r="4"/>'
-        '<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4'
-        'M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
-    ),
-    "dark": _ICON_SVG.format('<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>'),
-}
 
 
 # The editor's mode switch: one segmented control where a row of separate
@@ -224,14 +239,8 @@ def _mode_switch() -> str:
     )
 
 
-def _theme_switch() -> str:
-    labels = {"auto": "Auto (follow OS)", "light": "Light", "dark": "Dark"}
-    buttons = "".join(
-        f'<button type="button" data-mode="{mode}" title="Theme: {labels[mode]}"'
-        f' aria-label="Theme: {labels[mode]}">{_THEME_ICONS[mode]}</button>'
-        for mode in ("auto", "light", "dark")
-    )
-    return f'<div class="ff-theme" id="theme-switch" role="group" aria-label="Theme">{buttons}</div>'
+# The Auto / Light / Dark switch, in every page's topbar (portal.theme_switch).
+_theme_switch = portal_mod.theme_switch
 
 
 # --- chart documentation (editor-only) --------------------------------------
@@ -330,7 +339,7 @@ def render_editor_page(
     page = (_DIR / "editor.html").read_text()
     # nav + profile are shared with the gallery, and come after the editor's own
     # rules — the order they were inlined in, so the cascade is unchanged.
-    styles = assets.favicons() + "\n" + assets.stylesheets("editor.css", "nav.css", "profile.css")
+    styles = assets.favicons() + "\n" + assets.stylesheets("editor.css", "code.css", "nav.css", "profile.css")
     return (
         page.replace("__FF_STYLES__", styles)
         .replace("__FF_SCRIPT__", assets.script("editor.js") + "\n" + assets.module("yaml-editor.js"))
@@ -338,7 +347,7 @@ def render_editor_page(
         # Which dashboard: its version history, and the key its unsaved draft
         # is kept under in the browser ("" for the plain single-dashboard editor).
         .replace("__FF_DASH_ID__", escape(dash_id, quote=True))
-        .replace("__FF_DIFF_VIEW__", assets.url("diff-view.js"))
+        .replace("__FF_IMPORTMAP__", assets.import_map("diff-view.js", "yaml-look.js"))
         .replace("__FF_NAV__", nav)
         .replace("__FF_MODES__", _mode_switch())
         .replace("__FF_DASH_NAME__", dash_name)
@@ -389,7 +398,8 @@ def _dash_store(request: Request):
     if not path:
         return None
     return paths_mod.PathDashboardStore(
-        f"{PATHS_BASE}/{path}", history=f"{_DATA_BASE}/{path}/history"
+        f"{PATHS_BASE}/{path}", history=f"{_DATA_BASE}/{path}/history",
+        index=f"{_DATA_BASE}/{path}/uses.json",
     )
 
 
@@ -419,13 +429,16 @@ def _page_title() -> str:
 
 
 def _gallery_kwargs(request: Request) -> dict:
-    """Path-picker args for the gallery/datasets pages — the path list + active
-    path in paths mode, nothing in portal or plain-local mode."""
+    """Mode args for the gallery/datasets pages: the path list + active path in
+    paths mode, and whether to show an Author column — only with a login, since
+    without one (local mode) there's nobody to name."""
+    authors = {"authors": app.state.authenticator is not None}
     if not _paths_mode():
-        return {}
+        return authors
     return {
         "paths": paths_mod.list_paths(PATHS_BASE),
         "active_path": _active_path(request),
+        **authors,
     }
 
 
@@ -469,12 +482,14 @@ def index(request: Request) -> str:
     # (with the path picker). Plain local: the single-dashboard editor.
     if app.state.store is not None:
         return portal_mod.render_gallery(
-            app.state.store.list(), PORTAL_TITLE, _user_menu(request)
+            app.state.store.list(), PORTAL_TITLE, _user_menu(request),
+            datasets=_dataset_names(request), uses=_datasets_of(request),
         )
     if _paths_mode():
         store = _dash_store(request)
         return portal_mod.render_gallery(
             store.list() if store else [], _page_title(), "",
+            datasets=_dataset_names(request), uses=_datasets_of(request),
             **_gallery_kwargs(request),
         )
     # Plain local mode: no gallery to go back to, no save/profile; just the
@@ -538,13 +553,8 @@ def portal_open(dash_id: str, request: Request) -> HTMLResponse:
     row = _dash_store(request).get(dash_id)
     if row is None:
         return HTMLResponse("Dashboard not found", status_code=404)
-    # Portal (auth on): theme lives centered inside the profile menu, topbar slot
-    # empty. Paths mode (no auth): no profile, so theme stands alone in the topbar.
-    if app.state.authenticator is not None:
-        theme_in_menu = f'<div class="ff-profile-theme">{_theme_switch()}</div>'
-        user_menu, theme = _user_menu(request, extra=theme_in_menu), ""
-    else:
-        user_menu, theme = "", _theme_switch()
+    # The theme switch sits in the topbar always, beside the profile (portal).
+    user_menu, theme = _user_menu(request), _theme_switch()
     # A selected item (like the dataset detail): back button + the editable name;
     # no Dashboards|Datasets switch (that's for the lists). In local paths mode the
     # path dropdown rides on the right.
@@ -608,50 +618,134 @@ async def portal_delete(dash_id: str, request: Request) -> RedirectResponse:
 # --- datasets (portal gallery tab) ------------------------------------------
 
 
-def _dashboards_using(request: Request, name: str) -> list[tuple[str, str]]:
-    """(id, name) of stored dashboards that reference dataset `name`. Empty when
-    there's no dashboard store (plain local mode)."""
+def _uses(request: Request) -> list:
+    """What every dashboard reads — the store's index (`Use` rows, written on
+    save), so the overviews below are lookups, not a parse of every dashboard.
+    Empty with no dashboard store (plain local mode)."""
     store = _dash_store(request)
-    if store is None:
-        return []
-    return [
-        (row.id, row.name)
-        for row in store.list()
-        if name in Dashboard.dataset_names(row.yaml)
-    ]
+    return store.uses() if store is not None else []
+
+
+def _dashboards_using(request: Request, name: str) -> list[tuple[str, str]]:
+    """(id, name) of stored dashboards that reference dataset `name`."""
+    return list(dict.fromkeys(
+        (u.dashboard_id, u.dashboard_name) for u in _uses(request) if u.dataset == name
+    ))
+
+
+def _columns_used_in(request: Request, name: str, columns: list[str]) -> dict[str, list[tuple[str, str]]]:
+    """Each column of dataset `name` -> the (id, name) of every dashboard whose
+    charts read it (a raw table, `*`, reads them all)."""
+    out: dict[str, list[tuple[str, str]]] = {}
+    for u in _uses(request):
+        if u.dataset != name or not u.column:
+            continue
+        for column in columns if u.column == "*" else [u.column]:
+            if (u.dashboard_id, u.dashboard_name) not in out.setdefault(column, []):
+                out[column].append((u.dashboard_id, u.dashboard_name))
+    return out
+
+
+def _dataset_names(request: Request) -> set[str]:
+    """The uploaded datasets' names, for the dashboards list's links."""
+    return {d.name for d in _dataset_store(request).list()}
+
+
+def _datasets_of(request: Request) -> dict[str, list[str]]:
+    """Dashboard id -> the datasets it reads, for the dashboards list."""
+    out: dict[str, list[str]] = {}
+    for u in _uses(request):
+        if not u.column:
+            out.setdefault(u.dashboard_id, []).append(u.dataset)
+    return out
+
+
+def _dataset_users(request: Request) -> dict[str, list[tuple[str, str]]] | None:
+    """Dataset name -> (id, name) of each dashboard reading it, for the datasets
+    list. None with no dashboard store (plain local mode)."""
+    if _dash_store(request) is None:
+        return None
+    users: dict[str, list[tuple[str, str]]] = {}
+    for u in _uses(request):
+        if not u.column:
+            users.setdefault(u.dataset, []).append((u.dashboard_id, u.dashboard_name))
+    return users
 
 
 @app.get("/datasets", response_class=HTMLResponse)
 def datasets_gallery(request: Request) -> str:
     return portal_mod.render_datasets(
         _dataset_store(request).list(), _page_title(), _user_menu(request),
-        **_gallery_kwargs(request),
+        used_by=_dataset_users(request), **_gallery_kwargs(request),
     )
+
+
+# --- dataset builds --------------------------------------------------------------
+# An upload or a new column mapping is a new version, computed in the
+# background (`DatasetStore.build`): the request returns at once, the page shows
+# "building", and charts keep reading the previous file until it's done. One
+# build at a time per process; a version left waiting by a restart is picked up
+# when its page asks for its status.
+_build_lock = threading.Lock()
+_building: set[str] = set()
+
+
+def _build_key(request: Request, name: str) -> str:
+    # Per path in paths mode: each path's datasets are their own.
+    return f"{_active_path(request) if _paths_mode() else ''}:{name}"
+
+
+def _build(key: str, datasets: DatasetStore, dashboards, name: str, author: str) -> None:
+    with _build_lock:
+        _building.add(key)
+        try:
+            renames = datasets.build(name)
+        finally:
+            _building.discard(key)
+    # Renamed columns: rewrite the dashboards that use them, as a dataset
+    # rename rewrites its name.
+    if renames and dashboards is not None:
+        for row in dashboards.list():
+            text = rename_column_refs(row.yaml, name, renames)
+            if text != row.yaml:
+                dashboards.save(row.id, text, author=author)
+
+
+def _build_later(background: BackgroundTasks, request: Request, name: str) -> None:
+    background.add_task(
+        _build, _build_key(request, name), _dataset_store(request), _dash_store(request),
+        name, _current_author(request),
+    )
+
+
+def _error(exc: Exception, status: int = 400) -> HTMLResponse:
+    return HTMLResponse(f'<pre class="error">{escape(str(exc))}</pre>', status_code=status)
 
 
 @app.post("/datasets/new")
 async def datasets_new(
     request: Request,
+    background: BackgroundTasks,
     name: str = Form(""),
     description: str = Form(""),
     delimiter: str = Form(","),
     file: UploadFile = File(...),
 ):
     try:
-        _dataset_store(request).create(
+        ds = _dataset_store(request).create(
             name,
             await file.read(),
             description=description,
             delimiter=delimiter or ",",
             author=_current_author(request),
+            build=False,
         )
     except DatasetError as exc:
-        return HTMLResponse(f'<pre class="error">{escape(str(exc))}</pre>', status_code=400)
+        return _error(exc)
     except Exception as exc:  # object-store errors (S3/Garage unreachable, bad creds)
-        return HTMLResponse(
-            f'<pre class="error">Storage error: {escape(str(exc))}</pre>', status_code=502
-        )
-    return RedirectResponse("/datasets", status_code=303)
+        return _error(f"Storage error: {exc}", 502)
+    _build_later(background, request, ds.name)
+    return RedirectResponse(f"/datasets/{quote(ds.name)}", status_code=303)
 
 
 @app.get("/datasets/{name}", response_class=HTMLResponse)
@@ -660,11 +754,14 @@ def dataset_detail(name: str, request: Request):
     ds = datasets.get(name)
     if ds is None:
         return HTMLResponse("Dataset not found", status_code=404)
-    cols, rows = datasets.preview(name, n=20)
     return HTMLResponse(
         portal_mod.render_dataset_detail(
-            ds, cols, rows, _page_title(), _user_menu(request),
+            ds, _page_title(), _user_menu(request),
             used_by=_dashboards_using(request, name),
+            mapping=datasets.mapping(name),
+            versions=datasets.versions(name),
+            examples=datasets.examples(name),
+            used_in=_columns_used_in(request, name, [c.name for c in ds.columns]),
             **_gallery_kwargs(request),
         )
     )
@@ -674,6 +771,7 @@ def dataset_detail(name: str, request: Request):
 async def dataset_replace(
     name: str,
     request: Request,
+    background: BackgroundTasks,
     description: str = Form(""),
     delimiter: str = Form(","),
     file: UploadFile = File(...),
@@ -682,9 +780,97 @@ async def dataset_replace(
         _dataset_store(request).replace(
             name, await file.read(),
             description=description or None, delimiter=delimiter or ",",
+            author=_current_author(request), build=False,
         )
     except DatasetError as exc:
-        return HTMLResponse(f'<pre class="error">{escape(str(exc))}</pre>', status_code=400)
+        return _error(exc)
+    _build_later(background, request, name)
+    return RedirectResponse(f"/datasets/{quote(name)}", status_code=303)
+
+
+@app.post("/datasets/{name}/mapping")
+async def dataset_mapping(
+    name: str, request: Request, background: BackgroundTasks, mapping: str = Form("")
+) -> JSONResponse:
+    """A new column mapping (the YAML) — the next minor, built in the background."""
+    try:
+        ds = _dataset_store(request).remap(
+            name, mapping, author=_current_author(request), build=False
+        )
+    except DatasetError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    _build_later(background, request, name)
+    return JSONResponse({"building": ds.building})
+
+
+@app.post("/datasets/{name}/mapping/check")
+async def dataset_mapping_check(name: str, request: Request, mapping: str = Form("")) -> JSONResponse:
+    """Read a mapping's YAML without saving it — the page's form shows what the
+    code editor says. 400 with the reason when it doesn't read or fit."""
+    datasets = _dataset_store(request)
+    try:
+        sources = datasets.versions(name)[0].sources
+        rules = column_map.parse(mapping, sources)
+    except (DatasetError, column_map.MappingError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"rules": [
+        {"name": r.name, "formula": r.formula, "service": r.service} for r in rules
+    ]})
+
+
+@app.get("/datasets/{name}/status")
+def dataset_status(name: str, request: Request, background: BackgroundTasks) -> JSONResponse:
+    """What the page polls while a version builds."""
+    datasets = _dataset_store(request)
+    ds = datasets.get(name)
+    if ds is None:
+        return JSONResponse({"error": "unknown dataset"}, status_code=404)
+    if ds.building and _build_key(request, name) not in _building:
+        _build_later(background, request, name)
+    return JSONResponse({"version": ds.version, "building": ds.building, "error": ds.error})
+
+
+@app.get("/datasets/{name}/versions")
+def dataset_versions(name: str, request: Request) -> JSONResponse:
+    try:
+        versions = _dataset_store(request).versions(name)
+    except DatasetError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    return JSONResponse({"versions": [
+        {"version": v.label, "created_at": v.created_at, "author": v.author,
+         "status": v.status, "rows": v.rows}
+        for v in versions
+    ]})
+
+
+@app.get("/datasets/{name}/versions/{label}")
+def dataset_version(name: str, label: str, request: Request) -> JSONResponse:
+    try:
+        v = _dataset_store(request).version(name, label)
+    except DatasetError:
+        v = None
+    if v is None:
+        return JSONResponse({"error": "unknown version"}, status_code=404)
+    return JSONResponse({"version": v.label, "created_at": v.created_at, "author": v.author,
+                         "status": v.status, "rows": v.rows, "mapping": v.mapping})
+
+
+@app.get("/datasets/{name}/versions/{label}/restore")
+def dataset_version_restore(name: str, label: str, request: Request) -> JSONResponse:
+    """A version's mapping fitted to the latest upload — for the compare view's
+    restore, which loads it as an unsaved edit (saving builds it anew)."""
+    try:
+        return JSONResponse({"mapping": _dataset_store(request).restored(name, label)})
+    except DatasetError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+
+
+@app.post("/datasets/{name}/versions/{major}/delete")
+def dataset_delete_major(name: str, major: int, request: Request):
+    try:
+        _dataset_store(request).delete_major(name, major)
+    except DatasetError as exc:
+        return _error(exc)
     return RedirectResponse(f"/datasets/{quote(name)}", status_code=303)
 
 
@@ -693,9 +879,9 @@ async def dataset_rename(
     old_name: str, request: Request, name: str = Form(""), description: str = Form(""),
     next: str = Form(""),
 ):
-    """Rename and/or re-describe a dataset. From the list's Edit dialog it
-    returns to the list; from the dataset's own page (`next=detail`, its name
-    edited in place) to that page, at the new name."""
+    """Rename and/or re-describe a dataset. From the dataset's own page
+    (`next=detail`, its title card) back to that page, at the new name;
+    otherwise to the list."""
     new = name.strip()
     try:
         _dataset_store(request).rename(old_name, new, description=description)
@@ -1291,6 +1477,18 @@ async def chart_config_tab_move(
     """Move the `index`-th tab to layout-item gap `before`. Returns {ok, yaml}."""
     try:
         return {"ok": True, "yaml": config_edit.move_tab(yaml_text, index, before)}
+    except (config_edit.ConfigEditError, DashboardError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/chart/config/tab-reorder")
+async def chart_config_tab_reorder(
+    yaml_text: str = Form(""), index: int = Form(0), to: int = Form(0)
+) -> dict:
+    """Move the `index`-th tab, rows and all, to before tab `to` (the tab count:
+    after the last). Returns {ok, yaml}."""
+    try:
+        return {"ok": True, "yaml": config_edit.reorder_tab(yaml_text, index, to)}
     except (config_edit.ConfigEditError, DashboardError) as exc:
         return {"ok": False, "error": str(exc)}
 

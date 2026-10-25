@@ -727,3 +727,81 @@ def test_values_sort_by_the_columns_own_type(orders_parquet):
     html = ce.filter_fields_for(_doc(orders_parquet), orders_parquet, column="amount")
     listed = [int(v) for v in re.findall(r'name="filter_value" value="([^"]+)"', html)]
     assert listed == sorted(listed) and len(listed) > 1
+
+
+# --- the end of a tab is its own gap --------------------------------------------
+
+_TABBED = """name: T
+charts:
+  a: {type: table, dataset: orders.parquet, title: A}
+  b: {type: table, dataset: orders.parquet, title: B}
+  c: {type: table, dataset: orders.parquet, title: C}
+layout:
+  "One":
+    - ["@30", "a:1"]
+    - ["@35", "b:1"]
+  "Two":
+    - ["@30", "c:1"]
+"""
+
+
+def test_moving_to_the_end_of_a_tab_stays_in_that_tab():
+    """Below tab One's last row is `after:1` — not 2, which is the top of tab
+    Two, under its key: that's where the row used to land."""
+    from fireflyer import config_edit
+
+    out = config_edit.move_to_new_row(_TABBED, "a", "after:1")
+    one = out[out.index('"One":'):out.index('"Two":')]
+    two = out[out.index('"Two":'):]
+    assert one.index('"b:1"') < one.index('"a:1"') and '"a:1"' not in two
+    # The plain index still means the top of the tab it names.
+    out = config_edit.move_to_new_row(_TABBED, "a", "2")
+    two = out[out.index('"Two":'):]
+    assert two.index('"a:1"') < two.index('"c:1"')
+
+
+def test_inserting_at_the_end_of_a_tab_stays_in_that_tab():
+    from fireflyer import config_edit
+
+    out = config_edit.insert_layout_item(_TABBED, "separator", "after:1")
+    assert '"-"' in out[out.index('"One":'):out.index('"Two":')]
+
+
+_THREE_TABS = """name: T
+charts:
+  a: {type: table, dataset: orders.parquet, title: A}
+  b: {type: table, dataset: orders.parquet, title: B}
+  c: {type: table, dataset: orders.parquet, title: C}
+layout:
+  "One":
+    - ["@30", "a:1"]   # a's row
+
+  "Two":
+    - ["@30", "b:1"]
+
+  "Three":
+    - ["@30", "c:1"]
+
+datasets: {}
+"""
+
+
+def _tab_order(text):
+    return [t.name for t in ff.Dashboard.from_yaml(text.replace("datasets: {}\n", "")).tabs]
+
+
+def test_reordering_a_tab_moves_it_with_its_rows():
+    out = ce.reorder_tab(_THREE_TABS, 0, 2)            # One between Two and Three
+    assert _tab_order(out) == ["Two", "One", "Three"]
+    assert '  "One":\n    - ["@30", "a:1"]   # a\'s row\n\n  "Three":' in out
+    assert out.endswith('    - ["@30", "c:1"]\n\ndatasets: {}\n')
+
+
+def test_a_tab_can_go_first_or_last():
+    assert _tab_order(ce.reorder_tab(_THREE_TABS, 2, 0)) == ["Three", "One", "Two"]
+    assert _tab_order(ce.reorder_tab(_THREE_TABS, 0, 3)) == ["Two", "Three", "One"]
+
+
+def test_dropping_a_tab_beside_itself_changes_nothing():
+    assert ce.reorder_tab(_THREE_TABS, 1, 1) == _THREE_TABS
+    assert ce.reorder_tab(_THREE_TABS, 1, 2) == _THREE_TABS

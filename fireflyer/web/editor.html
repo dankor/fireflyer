@@ -13,29 +13,7 @@
      URL, so each is loaded once: CodeMirror's own type checks fail if two
      copies of @codemirror/state meet. Should any of it fail to load, the
      plain textarea under it stays and works (static/yaml-editor.js). -->
-<script type="importmap">
-{"imports": {
-  "@codemirror/state": "/static/vendor/codemirror-state@6.7.6.mjs",
-  "@codemirror/view": "/static/vendor/codemirror-view@6.43.14.mjs",
-  "@codemirror/commands": "/static/vendor/codemirror-commands@6.11.1.mjs",
-  "@codemirror/language": "/static/vendor/codemirror-language@6.13.1.mjs",
-  "@codemirror/search": "/static/vendor/codemirror-search@6.7.2.mjs",
-  "@codemirror/autocomplete": "/static/vendor/codemirror-autocomplete@6.20.3.mjs",
-  "@codemirror/lint": "/static/vendor/codemirror-lint@6.9.7.mjs",
-  "@codemirror/lang-yaml": "/static/vendor/codemirror-lang-yaml@6.1.3.mjs",
-  "@codemirror/merge": "/static/vendor/codemirror-merge@6.12.2.mjs",
-  "@codemirror/streamparser": "/static/vendor/codemirror-streamparser@6.0.0.mjs",
-  "@lezer/common": "/static/vendor/lezer-common@1.5.3.mjs",
-  "@lezer/lr": "/static/vendor/lezer-lr@1.4.11.mjs",
-  "@lezer/yaml": "/static/vendor/lezer-yaml@1.0.4.mjs",
-  "@lezer/highlight": "/static/vendor/lezer-highlight@1.2.5.mjs",
-  "style-mod": "/static/vendor/style-mod@4.1.4.mjs",
-  "w3c-keyname": "/static/vendor/w3c-keyname@2.2.8.mjs",
-  "crelt": "/static/vendor/crelt@1.0.7.mjs",
-  "@marijn/find-cluster-break": "/static/vendor/marijn-find-cluster-break@1.0.4.mjs",
-  "fireflyer/diff-view": "__FF_DIFF_VIEW__"
-}}
-</script>
+__FF_IMPORTMAP__
 __FF_STYLES__
 </head>
 <body data-dash-id="__FF_DASH_ID__">
@@ -104,6 +82,12 @@ __FF_STYLES__
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h12l-3-3M17 17H5l3 3"/></svg>
     </button>
     <select class="ff-diff-pick" id="ff-diff-b" aria-label="Right side"></select>
+    <button type="button" class="ff-diff-icon" id="ff-diff-older" title="One version older (both sides)" aria-label="One version older" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <button type="button" class="ff-diff-icon" id="ff-diff-newer" title="One version newer (both sides)" aria-label="One version newer" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
+    </button>
     <span class="ff-diff-stats" id="ff-diff-stats"></span>
     <button type="button" class="ff-diff-restore" id="ff-diff-restore" hidden></button>
   </div>

@@ -29,14 +29,14 @@
 
 import {EditorState, Compartment, StateEffect, StateField, RangeSet} from '@codemirror/state';
 import {
-  EditorView, Decoration, MatchDecorator, ViewPlugin, keymap, lineNumbers,
+  EditorView, Decoration, keymap, lineNumbers,
   highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, drawSelection,
   dropCursor, rectangularSelection, crosshairCursor, showPanel, GutterMarker, gutterLineClass,
 } from '@codemirror/view';
 import {defaultKeymap, history, historyKeymap, indentWithTab} from '@codemirror/commands';
 import {
   indentUnit, foldGutter, foldKeymap, codeFolding, bracketMatching, indentOnInput,
-  syntaxHighlighting, HighlightStyle,
+  syntaxHighlighting,
 } from '@codemirror/language';
 import {searchKeymap, highlightSelectionMatches, search} from '@codemirror/search';
 import {
@@ -44,8 +44,8 @@ import {
 } from '@codemirror/autocomplete';
 import {linter, lintGutter, lintKeymap, diagnosticCount, openLintPanel} from '@codemirror/lint';
 import {yaml} from '@codemirror/lang-yaml';
-import {tags as t} from '@lezer/highlight';
 import {initDiff} from 'fireflyer/diff-view';
+import {yamlStyle, scalarColours, editorTheme} from 'fireflyer/yaml-look';
 
 function mount(ta) {
   // The latest answer from /yaml/assist: what completion can offer.
@@ -100,6 +100,7 @@ function mount(ta) {
       showPanel.of(statusBar),
       wrapping.of(wrapOn() ? EditorView.lineWrapping : []),
       editorTheme,
+      chromeTheme,
       fillPanel,
       keymap.of([
         // A run of the preview, as in the plain textarea.
@@ -365,29 +366,6 @@ function result(from, options) { return {from, options, validFor: /^[\w.\/-]*$/}
 
 // --- look --------------------------------------------------------------------
 
-// The YAML grammar's tokens, coloured from editor.css's `--yaml-*` variables,
-// so the editor follows the Auto / Light / Dark switch with the rest.
-const yamlStyle = HighlightStyle.define([
-  {tag: [t.definition(t.propertyName), t.propertyName], color: 'var(--yaml-key)'},
-  {tag: [t.string, t.special(t.string)], color: 'var(--yaml-string)'},
-  {tag: [t.number, t.integer, t.float], color: 'var(--yaml-number)'},
-  {tag: [t.bool, t.null, t.atom, t.keyword], color: 'var(--yaml-keyword)'},
-  {tag: [t.comment, t.lineComment, t.blockComment], color: 'var(--yaml-comment)', fontStyle: 'italic'},
-  {tag: [t.punctuation, t.separator, t.bracket, t.squareBracket, t.brace], color: 'var(--yaml-punct)'},
-  {tag: [t.labelName, t.typeName, t.meta, t.processingInstruction], color: 'var(--yaml-meta)'},
-]);
-
-// The YAML grammar reads `42`, `true` and `null` as plain text, like any other
-// unquoted value. A value that is exactly one gets its own colour here.
-const scalarMatcher = new MatchDecorator({
-  regexp: /(?<=(?:^|[:\[{,-])\s*)(-?\d+(?:\.\d+)?|true|false|null|~)(?=\s*(?:[,\]}#]|$))/g,
-  decoration: m => Decoration.mark({class: /\d/.test(m[1]) ? 'cm-yaml-number' : 'cm-yaml-keyword'}),
-});
-const scalarColours = ViewPlugin.fromClass(class {
-  constructor(view) { this.decorations = scalarMatcher.createDeco(view); }
-  update(u) { this.decorations = scalarMatcher.updateDeco(u, this.decorations); }
-}, {decorations: v => v.decorations});
-
 function foldMarker(open) {
   const el = document.createElement('span');
   el.className = 'cm-ff-fold';
@@ -430,23 +408,36 @@ function statusBar(view) {
 }
 
 // --- outline: a chip per top-level key, to hop there --------------------------
-// `charts` is a menu of every chart, each with its type's icon, and `layout`,
-// when it's split into tabs, a menu of its tabs.
+// `charts` is a menu of every chart, each with its type's icon; `calcs`, of
+// every calc as `dataset / calc`; `layout`, when it's split into tabs, a menu
+// of its tabs; `datasets`, of the inline datasets. A chart's `title` and a
+// calc's `name`, when they have one, are the items' tooltips.
 // The chip of the section the cursor is in is lit, so it doubles as a "you are
 // here". Rebuilt only when the keys or charts change, not on every keystroke.
 
-// Each top-level key with its line; for `charts` each chart's id, line and type
-// (from `type:` in its block, or a flow mapping on the id's own line); for a
-// tabbed `layout` each tab's name and line. Tab names are free text, so may be
-// quoted or have spaces: `"Sales & ops":`.
-const MENUS = {charts: 'chart', layout: 'tab'};
+const MENUS = {charts: 'chart', calcs: 'calc', layout: 'tab', datasets: 'dataset'};
+// A tab's or an inline dataset's name is free text, so may be quoted or have
+// spaces: `"Sales & ops":`.
 const tabOf = text => {
   const m = text.match(/^\s*(?:"([^"]+)"|'([^']+)'|([^\s#'"\-[{][^:#]*?))\s*:(?:\s|$)/);
   return m ? (m[1] || m[2] || m[3]) : null;
 };
+// `key: value` on a line — its own line, or inside a flow mapping
+// (`{type: pie, title: By status}`); quotes dropped, and a trailing `# comment`
+// (a `#` after whitespace) is no part of it.
+const valueOf = (text, key) => {
+  const m = text.match(new RegExp(`(?:^|[\\s{,])${key}\\s*:\\s*("([^"]*)"|'([^']*)'|[^,}]+)`));
+  if (!m) return '';
+  return (m[2] ?? m[3] ?? m[1].replace(/(^|\s)#.*$/, '')).trim();
+};
+
+// Each top-level key with its line, and for the keys with a menu its items —
+// `{id, line, type, label, group}`: a chart (its `type`, its `title` as the
+// label), a calc (`group` its dataset, its `name` as the label), a tab, an
+// inline dataset.
 function sections(doc) {
   const out = [];
-  let charts = null, childIndent = null, current = null, kind = null;
+  let items = null, kind = null, childIndent = null, calcIndent = null, group = '', current = null;
   for (let n = 1; n <= doc.lines; n++) {
     const text = doc.line(n).text;
     if (blank(text)) continue;
@@ -456,24 +447,36 @@ function sections(doc) {
       if (!key) continue;
       kind = MENUS[key] || null;
       out.push({key, line: n, items: kind ? [] : null, kind});
-      charts = kind ? out[out.length - 1].items : null;
-      childIndent = current = null;
+      items = kind ? out[out.length - 1].items : null;
+      childIndent = calcIndent = current = null;
       continue;
     }
-    if (!charts) continue;
+    if (!items) continue;
     if (childIndent === null) childIndent = ind;
-    if (ind === childIndent && kind === 'tab') {
-      const tab = tabOf(text);
-      current = null;
-      if (tab) charts.push({id: tab, line: n, type: ''});
+    if (kind === 'tab' || kind === 'dataset') {
+      if (ind !== childIndent) continue;
+      const name = tabOf(text);
+      if (name) items.push({id: name, line: n, type: '', label: ''});
+    } else if (kind === 'calc') {
+      // Two levels: a dataset, then its calcs.
+      if (ind === childIndent) {
+        group = keyOf(text) || '';
+        calcIndent = current = null;
+      } else if (calcIndent === null || ind === calcIndent) {
+        calcIndent = ind;
+        const id = keyOf(text);
+        current = id ? {id, group, line: n, type: '', label: valueOf(text, 'name')} : null;
+        if (current) items.push(current);
+      } else if (current && !current.label && ind > calcIndent && /^\s*name\s*:/.test(text)) {
+        current.label = valueOf(text, 'name');
+      }
     } else if (ind === childIndent) {
       const id = keyOf(text);
-      const inline = text.match(/\btype\s*:\s*([\w-]+)/);
-      current = id ? {id, line: n, type: inline ? inline[1] : ''} : null;
-      if (current) charts.push(current);
-    } else if (kind === 'chart' && current && !current.type) {
-      const m = text.match(/^\s*type\s*:\s*([\w-]+)/);
-      if (m) current.type = m[1];
+      current = id ? {id, line: n, type: valueOf(text, 'type'), label: valueOf(text, 'title')} : null;
+      if (current) items.push(current);
+    } else if (current) {
+      if (!current.type && /^\s*type\s*:/.test(text)) current.type = valueOf(text, 'type');
+      if (!current.label && /^\s*title\s*:/.test(text)) current.label = valueOf(text, 'title');
     }
   }
   return out;
@@ -646,12 +649,19 @@ function outline(view, getSchema) {
         // markup, never the YAML's text.
         icon.innerHTML = icons[entry.type] || '';
         b.append(icon);
-        b.title = entry.type ? `${entry.id} (${entry.type})` : entry.id;
+      }
+      if (entry.group) {                         // a calc: its dataset first
+        const group = document.createElement('span');
+        group.className = 'group';
+        group.textContent = `${entry.group} /`;
+        b.append(group);
       }
       const name = document.createElement('span');
       name.className = 'id';
       name.textContent = entry.id;
       b.append(name);
+      // What a reader sees: a chart's title, a calc's name (and a chart's type).
+      b.title = [entry.label, entry.type && `(${entry.type})`].filter(Boolean).join(' ') || entry.id;
       b.addEventListener('click', () => { closeMenu(); jumpTo(view, entry.line); });
       return b;
     }
@@ -711,61 +721,14 @@ function outline(view, getSchema) {
 // The editor fills the YAML panel; the compare view's panes size to their text.
 const fillPanel = EditorView.theme({'&': {height: '100%'}});
 
-const editorTheme = EditorView.theme({
-  '&': {color: 'var(--text)', backgroundColor: 'var(--panel)', fontSize: '13px'},
-  '&.cm-focused': {outline: 'none'},
-  '.cm-scroller': {fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', lineHeight: '1.6'},
-  '.cm-content': {padding: '10px 0', caretColor: 'var(--text)'},
-  '.cm-cursor, .cm-dropCursor': {borderLeftColor: 'var(--text)', borderLeftWidth: '2px'},
-  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':
-    {backgroundColor: 'color-mix(in srgb, var(--accent) 24%, transparent)'},
-  '.cm-activeLine': {backgroundColor: 'color-mix(in srgb, var(--text) 4%, transparent)'},
-  '.cm-selectionMatch': {backgroundColor: 'color-mix(in srgb, var(--accent) 14%, transparent)'},
-  '.cm-matchingBracket, &.cm-focused .cm-matchingBracket':
-    {backgroundColor: 'color-mix(in srgb, var(--accent) 22%, transparent)', outline: '1px solid color-mix(in srgb, var(--accent) 50%, transparent)'},
-  '.cm-gutters': {backgroundColor: 'var(--panel)', color: 'var(--muted)', border: 'none', borderRight: '1px solid var(--border)'},
-  // A tight gutter: numbers, then a narrow fold column and a narrow problems
-  // column — each only as wide as its marker.
-  // A line number is a link to its line (see linkFromGutter).
-  '.cm-lineNumbers .cm-gutterElement': {padding: '0 4px 0 10px', minWidth: '24px', opacity: '0.7', cursor: 'pointer'},
-  '.cm-foldGutter .cm-gutterElement': {padding: '0 1px', width: '10px'},
-  '.cm-gutter-lint': {width: '10px'},
-  '.cm-gutter-lint .cm-gutterElement': {padding: '0'},
-  '.cm-activeLineGutter': {backgroundColor: 'transparent', color: 'var(--text)'},
-  '.cm-activeLineGutter.cm-gutterElement': {opacity: '1'},
-  '.cm-ff-fold': {display: 'inline-block', width: '10px', cursor: 'pointer', opacity: '0.45', fontSize: '12px', textAlign: 'center'},
-  '.cm-ff-fold:hover': {opacity: '1'},
-  '.cm-foldPlaceholder': {backgroundColor: 'color-mix(in srgb, var(--accent) 14%, transparent)', border: 'none', color: 'var(--text)', padding: '0 6px', borderRadius: '3px'},
-  '.cm-tooltip': {backgroundColor: 'var(--panel)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '6px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', overflow: 'hidden'},
-  '.cm-tooltip-autocomplete > ul': {fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12.5px', maxHeight: '18em'},
-  '.cm-tooltip-autocomplete > ul > li': {padding: '3px 10px !important', lineHeight: '1.5'},
-  '.cm-tooltip-autocomplete > ul > li[aria-selected]': {backgroundColor: 'color-mix(in srgb, var(--accent) 22%, transparent)', color: 'var(--text)'},
-  '.cm-completionDetail': {color: 'var(--muted)', fontStyle: 'normal', marginLeft: '1.2em', fontSize: '11px'},
-  '.cm-completionMatchedText': {textDecoration: 'none', color: 'var(--accent)', fontWeight: '600'},
-  '.cm-tooltip-lint': {padding: '0'},
-  '.cm-diagnostic': {padding: '6px 10px', borderLeftWidth: '3px'},
-  '.cm-diagnostic-error': {borderLeftColor: 'var(--error)'},
-  '.cm-lintRange-error': {backgroundImage: 'none', textDecoration: 'wavy underline var(--error)', textUnderlineOffset: '3px'},
-  '.cm-lint-marker': {width: '8px', height: '8px', marginTop: '6px'},
-  '.cm-panels': {backgroundColor: 'var(--panel)', color: 'var(--text)'},
-  '.cm-panels-top': {borderBottom: '1px solid var(--border)'},
-  '.cm-panels-bottom': {borderTop: '1px solid var(--border)'},
-  '.cm-search': {padding: '8px 10px', fontSize: '12px', display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center'},
-  '.cm-search input, .cm-search button, .cm-textfield, .cm-button':
-    {fontSize: '12px', borderRadius: '4px', border: '1px solid var(--border)', backgroundColor: 'var(--bg)', color: 'var(--text)', backgroundImage: 'none', padding: '3px 8px', margin: '0'},
-  '.cm-search label': {display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--muted)'},
-  '.cm-search [name=close]': {border: 'none', background: 'none', fontSize: '16px', color: 'var(--muted)', padding: '0 4px'},
-  '.cm-searchMatch': {backgroundColor: 'color-mix(in srgb, var(--yaml-number) 28%, transparent)', outline: '1px solid color-mix(in srgb, var(--yaml-number) 55%, transparent)'},
-  '.cm-searchMatch-selected': {backgroundColor: 'color-mix(in srgb, var(--accent) 40%, transparent)'},
-  '.cm-yaml-number': {color: 'var(--yaml-number)'},
-  '.cm-yaml-keyword': {color: 'var(--yaml-keyword)'},
+// The editor's own chrome: the outline chips, the status bar, linked lines.
+const chromeTheme = EditorView.theme({
   '.cm-ff-linked': {backgroundColor: 'color-mix(in srgb, var(--yaml-number) 16%, transparent)'},
   '.cm-ff-linked-gutter': {color: 'var(--text)', opacity: '1', fontWeight: '600'},
   '.cm-ff-outline': {position: 'relative', display: 'flex', flexWrap: 'wrap', gap: '4px', padding: '6px 10px', fontSize: '12px'},
   '.cm-ff-chip': {border: '1px solid var(--border)', borderRadius: '999px', background: 'none', color: 'var(--muted)', padding: '1px 9px', font: 'inherit', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', cursor: 'pointer', lineHeight: '1.6'},
   '.cm-ff-chip:hover': {color: 'var(--text)', borderColor: 'var(--muted)'},
   '.cm-ff-chip.is-here': {color: 'var(--accent)', borderColor: 'var(--accent)'},
-  // The split chip: one pill, two buttons, a hairline between them.
   '.cm-ff-chip.has-menu': {display: 'inline-flex', padding: '0', cursor: 'default', overflow: 'hidden'},
   '.cm-ff-chip-go, .cm-ff-chip-more': {border: 'none', background: 'none', color: 'inherit', font: 'inherit', cursor: 'pointer', lineHeight: '1.6'},
   '.cm-ff-chip-go': {padding: '1px 6px 1px 9px'},
@@ -776,6 +739,7 @@ const editorTheme = EditorView.theme({
   '.cm-ff-menu': {position: 'absolute', top: '100%', zIndex: '20', marginTop: '2px', minWidth: '180px', maxWidth: 'calc(100% - 20px)', maxHeight: '20em', overflowY: 'auto', backgroundColor: 'var(--panel)', border: '1px solid var(--border)', borderRadius: '6px', boxShadow: '0 8px 24px rgba(0,0,0,.18)', padding: '4px'},
   '.cm-ff-menu-item': {display: 'flex', width: '100%', gap: '8px', alignItems: 'center', border: 'none', background: 'none', color: 'var(--text)', padding: '3px 8px', borderRadius: '4px', font: 'inherit', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12.5px', textAlign: 'left', cursor: 'pointer'},
   '.cm-ff-menu-item .id': {overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'},
+  '.cm-ff-menu-item .group': {color: 'var(--muted)', flex: '0 0 auto'},
   '.cm-ff-menu-item .icon': {display: 'inline-flex', flex: '0 0 auto', width: '14px', height: '14px', color: 'var(--muted)'},
   '.cm-ff-menu-item .icon svg': {width: '14px', height: '14px'},
   '.cm-ff-menu-item:hover, .cm-ff-menu-item:focus': {outline: 'none', backgroundColor: 'color-mix(in srgb, var(--accent) 18%, transparent)'},
@@ -784,6 +748,7 @@ const editorTheme = EditorView.theme({
   '.cm-ff-status-health': {border: 'none', background: 'none', padding: '0', font: 'inherit', color: 'var(--muted)', cursor: 'pointer'},
   '.cm-ff-status-health.has-problems': {color: 'var(--error)'},
 });
+
 
 // Mounted last: everything above — the theme, the highlighting, the helpers —
 // is a `const`, and doesn't exist until its line has run.

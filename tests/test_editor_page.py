@@ -267,6 +267,12 @@ def test_the_panels_are_siblings_of_the_dashboard_pane():
             if self.stack:
                 self.stack.pop()
 
+        def handle_startendtag(self, tag, attrs):
+            # `<path …/>` opens and closes at once: record it, push nothing.
+            found = dict(attrs)
+            if found.get("id"):
+                self.parent_of[found["id"]] = next((i for i in reversed(self.stack) if i), None)
+
     tree = Tree()
     tree.feed(render_editor_page(DEFAULT_YAML, theme=_theme_switch()))
     for element in ("output-pane", "ff-split", "ff-yaml", "ff-chat", "ff-docs",
