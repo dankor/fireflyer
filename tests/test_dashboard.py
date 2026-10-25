@@ -910,3 +910,72 @@ def test_the_filters_have_a_funnel_header_not_column_headings():
     # With no filters the header still says what the empty message is about.
     empty = ff.Dashboard.from_yaml(yaml.replace(", filters: [{column: region, op: ni, values: [east]}]", "")).render_cell("b")
     assert "fireflyer-filter-head" in empty and "No active filters" in empty
+
+
+# --- column rename cascade ------------------------------------------------------
+
+
+def test_renaming_a_column_rewrites_only_where_columns_are_named():
+    from fireflyer.dashboard import rename_column_refs
+
+    text = """name: T
+calcs:
+  orders:
+    paid: {agg: sum, formula: amount * qty, filters: [{column: status, op: in, values: [paid]}]}
+    day2: {formula: 'str2dt(day, YYYY-MM-DD)'}
+  other:
+    n: {agg: sum, formula: amount}
+charts:
+  pie:   # the status of things
+    type: pie
+    dataset: orders
+    title: By status
+    column: status
+    calc: paid
+  t:
+    type: table
+    dataset: orders
+    title: status table
+    columns: [status, 'day', amount]
+    sort:
+      - -amount
+      - status
+    filters:
+      - {column: status, op: ni, values: [status]}
+  o: {type: table, dataset: other, title: Other, columns: [status]}
+layout:
+  - ["@30", "pie", "t", "o"]
+"""
+    got = rename_column_refs(text, "orders", {"status": "state", "amount": "total", "day": "order_day"})
+    assert "column: state" in got and "title: By status" in got and "# the status of things" in got
+    assert "columns: [state, 'order_day', total]" in got
+    assert "      - -total\n      - state\n" in got
+    assert "{column: state, op: ni, values: [status]}" in got          # a value, not a column
+    assert "formula: total * qty, filters: [{column: state," in got
+    assert "formula: 'str2dt(order_day, YYYY-MM-DD)'" in got
+    # Another dataset's charts and calcs keep their own `status` / `amount`.
+    assert "o: {type: table, dataset: other, title: Other, columns: [status]}" in got
+    assert "n: {agg: sum, formula: amount}" in got
+    assert rename_column_refs(text, "nope", {"status": "x"}) == text
+
+
+def test_a_tabs_last_add_row_strip_names_the_gap_below_its_last_row(orders_parquet):
+    """Not the next tab's first index — that gap is under the next tab's key."""
+    import re
+
+    yaml = f"""name: T
+charts:
+  a: {{type: table, dataset: {orders_parquet}, title: A}}
+  b: {{type: table, dataset: {orders_parquet}, title: B}}
+layout:
+  One:
+    - ["@30", "a"]
+  Two:
+    - ["@30", "b"]
+"""
+    dash = ff.Dashboard.from_yaml(yaml)
+    strips = lambda tab: re.findall(
+        r'class="fireflyer-add-row" data-before="([^"]+)"', dash.render_skeleton(editing=True, active_tab=tab)
+    )
+    assert strips(0) == ["0", "after:0"]       # above a; below a, still in One
+    assert strips(1) == ["1", "end"]           # above b (top of Two); the very end

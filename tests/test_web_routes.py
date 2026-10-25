@@ -8,6 +8,7 @@ That happened, so these tests exercise the endpoints for real.
 """
 
 import html as html_mod
+import json
 import re
 
 import pytest
@@ -529,7 +530,7 @@ def test_a_new_dashboard_can_be_given_a_description():
 
 def test_renaming_from_the_dataset_page_returns_to_it(client, tmp_path, monkeypatch):
     """The page edits name + description in place, so it comes back to itself —
-    at the new name; the list's dialog still returns to the list."""
+    at the new name; without `next`, to the list."""
     from fireflyer.datasets import DatasetStore
     from fireflyer.storage import make_object_store
     from fireflyer.web import app as app_mod
@@ -626,3 +627,93 @@ def test_the_title_is_one_button_opening_a_name_and_description_card(client):
     card = page[page.index('id="ff-dash-about"') :]
     card = card[: card.index("</span>")]
     assert 'id="ff-dash-name-input"' in card and 'id="ff-dash-about-text"' in card
+
+
+# --- dataset versions -------------------------------------------------------------
+
+
+@pytest.fixture
+def versioned(client, tmp_path, monkeypatch):
+    """A dataset in a tmp store, and a dashboard store holding one dashboard on it."""
+    from fireflyer.datasets import DatasetStore
+    from fireflyer.storage import make_object_store
+    from fireflyer.web import app as app_mod
+    from fireflyer.web.portal import SqliteStore
+
+    datasets = DatasetStore(make_object_store({"base": str(tmp_path)}))
+    datasets.create("sales", b"id,status,amount\n1,paid,10\n2,open,5\n")
+    dashboards = SqliteStore(":memory:")
+    dash_id = dashboards.create(
+        "name: S\ncharts:\n  p: {type: pie, dataset: sales, title: status, column: status}\n"
+        'layout:\n  - ["@30", "p"]\n', "dana",
+    )
+    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: datasets)
+    monkeypatch.setattr(app_mod, "_dash_store", lambda request: dashboards)
+    return datasets, dashboards, dash_id
+
+
+def test_a_new_mapping_builds_and_renames_through_dashboards(client, versioned):
+    datasets, dashboards, dash_id = versioned
+    mapping = "columns:\n  id: to_number(id)\n  state: status\n  amount: to_number(amount)\n"
+    r = client.post("/datasets/sales/mapping", data={"mapping": mapping})
+    assert r.json() == {"building": "1.1"}
+    # The background build ran (TestClient runs it before returning).
+    assert client.get("/datasets/sales/status").json() == {"version": "1.1", "building": "", "error": ""}
+    assert "column: state" in dashboards.get(dash_id).yaml
+    assert "title: status" in dashboards.get(dash_id).yaml          # a title, not a column
+
+
+def test_a_mapping_that_does_not_fit_is_refused_at_once(client, versioned):
+    r = client.post("/datasets/sales/mapping", data={"mapping": "columns:\n  x: nope\n"})
+    assert r.status_code == 400 and "no column 'nope'" in r.json()["error"]
+    r = client.post("/datasets/sales/mapping/check", data={"mapping": "columns:\n  id: to_number(id)\n"})
+    assert r.json()["rules"] == [{"name": "id", "formula": "to_number(id)", "service": False}]
+
+
+def test_a_cast_that_fails_reports_and_keeps_the_version(client, versioned):
+    client.post("/datasets/sales/mapping", data={"mapping": "columns:\n  status: to_number(status)\n"})
+    status = client.get("/datasets/sales/status").json()
+    assert status["version"] == "1.0" and "'status'" in status["error"]
+
+
+def test_versions_list_fetch_and_delete(client, versioned):
+    datasets, _, _ = versioned
+    client.post("/datasets/sales/mapping", data={"mapping": "columns:\n  id: to_number(id)\n"})
+    client.post("/datasets/sales/replace", files={"file": ("x.csv", b"id,status,amount\n3,paid,1\n")})
+    listed = client.get("/datasets/sales/versions").json()["versions"]
+    assert [v["version"] for v in listed] == ["2.1", "1.1", "1.0"]
+    assert client.get("/datasets/sales/versions/1.1").json()["mapping"] == "columns:\n  id:\n    formula: to_number(id)\n"
+    assert client.get("/datasets/sales/versions/9.9").status_code == 404
+    assert client.post("/datasets/sales/versions/2/delete").status_code == 400     # in use
+    client.post("/datasets/sales/versions/1/delete")
+    assert [v.label for v in datasets.versions("sales")] == ["2.1"]
+
+
+def test_the_dataset_page_has_the_column_modes_and_history(client, versioned):
+    page = client.get("/datasets/sales").text
+    assert re.findall(r'data-mode="(\w+)"', page[page.index('id="ds-modes"'):])[:4] == ["view", "edit", "code", "compare"]
+    assert '<summary title="Versions">v1.0</summary>' in page
+    assert '"fireflyer/yaml-look"' in page and "dataset-columns.js" in page
+    data = json.loads(re.search(r'<script type="application/json" id="ds-data">(.*?)</script>', page, re.S).group(1))
+    assert data["rules"][0] == {"name": "id", "formula": "id", "service": False}
+    assert data["kinds"]["id"][1] == "text"                 # from the built data
+    assert data["examples"]["status"] == ["paid", "open"]
+    assert ('<span class="col-example" style="--n:4" title="paid" data-value="paid">paid</span>'
+            in page)
+
+
+def test_a_version_can_be_fetched_for_restoring(client, versioned):
+    client.post("/datasets/sales/mapping", data={"mapping": "columns:\n  id: to_number(id)\n"})
+    r = client.get("/datasets/sales/versions/1.0/restore").json()
+    assert r["mapping"] == (
+        "columns:\n  id:\n    formula: id\n  status:\n    formula: status\n  amount:\n    formula: amount\n"
+    )
+    assert client.get("/datasets/sales/versions/7.0/restore").status_code == 404
+
+
+def test_the_dataset_page_says_which_dashboards_use_each_column(client, versioned):
+    _, _, dash_id = versioned                      # a pie on `status`
+    page = client.get("/datasets/sales").text
+    data = json.loads(re.search(r'<script type="application/json" id="ds-data">(.*?)</script>', page, re.S).group(1))
+    assert data["usedIn"] == {"status": [[dash_id, "S"]]}
+    assert "<th>Dashboards</th>" in page and f'href="/d/{dash_id}"' in page

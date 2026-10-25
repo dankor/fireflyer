@@ -74,12 +74,13 @@ def test_gallery_kwargs_lists_paths_and_active(paths_mode):
     (paths_mode / "alpha").mkdir()
     (paths_mode / "beta").mkdir()
     kw = app_mod._gallery_kwargs(_Req({"ff_path": "beta"}))
-    assert kw == {"paths": ["alpha", "beta"], "active_path": "beta"}
+    # No login in paths mode, so no Author column.
+    assert kw == {"paths": ["alpha", "beta"], "active_path": "beta", "authors": False}
 
 
-def test_gallery_kwargs_empty_outside_paths_mode(paths_mode, monkeypatch):
+def test_gallery_kwargs_have_no_paths_outside_paths_mode(paths_mode, monkeypatch):
     monkeypatch.setattr(app_mod, "PATHS_BASE", "")
-    assert app_mod._gallery_kwargs(_Req()) == {}
+    assert app_mod._gallery_kwargs(_Req()) == {"authors": False}
 
 
 def test_the_demo_folder_is_a_usable_path():

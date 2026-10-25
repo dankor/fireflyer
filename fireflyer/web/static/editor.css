@@ -8,18 +8,6 @@
   --accent: #20a7c9;
   --accent-hover: #1a8aa6;
   --error: #e04355;
-  /* YAML editor syntax (yaml-editor.js). */
-  --yaml-key: #0b62c4;
-  --yaml-string: #1a7f37;
-  --yaml-number: #b35900;
-  --yaml-keyword: #8250df;
-  --yaml-comment: #6e7781;
-  --yaml-punct: #57606a;
-  --yaml-meta: #bf3989;
-  --diff-add-line: #e6ffec;
-  --diff-add-word: #abf2bc;
-  --diff-del-line: #ffebe9;
-  --diff-del-word: #ffc1bc;
 }
 /* Editor chrome dark palette. The topbar toggle sets `data-ff-theme` on
    <html>; that same attribute also themes the dashboard preview and every
@@ -36,17 +24,6 @@
     --accent: #20a7c9;
     --accent-hover: #48c4e0;
     --error: #e04355;
-    --yaml-key: #6cb6ff;
-    --yaml-string: #8ddb8c;
-    --yaml-number: #f69d50;
-    --yaml-keyword: #dcbdfb;
-    --yaml-comment: #8b949e;
-    --yaml-punct: #9aa5b4;
-    --yaml-meta: #f47067;
-    --diff-add-line: rgba(46, 160, 67, 0.15);
-    --diff-add-word: rgba(46, 160, 67, 0.4);
-    --diff-del-line: rgba(248, 81, 73, 0.15);
-    --diff-del-word: rgba(248, 81, 73, 0.4);
   }
 }
 :root[data-ff-theme="dark"] {
@@ -59,17 +36,6 @@
   --accent: #20a7c9;
   --accent-hover: #48c4e0;
   --error: #e04355;
-  --yaml-key: #6cb6ff;
-  --yaml-string: #8ddb8c;
-  --yaml-number: #f69d50;
-  --yaml-keyword: #dcbdfb;
-  --yaml-comment: #8b949e;
-  --yaml-punct: #9aa5b4;
-  --yaml-meta: #f47067;
-  --diff-add-line: rgba(46, 160, 67, 0.15);
-  --diff-add-word: rgba(46, 160, 67, 0.4);
-  --diff-del-line: rgba(248, 81, 73, 0.15);
-  --diff-del-word: rgba(248, 81, 73, 0.4);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%;
@@ -117,27 +83,25 @@ html, body { margin: 0; padding: 0; height: 100%;
 .ff-dash-about.is-readonly textarea { field-sizing: content; color: var(--text); }
 /* Dot setting the nav group off from the dashboard name (paths mode). */
 .topbar .ff-sep { color: var(--muted); }
-/* 3-segment icon theme switch: Auto (A) / Light (sun) / Dark (moon). */
-.topbar .ff-theme { display: inline-flex; border: 1px solid var(--border);
-  border-radius: 6px; overflow: hidden; }
-.topbar .ff-theme button { background: var(--panel); color: var(--muted); border: 0;
-  border-left: 1px solid var(--border); padding: 5px 8px; cursor: pointer;
-  display: inline-flex; align-items: center; }
-.topbar .ff-theme button:first-child { border-left: 0; }
-.topbar .ff-theme button svg { width: 16px; height: 16px; display: block; }
-.topbar .ff-theme button:hover { background: var(--bg); color: var(--text); }
-.topbar .ff-theme button.active { background: var(--accent); color: #fff; }
 .topbar .toggle {
   background: var(--panel); color: var(--text); border: 1px solid var(--border);
   padding: 5px 12px; border-radius: 4px; font-size: 12px; cursor: pointer;
 }
 .topbar .toggle:hover { background: var(--bg); }
-.topbar .run {
-  background: var(--accent); color: #fff; border: 0; padding: 6px 14px;
-  border-radius: 4px; font-size: 13px; font-weight: 500; cursor: pointer;
-}
-.topbar .run:hover { background: var(--accent-hover); }
-.topbar .run:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Save and Discard: one segmented group, styled like the mode switch's resting
+   segments — a floppy disk, and before it a cross. Shown only while there
+   are unsaved changes (the group itself goes once both buttons are hidden). */
+.ff-savebar { display:none; }
+.ff-savebar:has(> button:not([hidden])) { display:inline-flex; border:1px solid var(--border);
+  border-radius:6px; overflow:hidden; }
+.ff-savebar button { display:inline-flex; align-items:center; padding:5px 8px; border:0;
+  border-left:1px solid var(--border); background:var(--panel); color:var(--muted); cursor:pointer; }
+.ff-savebar button:first-child, .ff-savebar button[hidden] + button { border-left:0; }
+.ff-savebar button[hidden] { display:none; }
+.ff-savebar button svg { width:16px; height:16px; display:block; }
+.ff-savebar button:hover { background:var(--bg); color:var(--text); }
+.ff-savebar button:disabled { opacity:.6; cursor:default; }
+.topbar .ff-discard[hidden] { display: none; }
 /* Output pane: refresh overlay shown when the YAML is edited but not re-run. */
 .pane.output { position: relative; }
 /* Greyed as a "stale" cue, but still interactive — the resize/move/edit
@@ -271,34 +235,6 @@ html, body { margin: 0; padding: 0; height: 100%;
 .ff-diff { position: fixed; top: 44px; left: 0; right: 0; bottom: 0; z-index: 40;
   display: flex; flex-direction: column; background: var(--panel); }
 .ff-diff[hidden] { display: none; }
-.ff-diff-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
-  border-bottom: 1px solid var(--border); background: var(--bg); }
-.ff-diff-pick { flex: 0 1 340px; min-width: 0; padding: 5px 8px; font: inherit; font-size: 12.5px;
-  color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
-.ff-diff-icon { display: inline-flex; padding: 5px; border: 0; border-radius: 4px;
-  background: none; color: var(--muted); cursor: pointer; }
-.ff-diff-icon svg { width: 15px; height: 15px; }
-.ff-diff-icon:hover { color: var(--text); background: var(--panel); }
-#ff-diff-close { margin-left: auto; }
-.ff-diff-stats { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
-.ff-diff-stats:not(.is-same) { color: var(--text); }
-.ff-diff-restore { padding: 5px 10px; font: inherit; font-size: 12.5px; border-radius: 4px;
-  border: 1px solid var(--accent); background: none; color: var(--accent); cursor: pointer; }
-.ff-diff-restore:hover { background: var(--accent); color: #fff; }
-.ff-diff-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
-.ff-diff-body .cm-mergeView { height: 100%; overflow: auto; }
-.ff-diff-body .cm-mergeViewEditor + .cm-mergeViewEditor { border-left: 1px solid var(--border); }
-/* Removed (left) red, added (right) green — the whole line soft, the changed
-   words stronger. From the theme, so both read in light and dark. */
-.ff-diff-body .cm-merge-a .cm-changedLine, .ff-diff-body .cm-deletedChunk { background: var(--diff-del-line); }
-.ff-diff-body .cm-merge-b .cm-changedLine { background: var(--diff-add-line); }
-.ff-diff-body .cm-merge-a .cm-changedText { background: var(--diff-del-word); text-decoration: none; }
-.ff-diff-body .cm-merge-b .cm-changedText { background: var(--diff-add-word); text-decoration: none; }
-.ff-diff-body .cm-changeGutter { width: 3px; padding: 0; }
-.ff-diff-body .cm-merge-a .cm-changedLineGutter { background: var(--error); }
-.ff-diff-body .cm-merge-b .cm-changedLineGutter { background: #2ea043; }
-.ff-diff-body .cm-collapsedLines { color: var(--muted); background: var(--bg);
-  font-size: 12px; padding: 4px 12px; cursor: pointer; }
 #output { padding: 16px; }
 /* The output pane scrolls vertically only. Filter-indicator tooltips escape
    their cells (cells are overflow:visible) and, while hidden, still reserve
@@ -337,6 +273,13 @@ pre.error { color: var(--error); white-space: pre-wrap; font-size: 12px; }
   border-radius: 4px; font-size: 13px; font-weight: 500; cursor: pointer;
 }
 .chat-send:disabled { opacity: 0.6; cursor: not-allowed; }
+/* A new conversation: a plus, shown once there's one to leave. */
+.chat-new { display: inline-flex; align-items: center; align-self: flex-end; padding: 7px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--panel);
+  color: var(--muted); cursor: pointer; }
+.chat-new svg { width: 15px; height: 15px; }
+.chat-new:hover { color: var(--text); background: var(--bg); }
+.chat-new[hidden] { display: none; }
 .chat-notice { padding: 12px 14px; font-size: 12px; color: var(--muted); }
 .chat-notice code { background: var(--bg); padding: 1px 4px; border-radius: 3px; }
 /* Edit-chart modal (editor-only). */

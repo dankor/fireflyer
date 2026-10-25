@@ -104,7 +104,8 @@ Parquet in object storage with efficient (pushdown) scans — so "only CSV" and
 formula language — including per-calc row-level expressions, derived ratios and
 calculated columns. None relaxes the rest: no auth beyond the portal's simple
 login, no multi-user, no caching, no SQL/joins, and calcs stay an expression
-language — no `case`/string ops, and `str2dt()` is the only function.
+language — no `case`/string ops, and `str2dt()` and `to_number()` are the only
+functions.
 
 ---
 
@@ -299,7 +300,8 @@ datasets:           # optional; inline CSV (see Datasets). Kept last by
 * `description` — optional text: what the dashboard is for. Part of the
   definition, like `name` (stored in the YAML, never a database column). The
   editor shows it when you click the name — editable, except read-only in view
-  mode — and the dashboards list as an ⓘ tooltip. Anything but text is rejected.
+  mode — and the dashboards list as a small line under its name. Anything but
+  text is rejected.
 * `calcs` — optional. Named aggregations a chart references by key (see
   **Calcs**).
 * `charts` — mapping of chart id → chart config. Any chart may carry an
@@ -345,8 +347,8 @@ datasets:
 ```
 
 A dataset's description — this, or a managed dataset's from the store — shows
-as an ⓘ beside its name in the datasets list and in every chart's filter panel,
-and in the box that opens when you click its name on its own page.
+as a small line under its name in the datasets list and on its own page's title
+(where clicking the title edits it), and as an ⓘ in every chart's filter panel.
 
 The first line is the header, the rest ordinary rows. The block holds **CSV and
 nothing else** — no paths, no URIs; a single line is rejected, since it is
@@ -382,12 +384,108 @@ chart's `dataset` is taken as a Parquet path/URI directly.
 inline data neither pins a stored dataset against deletion nor wants renaming
 when one moves, so the portal's delete-guard and cascade-rename skip it.
 
-The dataset entity (Parquet + a small YAML metadata sidecar: schema, row count,
-description, delimiter, author) lives in an `ObjectStore` — a local folder for
-dev/tests, S3-compatible **Garage** for portal runtime. Managed in the portal's
-**Datasets** gallery tab (upload / preview / rename-with-cascade /
-guarded-delete). See **Portal mode** and `fireflyer/datasets.py` /
-`fireflyer/storage.py`.
+A managed dataset's files live in an `ObjectStore` — a local folder for
+dev/tests, S3-compatible **Garage** for portal runtime — and are managed in the
+**Datasets** gallery tab (upload / column mapping / versions /
+rename-with-cascade / guarded-delete). See **Portal mode** and
+`fireflyer/datasets.py`, `fireflyer/column_map.py`, `fireflyer/storage.py`.
+
+### Versions and column mapping
+
+A managed dataset is **versioned**, `major.minor` — `orders:3.4`:
+
+* Every **upload** is a new **major**, and its original file is kept
+  (`datasets/<name>/raw/<major>.csv`).
+* The **minor** counts changes to the **column mapping** — one counter for the
+  dataset, never reset by an upload (`datasets._next_minor`). A new upload keeps
+  the minor when the mapping it carries forward is unchanged (1.3 → 2.3) and
+  takes the next one when it changed (new columns: 2.4); saving a mapping is the
+  next minor, computed again from the latest major's original. So the minor
+  names a **mapping revision**, and compare lists revisions (`#3`), not every
+  version — an upload that kept the mapping has nothing to diff.
+* Only the **latest** computed Parquet is kept (`datasets/<name>/data.parquet`) —
+  the one charts read. Charts always read it: a chart names a dataset, never a
+  version. Older versions keep their mapping, so any two can be compared.
+* A major can be **deleted**, with all its minors and its original — never the
+  one in use, nor one still building.
+
+**The column mapping** (`column_map.py`) lists the columns the dataset has —
+the ones charts see — each with a **formula** over the uploaded columns. An
+upload is read with **every column as text** — a CSV says nothing about types,
+and guessing turns `007` into `7` — and the formulas make it what it should be.
+They're the calc grammar (`+ - * /`, `str2dt()`, `to_number()`; see **Calcs**),
+so a column can be renamed, computed from several, or left out. There is **no
+type to pick**: a column's type is what its formula gives — text as uploaded, a
+number from `to_number()` (whole numbers stay integers), a date from
+`str2dt()`. It is YAML, so it's edited by hand as easily as through a form:
+
+```yaml
+columns:
+  id:
+    formula: to_number(id)
+  order_status:          # renamed: a new key over the old column
+    formula: status
+  total:                 # computed
+    formula: to_number(unit_price) * to_number(qty)
+```
+
+A column's key is its name (any script, written as it is); `formula` defaults to
+the column of that name, and `name: formula` is the short form. Columns appear
+in the order written; an uploaded column that isn't mentioned isn't in the
+dataset. The dataset page shows each column's type — read from the built data —
+with its first five values; its edit form is a name and a formula per column (✕
+drops one, ＋ adds one). A **rename** is the same formula under a new key. A new
+upload **carries the mapping forward**: columns whose formulas still find what
+they read are kept, columns new in the upload arrive as they are, and one
+dropped before stays dropped. Mappings saved before formulas (a `type:` per
+uploaded column) read as today's: a numeric column becomes
+`to_number(<column>)`, a renamed one keeps its name.
+
+**Service columns.** `service: true` on a column marks it as part of the dataset
+but never for dashboards:
+
+```yaml
+columns:
+  row_key:
+    formula: row_key
+    service: true
+```
+
+It's built like any column — so a bad formula on it still fails the build — and
+kept in the version's schema, shown on the dataset's page (a crossed-out eye
+beside its name, with its formula, type and values; a toggle in the edit form).
+But it's **left out of the Parquet charts read** and out of `Dataset.columns`,
+which is what dashboards' column pickers, autocomplete and the assistant are
+offered: no chart can name it (one that does gets "column not found"), and
+nothing suggests it.
+
+**Builds run in the background.** Saving a mapping or uploading a file only
+records the new version (`create` / `replace` / `remap` with `build=False`);
+`DatasetStore.build` computes it with Polars while the request has already
+returned, and charts keep reading the previous Parquet until it's done. A value
+that won't read as its type **fails** the build — the error names the column, how
+many values and one of them (a value `to_number()` can't read, arithmetic on text
+not wrapped in it) — the version is dropped, and the previous one stays
+in use with the error recorded for the page to show. A newer edit made before a
+build starts simply replaces the version waiting for it.
+
+**Renamed columns follow into dashboards.** When a build renames a column, every
+dashboard using the dataset is rewritten (`dashboard.rename_column_refs`) — only
+where a column can be named: the charts on that dataset (`x`, `y`, `column`,
+`lat`, `lng`, the `columns` / `sort` lists, filters) and that dataset's calcs
+(formulas, filters). Titles, comments and filter *values* are never touched; a
+dashboard carrying an inline dataset of the same name isn't about the managed
+one, so it's left alone.
+
+**Where the record lives.** Everything about a dataset but its files — name,
+description, delimiter, author, every version with its mapping and output
+schema — is **one YAML document**, kept by a catalog: as
+`datasets/<name>/dataset.yaml` beside its files in local mode (`ObjectCatalog`),
+in a `datasets` table of the portal's database in portal mode (`SqlCatalog`).
+Datasets from before versions (`<name>.parquet` + `<name>.yaml`) become version
+1.0 the first time the store opens them, their old guessed number columns kept
+numbers (`to_number(<column>)`), so dashboards read them as before. A dataset name can't contain `/`
+or `\` or start with a dot: each lives in its own folder.
 
 ## Calcs
 
@@ -473,8 +571,11 @@ transform as well as relabel (`amount: {formula: amount * 2}` reads the raw
 column and materializes over it).
 
 All three formula kinds allow `+ - * /`, parentheses and numeric literals — the
-grammar is identical; only the leaf meaning differs (column vs calc) — plus
-exactly one function:
+grammar is identical; only the leaf meaning differs (column vs calc) — plus two
+functions. **`to_number(<expr>)`** reads text as a number: spaces trimmed, an
+empty cell missing, anything else that isn't a number null (a dataset mapping,
+which uses it to make a column numeric, checks first and fails the build naming
+the column and a bad value). And:
 
 **`str2dt(<column>, <pattern>)`** parses a text (or integer) column into a real
 `Date`/`Datetime`, which is what lets a `YYYYMMDD` string column be an axis. The
@@ -539,8 +640,8 @@ against a dashboard's `calcs:` block. See `fireflyer/calcs.py`.
 
 This is an **owner-approved extension** to the count-only MVP aggregation — it
 unlocks ratios, conditional aggregates and calculated columns, but stays a tiny
-expression language, not SQL: no joins, no `case`/string ops, and `str2dt()` is
-the only function.
+expression language, not SQL: no joins, no `case`/string ops, and `str2dt()` and
+`to_number()` are the only functions.
 
 ## Charts section
 
@@ -604,6 +705,39 @@ usable and it's confined to editor support:
   chart's YAML block is rewritten; every other chart, comment, and blank line is
   preserved byte-for-byte. Comments inside the edited block are regenerated. The
   whole document is re-validated with `Dashboard.from_yaml` before it's accepted.
+
+### Charts read only the columns they declare
+
+`PARAMS` is also how a chart says **which columns it reads**, and the only way it
+gets any. Every `Param` class declares what its value reads (`reads`, one of
+`params.READS`):
+
+| `reads` | the value | reads |
+|---|---|---|
+| `none` | a title, a number, a choice, `sort` | nothing |
+| `column` | a column name (`ColumnParam`) | that column |
+| `columns` | a list of column names | those — **every column** when left empty and the chart has no calcs (a raw table) |
+| `calc` / `calcs` | calc key(s) | each calc's formula and filter columns (a derived calc: its aggregates', in turn) |
+| `filters` | a filter list | each filter's column |
+
+The base `Param` leaves `reads` unset on purpose, and `ListParam` takes it as a
+required argument, so a new widget can't read a column without saying so.
+`params.columns_read(PARAMS, values, calcs)` turns a chart's values into the
+column names it reads, and a chart reads its data **only** through
+`scan.scan_chart(self)`, which hands it a frame of exactly those columns (column
+calcs included, since they're columns once attached). A column a chart uses
+without declaring isn't there: the render fails at once with "column not
+found", instead of the chart quietly reading more than it says.
+
+That's what lets anything ask what a chart reads and get the true answer:
+`Dashboard.columns_used(yaml, dataset)` is the same declarations over every chart
+on the dataset, with column calcs traced to the dataset columns behind them
+(`CalcSet.dataset_columns`; an overlay counts as the column it relabels), and
+`Dashboard.uses(yaml)` lists a dashboard's `(dataset, column)` pairs — what the
+portal indexes (see **Portal mode → What each dashboard reads**). A new chart
+gets all of it from its `PARAMS`; `tests/test_chart_columns.py` holds every chart
+to it (each param declares `reads`; no chart reads Parquet but through
+`scan_chart`; a chart is handed exactly its columns).
 
 New layout items are added the same way: hovering the editor's left gutter
 reveals **"+" buttons**. The per-row one adds a chart to that row (the add
@@ -754,12 +888,24 @@ Editor gestures (editor-only, gated by `editing`):
   **forced rename**: give it a real name, or cancel (Esc / ✕ / blur / keeping the
   default) which **undoes the add**.
 * **Rename** — inline, exactly like a header (focus mode, Enter/Esc).
-* **Move** — drop the tab into any between-rows slot (reuses the between-row
-  strips, like a header/separator move); it repositions the tab's boundary,
-  reordering the tabs and reassigning the rows that fall under it. You can
-  **switch tabs during the move** (the move stays live, like a cross-tab chart
-  move) to reach a row in another tab. The **first tab has no move** — moving its
-  boundary would orphan the rows above it.
+* **Move** — two kinds of drop, once there are two or more tabs:
+  * **Swap places** — the tab bar lights a slot before, between and after the
+    tabs (none beside the moved tab: dropping there would change nothing).
+    Dropping on one moves the tab **with all its rows** to that place — no row
+    changes tabs, so this is how to reorder tabs, and it works for the **first
+    tab** too. Blank lines between tabs stay between tabs; comments and
+    formatting inside a tab move with it (`reorder_tab`).
+  * **Move the boundary** — drop the tab into any between-rows slot (reuses the
+    between-row strips, like a header/separator move); only the tab's key line
+    moves, so the rows that then fall under it become its content. You can
+    **switch tabs during the move** (the move stays live, like a cross-tab chart
+    move) to reach a row in another tab. Not for the **first tab** — moving its
+    boundary would orphan the rows above it, so its strips are hidden while it
+    moves.
+  A gap is addressed by layout-item index (`k`: above item k, in k's tab) or as
+  `after:k` (below item k, still in k's tab) — the end of a tab and the top of
+  the next are the same place in the item list but not in the file, where the
+  next tab's key sits between them.
 * **Delete** — a non-first tab merges its rows into the previous tab; deleting the
   **first** tab dissolves **all** tabs back to a flat list (the confirm lists the
   tabs being removed). The first tab's delete button carries a distinct
@@ -769,8 +915,8 @@ Editor gestures (editor-only, gated by `editing`):
   tab dissolves that tab.
 
 Surgical support lives in `config_edit.py` (`add_first_tab`, `insert_tab`,
-`set_tab_text`, `move_tab`, `delete_tab`), each a line edit on the mapping
-re-validated through `Dashboard.from_yaml`.
+`set_tab_text`, `reorder_tab`, `move_tab`, `delete_tab`), each a line edit on the
+mapping re-validated through `Dashboard.from_yaml`.
 
 ## Complete example
 
@@ -957,7 +1103,7 @@ New routes, all gated behind the portal flag and addressing dashboards by
 **UUID**:
 
 * `GET /` — the gallery: a **table** of stored dashboards (name, author, last
-  updated) with per-row **Edit / Clone / Remove** actions and a **+ New
+  updated) with per-row **Clone / Remove** actions (the name opens it) and a **+ New
   dashboard** button. New and Clone each prompt for a name in a small modal
   (native `<dialog>`).
 * `POST /new` — create a **blank** dashboard with the given name (a valid but
@@ -1006,6 +1152,28 @@ the core install and `pip install -e ".[test]"` never require a database. Store
 logic and the gallery HTML are pure functions in `portal.py` (not `app.py`), so
 they unit-test without the web stack — the tests use in-memory sqlite and never
 touch a live database, the same rule the AI-assistant tests follow.
+
+## What each dashboard reads
+
+The overviews say what's tied to what: the dashboards list links each dashboard's
+datasets, the datasets list each dataset's dashboards, and a dataset's page, per
+column, the dashboards whose charts read it (its Dashboards column). The delete-guard asks
+the same question. Rather than parse every dashboard on every page, the store
+keeps an **index**: `Dashboard.uses(yaml)` — `(dataset, column)` pairs from what
+the charts declare (**Charts read only the columns they declare**) — written on
+create and save, dropped on delete. Per managed dataset there's a `(name, "")`
+pair for the dataset itself, then one per column, or `(name, "*")` when a chart
+reads every column (a raw table). Inline datasets aren't listed: they're part of
+the dashboard, not something it depends on.
+
+* **Portal**: a `dashboard_uses (dashboard_id, dataset, column_name)` table in
+  both SQL stores. Each indexed dashboard also has a `('', '')` row, so a
+  dashboard that reads nothing is told apart from one not indexed yet; one from
+  before the index is indexed the first time the index is read.
+* **Local paths mode**: `<FIREFLYER_DATA>/<path>/uses.json`. The dashboard files
+  are yours and change outside the app (an edit, a `git pull`), so each entry
+  keeps its file's modification time: a changed or new file is indexed again
+  when the index is read, a deleted one drops out.
 
 ## Version history
 
@@ -1059,9 +1227,24 @@ for the list pages); in local paths mode it, like the dashboard editor, carries
 the path dropdown on the right, so the selected-item pages are consistent (portal
 detail is back-only).
 The Datasets tab manages datasets (see the
-**Datasets** section above): upload a CSV (name, description, delimiter) →
-converted to Parquet and stored; a detail view shows the schema (per-column type
-icon) and a data preview. A dataset **can't be
+**Datasets** section above, and **Versions and column mapping**): upload a CSV
+(name, description, delimiter) → version 1.0, built in the background; the list
+shows each dataset's version, its description under the name, and — as its
+last column — links to the dashboards reading it (the dashboards list likewise
+links each dashboard's datasets; one that isn't uploaded shows dashed). A
+dataset's page leads with the **columns**, in four modes as the dashboard editor
+has its own — **view** (each column's name, type and its first five distinct
+uploaded values as small labels — enough to see what a column holds, so the page
+carries no separate data preview — and, per column, the dashboards whose charts
+read it: a **Dashboards** column, from the index in **What each dashboard reads**;
+the header filters them — a type checkbox list, a name search, a dashboards
+checkbox list — and a click on a value shows it whole, selectable, with a copy
+button), **edit** (a name and a formula per column, a service toggle, ✕ / ＋),
+**code** (the mapping as YAML, in the same CodeMirror editor) and **compare** (two
+mapping revisions side by side, with restore and step older/newer). Its
+**version chip** opens the history,
+grouped by upload: a check marks the version in use, a version opens the
+comparison, and an upload not in use can be deleted. A dataset **can't be
 removed** while a dashboard references it (the trash shows the count and lists
 those dashboards), and **renaming cascades** — every dashboard's `dataset:`
 refs are rewritten (`Dashboard.dataset_names()` + `rename_dataset_ref()`). The

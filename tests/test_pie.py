@@ -419,3 +419,28 @@ def test_pie_tooltips_are_opaque_and_sized_to_their_text(orders_parquet):
         assert "backdrop-filter" not in block, rule
         assert "min-width" not in block, rule
         assert "width: max-content;" in block, rule
+
+
+def test_the_centre_total_follows_the_calcs_format(orders_parquet):
+    """A calc with a `format` is shown in it — the compact short form is only
+    for calcs that don't say."""
+    import fireflyer as ff
+
+    yaml = f"""name: T
+calcs:
+  {orders_parquet}:
+    avg_amount: {{agg: avg, formula: amount, format: '0.00'}}
+    total_amount: {{agg: sum, formula: amount}}
+charts:
+  a: {{type: pie, dataset: {orders_parquet}, title: A, column: status, calc: avg_amount}}
+  b: {{type: pie, dataset: {orders_parquet}, title: B, column: status, calc: total_amount}}
+layout:
+  - ["@30", "a", "b"]
+"""
+    dash = ff.Dashboard.from_yaml(yaml)
+    import re
+    centre = lambda cid: re.search(
+        r'class="fireflyer-pie-total"[^>]*>(?:<title>[^<]*</title>)?([^<]*)<', dash.render_cell(cid, cf_tokens=[])
+    ).group(1)
+    assert re.fullmatch(r"\d+\.\d\d", centre("a")), centre("a")
+    assert "." not in centre("b") or centre("b").endswith("k")

@@ -18,7 +18,7 @@ from fireflyer.params import (
     CalcParam,
     TextParam,
 )
-from fireflyer.scan import scan
+from fireflyer.scan import scan_chart
 
 # OpenStreetMap raster tiles. The tile.openstreetmap.org server is okay for
 # light personal use as long as we keep request volume low and display the
@@ -222,7 +222,7 @@ class Map:
         weight, calc_filters, fmt = self._weight()
         # Lazy scan: only lat/lng (+ calc / filter columns) are read from the
         # Parquet. Chart filters and the calc's own filters both narrow rows.
-        lf = scan(self.dataset, self._resolve, self._calcs)
+        lf = scan_chart(self)
         schema = lf.collect_schema().names()
         preds = filters_mod.predicates(self.filters, schema) + filters_mod.predicates(
             calc_filters, schema

@@ -10,6 +10,7 @@ so a CSS or JS edit needs no server restart (uvicorn's `--reload` only watches
 `.py` files).
 """
 
+import json
 from pathlib import Path
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -45,3 +46,14 @@ def favicons() -> str:
     """The tab icon every page links: `favicon.svg`, the logo redrawn to read
     at 16px (see its comment). SVG only — every current browser takes one."""
     return f'<link rel="icon" type="image/svg+xml" href="{_url("favicon.svg")}">'
+
+
+def import_map(*own: str) -> str:
+    """The `<script type="importmap">` a page with code views needs: every
+    vendored package (static/vendor/importmap.json, written by
+    scripts/vendor.py) plus our own modules `own`, each as `fireflyer/<name>`
+    at its versioned URL. One URL per package, so each is loaded once —
+    CodeMirror's type checks fail if two copies of @codemirror/state meet."""
+    imports = json.loads((STATIC_DIR / "vendor" / "importmap.json").read_text())
+    imports.update({f"fireflyer/{name.removesuffix('.js')}": _url(name) for name in own})
+    return '<script type="importmap">\n' + json.dumps({"imports": imports}, indent=1) + "\n</script>"

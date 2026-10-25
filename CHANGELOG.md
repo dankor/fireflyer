@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-25
+
+### Added
+
+- **Service columns.** A dataset column can be marked `service: true` (a
+  crossed-out eye in the edit form): it stays in the dataset — on its page,
+  with its formula, type and values — but is left out of the data charts read
+  and of the columns dashboards are offered, so no dashboard can use it.
+- **Which dashboards use each column.** A dataset's page lists, per column,
+  the dashboards whose charts read it (a Dashboards column; a raw table reads them all).
+  Its columns filter by name (search), by type (an icon per type present)
+  and by dashboard (any, not used, or one).
+- **Charts declare the columns they read, and read only those.** Every chart
+  parameter says what its value reads — nothing, a column, a list of columns, a
+  calc (its formula's and filters' columns), calcs, filters — and a chart is
+  handed only the columns its parameters declare, so using an undeclared one
+  fails at once. A new chart gets this for free from its parameters; a test
+  holds every chart to it.
+- **What each dashboard reads is indexed on save** — `(dataset, column)` pairs
+  in a `dashboard_uses` table in portal mode, a `uses.json` beside a path's data
+  locally (re-indexed when a dashboard file changes on disk) — so the dataset
+  and dashboard overviews are lookups rather than a parse of every dashboard.
+- **The lists show what's tied to what.** The dashboards list has a Datasets
+  column linking each dataset a dashboard reads (one that isn't uploaded shows
+  dashed, unlinked); the datasets list a Dashboards column linking each
+  dashboard reading it.
+- **Tabs swap places.** Moving a tab lights slots in the tab bar between the
+  other tabs; dropping there moves the tab with all its rows. The first tab
+  can move too now. (Dropping on a between-row strip still moves just the
+  tab's boundary.)
+- **The assistant's conversation survives a reload.** It's kept in the
+  browser per dashboard for seven days after its last message, then dropped;
+  a ＋ beside the input starts a new one.
+- **Versioned datasets.** A dataset is `name:major.minor`. Every upload is a
+  new major, and its original file is kept; the minor counts changes to the
+  column mapping — one counter that never resets, so an upload keeps it
+  (1.3 → 2.3) unless the mapping it carries changed (new columns: 2.4), and a
+  saved mapping is the next one. Only the latest computed Parquet is kept — the
+  one charts read. The version chip beside the name opens the history, grouped
+  by upload (a check marks the version in use); an upload other than the one
+  in use can be deleted, with all its versions. Compare lists the mapping's
+  revisions (`#3`), not every version.
+- **Column mapping: each column a formula.** A dataset's columns switch
+  between view, edit (a form: a name and a formula per column — rename, drop,
+  add), code (the mapping as YAML) and compare (two versions side by side).
+  Formulas use the calc grammar over the uploaded columns, so a column can be
+  computed (`to_number(price) * to_number(qty)`). A column's type isn't picked:
+  it's what its formula gives — text as uploaded, a number from the new
+  `to_number()` (whole numbers stay integers), a date from `str2dt()` — and is
+  shown in view mode with its first five values. A new upload carries the
+  mapping forward.
+- **Built in the background.** Saving a mapping or uploading a file returns at
+  once; the new version is computed with Polars behind the scenes while charts
+  keep reading the previous one. A value that won't read as its type fails the
+  build — the message names the column, how many values and one of them — and
+  the previous version stays in use.
+- **Renamed columns follow into dashboards.** Renaming a column rewrites every
+  dashboard using it — only where a column is named (`x`, `column`, `columns`,
+  `sort`, filters, the dataset's calcs), never a title or a comment.
+
+### Changed
+
+- Compare mode (a dashboard's and a dataset's) has ↓ / ↑ to step both sides
+  one version older or newer — v3 ⇄ v4 becomes v2 ⇄ v3 — each shown only when
+  that step exists.
+- The theme switch is in the topbar on every page — the gallery's too, which
+  now follows it instead of only the OS — rather than inside the profile menu
+  in portal mode. One choice carries across pages.
+- Save is a floppy-disk icon (a check for a moment once saved), and a ✕
+  before it discards — one quiet segmented group, like the mode switch's
+  resting segments — on the dashboard editor and a dataset's page, shown only
+  with unsaved changes; Discard puts the last save back, after asking.
+- In the dashboard's code editor, the `calcs` chip lists every calc as
+  `dataset / calc` and the `datasets` chip the inline datasets, like `charts`
+  and `layout` list theirs; picking one jumps to it. A chart's `title` and a
+  calc's `name` are the items' tooltips.
+- **Uploads read every column as text** until the mapping gives it a type —
+  no more guessing that turns `007` into `7`. Datasets from before versions
+  become version 1.0 with their guessed types kept, so dashboards read them as
+  before.
+- A dataset's YAML — details, versions and mappings — lives in the portal's
+  database in portal mode, and as `datasets/<name>/dataset.yaml` beside its
+  files locally.
+- The Datasets list shows each dataset's version.
+
+### Fixed
+
+- In a tabbed layout, dropping a chart (or adding a row, header or separator)
+  below a tab's last row puts it at the end of that tab — it used to land at
+  the top of the next one.
+- A pie's centre total is shown in its calc's `format` (`0.00`), as its
+  slices are; the compact form (`1.4k`) is only for calcs without one.
+
 ## [0.18.0] - 2026-10-16
 
 ### Added
@@ -1025,7 +1118,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/dankor/fireflyer/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/dankor/fireflyer/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/dankor/fireflyer/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/dankor/fireflyer/compare/v0.15.0...v0.16.0

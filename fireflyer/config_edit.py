@@ -592,15 +592,29 @@ def _item_line_indices(lines: list[str], dash_i: int) -> list[int]:
 
 
 def _insert_at(lines: list[str], dash_i: int, before) -> int:
-    """Line index to insert a new layout item before. `before` is an index into
-    the full item list (rows + headers + separators), or "end" to append."""
+    """Line index to insert a new layout item at. `before` is an index into the
+    full item list (rows + headers + separators) to insert above, "after:<k>" to
+    insert right below item k, or "end" to append."""
     items = _item_line_indices(lines, dash_i)
+    return _gap_line(items, before, (items[-1] + 1) if items else (dash_i + 1))
+
+
+def _gap_line(items: list[int], before, end: int) -> int:
+    """Where a `before` gap is, given the item line indices.
+
+    Two forms, because in a **tabbed** layout one number can't name every gap:
+    the gap below tab A's last item and the gap above tab B's first item are
+    the same place in the item list, but not in the file — tab B's key sits
+    between them. `k` means above item k (so in k's tab: the top of tab B);
+    `after:k` means below item k (still in k's tab: the end of tab A)."""
     if before in ("end", None, ""):
-        return (items[-1] + 1) if items else (dash_i + 1)
-    k = int(before)
-    if 0 <= k < len(items):
-        return items[k]
-    return (items[-1] + 1) if items else (dash_i + 1)
+        return end
+    text = str(before)
+    if text.startswith("after:"):
+        k = int(text[len("after:"):])
+        return items[k] + 1 if 0 <= k < len(items) else end
+    k = int(text)
+    return items[k] if 0 <= k < len(items) else end
 
 
 def _insert_layout_row(text: str, cid: str, before) -> str:
@@ -852,6 +866,50 @@ def set_tab_text(text: str, index: int, new_name: str) -> str:
     indent = ln[:len(ln) - len(ln.lstrip())]
     lines[keys[index]] = f"{indent}{_yaml_inline_str(new_name)}:"
     result = "\n".join(lines)
+
+    from fireflyer.dashboard import Dashboard
+
+    Dashboard.from_yaml(result)
+    return result
+
+
+def reorder_tab(text: str, index: int, to: int) -> str:
+    """Move the `index`-th tab — its key and every row under it, as one block —
+    to before tab `to` (or after the last tab when `to` is the tab count).
+    Unlike `move_tab`, no row changes tabs: the tabs swap places, content and
+    all, so the first tab can move too. Blank lines between tabs stay between
+    tabs; everything inside a block keeps its formatting and comments."""
+    lines = text.split("\n")
+    di = _section_i(lines, "layout")
+    keys = _tab_key_line_indices(lines, di)
+    n = len(keys)
+    if not (0 <= index < n) or not (0 <= to <= n):
+        raise ConfigEditError(f"no tab {index if not 0 <= index < n else to}")
+    if to in (index, index + 1):
+        return text                                   # already there
+    end = _section_end(lines, di)
+    # Each block runs from its key to the next key; trailing blank lines are
+    # the gap between tabs, not part of the tab.
+    blocks, gaps = [], []
+    for k, start in enumerate(keys):
+        stop = keys[k + 1] if k + 1 < n else end
+        block = lines[start:stop]
+        tail = 0
+        while len(block) - tail > 1 and not block[len(block) - 1 - tail].strip():
+            tail += 1
+        blocks.append(block[: len(block) - tail])
+        gaps.append(block[len(block) - tail:])
+    between = next((g for g in gaps[:-1] if g), [])     # how tabs were spaced
+    order = list(range(n))
+    order.pop(index)
+    order.insert(to if to < index else to - 1, index)
+    body = []
+    for pos, k in enumerate(order):
+        body += blocks[k]
+        if pos < n - 1:
+            body += between
+    body += gaps[-1]                                     # what led to the next key
+    result = "\n".join(lines[: keys[0]] + body + lines[end:])
 
     from fireflyer.dashboard import Dashboard
 
@@ -1175,11 +1233,7 @@ def move_to_new_row(text: str, cid: str, before) -> str:
 
     # A lone chart fills its new row, so the width is irrelevant — emit `:1`.
     new_row = f'{indent}- ["@30", "{cid}:1"]'
-    if before in ("end", None, ""):
-        anchor_j = len(body)
-    else:
-        k = int(before)
-        anchor_j = item_pos[k] if 0 <= k < len(item_pos) else len(body)
+    anchor_j = _gap_line(item_pos, before, len(body))
 
     new_body = []
     for j, ln in enumerate(body):

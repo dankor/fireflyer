@@ -1,3 +1,28 @@
+// The theme: Auto / Light / Dark, one choice for every page (the editor reads
+// the same `ffTheme`). Applied now, from <head>, so the page never paints in the
+// wrong one; the switch in the topbar is wired once the page has loaded.
+(function () {
+  var MODES = ['auto', 'light', 'dark'];
+  var mode = 'auto';
+  try { mode = localStorage.getItem('ffTheme') || 'auto'; } catch (e) { /* storage off: auto */ }
+  if (MODES.indexOf(mode) < 0) mode = 'auto';
+  function apply() {
+    if (mode === 'auto') delete document.documentElement.dataset.ffTheme;
+    else document.documentElement.dataset.ffTheme = mode;
+    document.querySelectorAll('#theme-switch button').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+    try { localStorage.setItem('ffTheme', mode); } catch (e) { /* not kept */ }
+  }
+  apply();
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('#theme-switch button').forEach(function (b) {
+      b.addEventListener('click', function () { mode = b.dataset.mode; apply(); });
+    });
+    apply();
+  });
+})();
+
 // Gallery chrome (dashboards + datasets lists) — a dev tool, exempt from the
 // no-JS rule. Native <dialog>s; each opener fills its dialog from the clicked
 // row's data-* attributes.
@@ -10,14 +35,6 @@ function openClone(btn){
   d.showModal(); input.select();
 }
 function openUpload(){ document.getElementById('upload-dialog').showModal(); }
-function openDsRename(btn){
-  var f = document.getElementById('ds-rename-form');
-  f.action = '/datasets/' + encodeURIComponent(btn.dataset.name) + '/rename';
-  var i = document.getElementById('ds-rename-name');
-  i.value = btn.dataset.name;
-  document.getElementById('ds-rename-desc').value = btn.dataset.desc || '';
-  document.getElementById('ds-rename-dialog').showModal(); i.select();
-}
 
 // A dataset's name and description, as a dashboard's in the editor: the
 // topbar shows both (the description's first line, small, under the name), and
@@ -119,3 +136,17 @@ document.addEventListener('DOMContentLoaded', function(){
       + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   });
 });
+
+// The topbar's dropdowns — path, profile, a dataset's versions — are native
+// <details>, which stay open until their own summary is clicked again. Close
+// one on a click anywhere outside it, or on Esc, so opening anything else (the
+// title card, another dropdown) never leaves two open at once.
+(function () {
+  var MENUS = 'details.ff-pathdd[open], details.ff-profile[open], details.ds-history[open]';
+  document.addEventListener('mousedown', function (e) {
+    document.querySelectorAll(MENUS).forEach(function (d) { if (!d.contains(e.target)) d.open = false; });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') document.querySelectorAll(MENUS).forEach(function (d) { d.open = false; });
+  });
+})();

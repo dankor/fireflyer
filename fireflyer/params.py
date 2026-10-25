@@ -21,9 +21,22 @@ from dataclasses import dataclass, field
 from typing import Callable, NamedTuple
 from html import escape
 
+from fireflyer import calcs as calcs_mod
 from fireflyer import date_range
 from fireflyer import number_range
 from fireflyer import filters as filters_mod
+
+# What a param's value reads from the chart's dataset — every Param class says,
+# and `columns_read` turns a chart's values into the columns it may use. A chart
+# is handed only those (`scan.scan_chart`), so a column used without being
+# declared fails at once; that's what keeps the dataset page's per-column Dashboards true.
+#   "none"     nothing (a title, a number, a choice)
+#   "column"   the value is a column name
+#   "columns"  a list of column names — left empty, with no calcs, every column
+#   "calc"     a calc key: the columns its formula and filters read
+#   "calcs"    a list of calc keys
+#   "filters"  a filter list: each filter's column
+READS = ("none", "column", "columns", "calc", "calcs", "filters")
 
 
 # Icon buttons, matching the portal gallery's vocabulary (`web/portal.py`
@@ -72,6 +85,9 @@ class Param:
     # Surfaced as a data-attribute so the editor JS can special-case a widget
     # (e.g. the filter builder) without parsing the label.
     kind = "text"
+    # Deliberately unset here: each widget says what it reads (see READS), so a
+    # new one can't silently read columns nobody declared.
+    reads: str
 
     def __init__(self, name: str, label: str):
         self.name = name
@@ -116,6 +132,7 @@ def _options(values, current) -> str:
 
 class TextParam(Param):
     kind = "text"
+    reads = "none"
 
     def render(self, value, ctx: ParamContext) -> str:
         val = "" if value is None else str(value)
@@ -134,6 +151,7 @@ class DatasetParam(Param):
     into a dropdown of the stored dataset names."""
 
     kind = "dataset"
+    reads = "none"
 
     def render(self, value, ctx: ParamContext) -> str:
         val = "" if value is None else str(value)
@@ -152,6 +170,7 @@ class ColumnParam(Param):
     dropped. `optional` adds a blank choice, without which a column that has a
     meaning when unset (the bar's `y`) could be set but never cleared."""
     kind = "column"
+    reads = "column"
 
     def __init__(self, name: str, label: str, optional: bool = False):
         super().__init__(name, label)
@@ -177,6 +196,7 @@ class CalcParam(Param):
     `calcs:` block, managed in the calcs modal). Keeps the current value
     even when the calc list can't be read, so nothing is silently dropped."""
     kind = "calc"
+    reads = "calc"
 
     def render(self, value, ctx: ParamContext) -> str:
         choices = list(ctx.calcs)
@@ -194,6 +214,7 @@ class CalcParam(Param):
 class ChoiceParam(Param):
     """Dropdown over a fixed set of options (e.g. an aggregation)."""
     kind = "choice"
+    reads = "none"
 
     def __init__(self, name: str, label: str, choices):
         super().__init__(name, label)
@@ -213,6 +234,7 @@ class IntParam(Param):
     """Number input. `nullable` allows an empty value meaning "unset" (e.g. the
     map's auto-fit zoom), which emits nothing into YAML."""
     kind = "int"
+    reads = "none"
 
     def __init__(self, name, label, *, minimum=None, maximum=None, step=1, nullable=False):
         super().__init__(name, label)
@@ -248,6 +270,7 @@ class IntParam(Param):
 
 class BoolParam(Param):
     kind = "bool"
+    reads = "none"
 
     def render(self, value, ctx: ParamContext) -> str:
         checked = " checked" if value else ""
@@ -272,8 +295,13 @@ class ListParam(Param):
     """
     kind = "list"
 
-    def __init__(self, name: str, label: str, placeholder: str = ""):
+    def __init__(self, name: str, label: str, *, reads: str, placeholder: str = ""):
+        # A list holds columns, calcs or neither (`sort` names output columns):
+        # required, because which it is decides what the chart may read.
         super().__init__(name, label)
+        if reads not in ("columns", "calcs", "none"):
+            raise ValueError(f"list param {name!r}: reads must be columns, calcs or none")
+        self.reads = reads
         self.placeholder = placeholder
 
     def render(self, value, ctx: ParamContext) -> str:
@@ -664,6 +692,7 @@ class FilterListParam(Param):
     are added/removed client-side; each row is `filter_fields` plus a remove
     button."""
     kind = "filters"
+    reads = "filters"
 
     def _row(self, columns, column="", op="in", values=(), choices=None, types=None, extent=None) -> str:
         return (
@@ -703,3 +732,47 @@ class FilterListParam(Param):
 
     def to_yaml(self, value):
         return value or []  # empty list is dropped by the emitter
+
+
+# --- what a chart reads ------------------------------------------------------------
+
+
+def columns_read(params: list, values: dict, calcs=None) -> set[str] | None:
+    """The column names a chart with `params` and these `values` reads from its
+    dataset (column calcs count — they're columns once attached), or None for
+    every column (a list of columns left empty, with no calcs: a raw table).
+    `calcs` is the dataset's CalcSet; an inline calc (a dict, standalone use)
+    brings its own."""
+    names: set[str] = set()
+    every = False
+    has_calcs = False
+    for p in params:
+        value = values.get(p.name)
+        if p.reads == "column":
+            if value:
+                names.add(str(value))
+        elif p.reads == "columns":
+            if value:
+                names.update(str(v) for v in value)
+            else:
+                every = True
+        elif p.reads in ("calc", "calcs"):
+            keys = value if p.reads == "calcs" else [value]
+            for key in keys or []:
+                if key in (None, ""):
+                    continue
+                has_calcs = True
+                names |= _calc_columns(calcs, key)
+        elif p.reads == "filters":
+            names |= {f.column for f in filters_mod.normalize(value)}
+        elif p.reads != "none":
+            raise ValueError(f"param {p.name!r}: unknown reads {p.reads!r}")
+    return None if every and not has_calcs else names
+
+
+def _calc_columns(calcs, key) -> set[str]:
+    if isinstance(key, dict):                      # an inline calc, standalone
+        calcs, key = calcs_mod.single(key)
+    if calcs is None or key not in calcs:
+        return set()                               # unknown: its own error says so
+    return calcs.columns_of(key)

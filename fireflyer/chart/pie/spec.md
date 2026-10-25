@@ -60,8 +60,9 @@ Display category distribution as a donut.
   re-aggregated over the whole (ungrouped) dataset** — *not* the sum of the
   shown slices. So a `dcount` total is distinct-over-all (not the sum of
   per-slice dcounts), and a derived/ratio calc is recomputed at the grand
-  level. It's a short/compact figure (`1.4k`, `3m`) with the calc-formatted
-  exact number as the hover title, and reflects the current filters/crossfilter.
+  level. It's shown in the calc's own `format` when it has one (as the slices'
+  values are), else as a short/compact figure (`1.4k`, `3m`), with the exact
+  number as the hover title, and reflects the current filters/crossfilter.
   `total: false` hides it. When the calc has a `description`, hovering the
   centre shows a rich tooltip — the calc name, its description, and the exact
   total — anchored to the centre and, via CSS anchor positioning, kept outside

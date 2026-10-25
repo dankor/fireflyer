@@ -325,6 +325,43 @@ class Dashboard:
             if cfg.kwargs.get("dataset") and cfg.kwargs["dataset"] not in inline
         }
 
+    @staticmethod
+    def uses(text: str) -> list[tuple[str, str]]:
+        """What this dashboard reads, as `(dataset, column)` pairs — what the
+        dashboard stores index on save, so the datasets/dashboards overviews
+        needn't parse every dashboard to draw. Per managed dataset one `(name,
+        "")` for the dataset itself, then a pair per column its charts read, or
+        `(name, "*")` when one reads every column (a raw table)."""
+        out: list[tuple[str, str]] = []
+        for dataset in sorted(Dashboard.dataset_names(text)):
+            columns = Dashboard.columns_used(text, dataset)
+            out.append((dataset, ""))
+            out += [(dataset, "*")] if columns is None else [(dataset, c) for c in sorted(columns)]
+        return out
+
+    @staticmethod
+    def columns_used(text: str, dataset: str) -> set[str] | None:
+        """The columns of managed `dataset` this dashboard's charts read — from
+        what each chart's params declare (`params.columns_read`, the same set the
+        chart is handed, so it's exact), with column calcs traced to the dataset
+        columns behind them. None when a chart reads every column (a raw table);
+        empty when no chart uses the dataset."""
+        from fireflyer.params import columns_read
+
+        if dataset not in Dashboard.dataset_names(text):
+            return set()
+        dash = Dashboard.from_yaml(text)
+        calcs = dash.calc_sets.get(dataset)
+        used: set[str] = set()
+        for cfg in dash.chart_configs.values():
+            if cfg.kwargs.get("dataset") != dataset:
+                continue
+            names = columns_read(cfg.cls.PARAMS, cfg.kwargs, calcs)
+            if names is None:
+                return None
+            used |= calcs.dataset_columns(names) if calcs is not None else names
+        return used
+
     def _tab_context(self, active_tab: int):
         """(tabs_meta | None, clamped_active, active_items).
 
@@ -422,10 +459,12 @@ class Dashboard:
                 if self.tabs is None or ti == active_tab:
                     items.append(rendered)
             if self.tabs is not None and ti == active_tab:
-                # The active tab's trailing "+" strip appends after its last
-                # item; that's the next tab's first item index (or "end" when
-                # this is the last tab) so the new row lands in the right tab.
-                end_before = item_i if ti < len(self.tabs) - 1 else "end"
+                # The active tab's trailing "+" strip appends below its last
+                # item — `after:<that item>`, not the next item's index: that
+                # names the top of the *next* tab, below its key, and the new
+                # row would land there (see config_edit._gap_line). The last
+                # tab just appends ("end").
+                end_before = f"after:{item_i - 1}" if ti < len(self.tabs) - 1 else "end"
         return _SKELETON_TEMPLATE.render(
             css=_CSS,
             items=items,
@@ -992,6 +1031,89 @@ def rename_dataset_ref(text: str, old: str, new: str) -> str:
         r"\g<1>" + new,
         text,
     )
+
+
+def rename_column_refs(text: str, dataset: str, renames: dict[str, str]) -> str:
+    """Rewrite references to `dataset`'s renamed columns (`{old: new}`) in a
+    dashboard's YAML text — the cascade when a dataset's column mapping renames
+    one. Only where a column can be named: in the charts on that dataset (`x`,
+    `y`, `column`, `lat`, `lng`, the `columns`/`sort` lists, filters) and in that
+    dataset's calcs (formulas, filters). Titles, comments and everything else
+    stay byte-for-byte; a dashboard carrying its own inline `dataset` of that
+    name isn't about the managed one, so it's left alone."""
+    if not renames or dataset not in Dashboard.dataset_names(text):
+        return text
+    charts = (yaml.safe_load(text) or {}).get("charts") or {}
+    ids = [cid for cid, cfg in charts.items() if isinstance(cfg, dict) and cfg.get("dataset") == dataset]
+    lines = text.split("\n")
+    for top, key in [("charts", str(cid)) for cid in ids] + [("calcs", dataset)]:
+        span = _yaml_block(lines, top, key)
+        if span:
+            first, last = span
+            lines[first:last] = _rename_columns_in(lines[first:last], renames)
+    return "\n".join(lines)
+
+
+_COLUMN_VALUE = r"(\b(?:x|y|column|lat|lng)[ \t]*:[ \t]*)(['\"]?){old}\2(?=[ \t]*(?:[,}}\]#]|$))"
+_FLOW_LIST = re.compile(r"(\b(?:columns|sort)[ \t]*:[ \t]*\[)([^\]]*)(\])")
+_FORMULA = re.compile(r"(\bformula[ \t]*:[ \t]*)('[^']*'|\"[^\"]*\"|[^,}\n#]+)")
+_LIST_KEY = re.compile(r"^([ \t]*)(?:columns|sort)[ \t]*:[ \t]*(?:#.*)?$")
+
+
+def _yaml_block(lines: list[str], top: str, key: str) -> tuple[int, int] | None:
+    """Line range `[first, last)` of `key`'s block under top-level `top:`."""
+    start = next((i for i, l in enumerate(lines) if re.match(rf"{re.escape(top)}[ \t]*:", l)), None)
+    if start is None:
+        return None
+    first = indent = None
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        depth = len(line) - len(line.lstrip())
+        if depth == 0:
+            break
+        if first is None:
+            if re.match(rf"[ \t]*['\"]?{re.escape(key)}['\"]?[ \t]*:", line):
+                first, indent = i, depth
+        elif depth <= indent:
+            return first, i
+    return (first, len(lines)) if first is not None else None
+
+
+def _rename_columns_in(block: list[str], renames: dict[str, str]) -> list[str]:
+    def one_item(item: str) -> str:
+        bare = item.strip()
+        quote = bare[0] if bare[:1] in ("'", '"') else ""
+        inner = bare.strip("'\"")
+        sign = inner[0] if inner[:1] in "+-" else ""
+        name = inner[len(sign):]
+        if name not in renames:
+            return item
+        return item.replace(bare, f"{quote}{sign}{renames[name]}{quote}")
+
+    def formula(m: re.Match) -> str:
+        value = m.group(2)
+        for old, new in renames.items():
+            value = re.sub(rf"(?<![\w.]){re.escape(old)}(?![\w])", new, value)
+        return m.group(1) + value
+
+    out, list_indent = [], None
+    for line in block:
+        depth = len(line) - len(line.lstrip())
+        if list_indent is not None and line.strip().startswith("- ") and depth >= list_indent:
+            line = line[: line.index("- ") + 2] + one_item(line[line.index("- ") + 2 :])
+        else:
+            list_indent = None
+            key = _LIST_KEY.match(line)
+            if key:
+                list_indent = len(key.group(1))
+            for old, new in renames.items():
+                line = re.sub(_COLUMN_VALUE.format(old=re.escape(old)), rf"\g<1>\g<2>{new}\g<2>", line)
+            line = _FLOW_LIST.sub(lambda m: m.group(1) + ",".join(one_item(i) for i in m.group(2).split(",")) + m.group(3), line)
+            line = _FORMULA.sub(formula, line)
+        out.append(line)
+    return out
 
 
 def _resolver_from(datasets, inline: dict[str, str] | None = None):

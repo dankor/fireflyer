@@ -91,7 +91,7 @@ def _tokenize(text: str) -> list[tuple[str, int]]:
 class _Parser:
     """expr := term (('+'|'-') term)* ; term := factor (('*'|'/') factor)* ;
     factor := number | call | name | '(' expr ')' | '-' factor ;
-    call := 'str2dt' '(' name ',' <raw pattern> ')'."""
+    call := 'str2dt' '(' name ',' <raw pattern> ')' | 'to_number' '(' expr ')'."""
 
     def __init__(self, text: str, tokens: list[tuple[str, int]], resolve):
         self.text = text
@@ -162,14 +162,21 @@ class _Parser:
         raise CalcError(f"unexpected {tok!r} in formula")
 
     def _call(self, name: str) -> pl.Expr:
-        """`str2dt(<column>, <pattern>)` — the grammar's only function. The
+        """`str2dt(<column>, <pattern>)` or `to_number(<expr>)`. A str2dt
         pattern is a literal like `YYYY-MM-DD HH:mm:ssZ`, whose `-`, `:`, `+`
         and spaces are not expression syntax, so it's taken as the **raw
         source** between the comma and the closing paren rather than re-joined
         from tokens."""
+        if name == "to_number":
+            self._eat()  # '('
+            inner = self._expr()
+            if self._peek() != ")":
+                raise CalcError("missing ')' in to_number()")
+            self._eat()
+            return to_number_expr(inner)
         if name != "str2dt":
             raise CalcError(
-                f"unknown function {name!r} in formula — only str2dt() exists"
+                f"unknown function {name!r} in formula — there are str2dt() and to_number()"
             )
         self._eat()  # '('
         column = self._peek()
@@ -236,15 +243,29 @@ def _str2dt_expr(column: str, pattern: str) -> pl.Expr:
     to UTC**: `2024-06-26 17:14:03+03:00` buckets and labels as `14:14:03`."""
     if not pattern:
         raise CalcError("str2dt() needs a pattern, e.g. str2dt(order_date, YYYYMMDD)")
-    if not _PATTERN_CODE_RE.search(pattern):
-        raise CalcError(
-            f"str2dt() pattern {pattern!r} has no YYYY/YY/MM/DD/HH/mm/ss/Z token"
-        )
-    fmt = _PATTERN_CODE_RE.sub(lambda m: _PATTERN_CODES[m.group()], pattern)
+    fmt, has_time = date_pattern(pattern)
     text = pl.col(column).cast(pl.String, strict=False)
-    if any(code in pattern for code in _TIME_CODES):
+    if has_time:
         return text.str.to_datetime(fmt, strict=False)
     return text.str.to_date(fmt, strict=False)
+
+
+def to_number_expr(expr: pl.Expr) -> pl.Expr:
+    """`to_number(x)`: text read as a number — spaces trimmed, an empty cell
+    missing. A value that isn't a number becomes null here; a dataset mapping
+    checks for those first and says which (`column_map.apply`)."""
+    text = expr.cast(pl.String).str.strip_chars()
+    return pl.when(text == "").then(None).otherwise(text).cast(pl.Float64, strict=False)
+
+
+def date_pattern(pattern: str) -> tuple[str, bool]:
+    """A pattern as people write it (`YYYY-MM-DD HH:mm`) -> the strptime format
+    Polars takes, and whether it carries a time (so parses to a Datetime). Shared
+    with dataset column mappings, so a date reads the same way in both."""
+    if not _PATTERN_CODE_RE.search(pattern):
+        raise CalcError(f"date pattern {pattern!r} has no YYYY/YY/MM/DD/HH/mm/ss/Z token")
+    fmt = _PATTERN_CODE_RE.sub(lambda m: _PATTERN_CODES[m.group()], pattern)
+    return fmt, any(code in pattern for code in _TIME_CODES)
 
 
 def formula_names(text: str) -> set[str]:
@@ -406,6 +427,33 @@ class CalcSet:
                 expr, _ = compile_formula(calc.formula, pl.col)
                 lf = lf.with_columns(expr.alias(calc.key))
         return lf
+
+    def columns_of(self, key: str) -> set[str]:
+        """The names a calc reads from the (attached) frame — dataset columns,
+        or column calcs, which are columns there too: an aggregate's formula and
+        filters, a derived calc's aggregates' in turn, a column calc's formula
+        (its own key when it overlays a column of that name)."""
+        calc = self.get(key)
+        if calc.kind == "derived":
+            return set().union(*(self.columns_of(ref) for ref in formula_names(calc.formula)))
+        names = formula_names(calc.formula) if calc.formula.strip() else set()
+        return names | {f.column for f in calc.filters}
+
+    def dataset_columns(self, names: set[str]) -> set[str]:
+        """`names` (dataset columns and column-calc keys) down to the dataset
+        columns behind them — what a chart using them really reads from the
+        upload."""
+        out: set[str] = set()
+        for name in names:
+            calc = self.calcs.get(name)
+            if calc is not None and calc.is_column:
+                refs = formula_names(calc.formula)
+                # An overlay names itself: that's the dataset column it relabels.
+                out |= {name} if name in refs else set()
+                out |= self.dataset_columns(refs - {name})
+            else:
+                out.add(name)
+        return out
 
     def column_keys(self) -> list[str]:
         """The column-calc keys, in declaration order — the extra names the

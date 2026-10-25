@@ -13,9 +13,11 @@
   </button>
 </div>
 {%- endmacro -%}
-{%- macro tab_tools(tab_index, first) -%}
+{%- macro tab_tools(tab_index, first, movable) -%}
 <div class="fireflyer-chart-tools fireflyer-item-tools fireflyer-tab-tools{% if first %} fireflyer-tab-tools-first{% endif %}">
-  {%- if not first %}
+  {#- Any tab can move once there are two: dropped in the tab bar it swaps
+      places, rows and all (the first tab too). -#}
+  {%- if movable %}
   <button type="button" class="fireflyer-move-btn" data-tab-index="{{ tab_index }}" title="Move tab" aria-label="Move tab">
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 1v14M1 8h14M8 1 5.7 3.3M8 1l2.3 2.3M8 15l-2.3-2.3M8 15l2.3-2.3M1 8l2.3-2.3M1 8l2.3 2.3M15 8l-2.3-2.3M15 8l-2.3 2.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </button>
@@ -57,7 +59,7 @@
     {%- for t in tabs %}
     {%- if editing %}
     <div class="fireflyer-tab-wrap{% if t.index == active_tab %} is-active{% endif %}" data-tab-index="{{ t.index }}">
-      {{ tab_tools(t.index, t.index == 0) }}
+      {{ tab_tools(t.index, t.index == 0, tabs|length > 1) }}
       <div class="fireflyer-tab fireflyer-tab-switch{% if t.index == active_tab %} is-active{% endif %}" role="tab" data-tab-index="{{ t.index }}" data-tab-name="{{ t.name }}">{{ t.name }}</div>
     </div>
     {%- else %}

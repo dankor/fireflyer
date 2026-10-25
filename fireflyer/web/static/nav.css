@@ -28,17 +28,15 @@
   color:var(--text); text-decoration:none; font-size:14px; }
 .ff-pathdd-menu a:hover { background:var(--bg); }
 .ff-pathdd-menu a.active { color:var(--accent); font-weight:600; }
-/* An ⓘ beside a dashboard's or dataset's name: its description as a tooltip,
-   on hover or keyboard focus (`portal.info_tip`). The bubble ignores the
-   pointer — an invisible box over the row would still swallow its clicks. */
-.ff-info { position: relative; display: inline-flex; align-items: center;
-  margin-left: 6px; color: var(--muted); cursor: help; vertical-align: middle; }
-.ff-info[hidden] { display: none; }
-.ff-info svg { width: 15px; height: 15px; }
-.ff-info:hover, .ff-info:focus-visible { color: var(--text); outline: none; }
-.ff-info::after { content: attr(data-tip); position: absolute; top: calc(100% + 6px); left: -8px;
-  z-index: 40; width: max-content; max-width: 320px; padding: 7px 10px; border-radius: 6px;
-  background: #20242b; color: #fff; font-size: 12px; font-weight: 400; line-height: 1.4;
-  white-space: normal; text-align: left; box-shadow: 0 6px 18px rgba(0,0,0,.2);
-  opacity: 0; pointer-events: none; transition: opacity .12s; }
-.ff-info:hover::after, .ff-info:focus-visible::after { opacity: 1; }
+
+/* A segmented icon control — the theme switch (Auto / Light / Dark) on every
+   page, and the editor's mode switch. */
+.topbar .ff-theme { display: inline-flex; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; }
+.topbar .ff-theme button { background: var(--panel); color: var(--muted); border: 0;
+  border-left: 1px solid var(--border); padding: 5px 8px; cursor: pointer;
+  display: inline-flex; align-items: center; }
+.topbar .ff-theme button:first-child { border-left: 0; }
+.topbar .ff-theme button svg { width: 16px; height: 16px; display: block; }
+.topbar .ff-theme button:hover { background: var(--bg); color: var(--text); }
+.topbar .ff-theme button.active { background: var(--accent); color: #fff; }

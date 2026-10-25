@@ -38,6 +38,18 @@ export function initDiff(look) {
     [pickA.value, pickB.value] = [pickB.value, pickA.value];
     render();
   });
+  // Step both sides through history: one version older, one newer.
+  const older = document.getElementById('ff-diff-older');
+  const newer = document.getElementById('ff-diff-newer');
+  older.addEventListener('click', () => step(-1));
+  newer.addEventListener('click', () => step(+1));
+  function step(delta) {
+    const pair = stepPair(chronology(), pickA.value, pickB.value, delta);
+    if (pair) { [pickA.value, pickB.value] = pair; render(); }
+  }
+  // Oldest first, "now" last — the order steps walk; "saved" (no history) isn't in it.
+  // (Not `history`: that's the browser's, which setParam writes the URL through.)
+  const chronology = () => [...pickA.options].map(o => o.value).filter(v => v !== 'saved').reverse();
   pickA.addEventListener('change', render);
   pickB.addEventListener('change', render);
   restore.addEventListener('click', async () => {
@@ -102,6 +114,8 @@ export function initDiff(look) {
     restore.hidden = !canRestore;
     restore.textContent = `Restore ${labelOf(pickA).split(' · ')[0]}`;
     restore.title = 'Load the left side into the editor (unsaved; undo with Cmd/Ctrl+Z)';
+    older.hidden = !stepPair(chronology(), pickA.value, pickB.value, -1);
+    newer.hidden = !stepPair(chronology(), pickA.value, pickB.value, +1);
     setParam(await nameable());
   }
 
@@ -146,6 +160,17 @@ export function initDiff(look) {
 }
 
 const PARAM = 'compare';
+
+// Both sides moved `delta` places along `order` (oldest first), keeping their
+// distance — v3⇄v4 one older is v2⇄v3 — or null when either would fall off it
+// or isn't on it.
+export function stepPair(order, a, b, delta) {
+  const i = order.indexOf(a), j = order.indexOf(b);
+  if (i < 0 || j < 0) return null;
+  const [ni, nj] = [i + delta, j + delta];
+  if (Math.min(ni, nj) < 0 || Math.max(ni, nj) >= order.length) return null;
+  return [order[ni], order[nj]];
+}
 
 // `v3..v5` → ['v3', 'v5']; anything else → null.
 function parseAsked(text) {

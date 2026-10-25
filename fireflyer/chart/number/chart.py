@@ -6,7 +6,7 @@ import jinja2
 from fireflyer import filters as filters_mod
 from fireflyer import calcs as calcs_mod
 from fireflyer.params import DatasetParam, FilterListParam, CalcParam, TextParam
-from fireflyer.scan import scan
+from fireflyer.scan import scan_chart
 
 _DIR = Path(__file__).parent
 _CSS = (_DIR / "chart.css").read_text()
@@ -65,7 +65,7 @@ class Number:
         """`theme` forces a palette (`"dark"`/`"light"`); omitted, the chart
         follows the viewer's OS preference (inherited from the dashboard root
         when nested)."""
-        lf = scan(self.dataset, self._resolve, self._calcs)
+        lf = scan_chart(self)
         preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
         if preds:
             lf = lf.filter(*preds)

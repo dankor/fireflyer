@@ -16,6 +16,7 @@ params/config_edit logic is kept unit-testable.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 import uuid
@@ -26,8 +27,9 @@ from urllib.parse import quote
 
 import yaml
 
+from fireflyer import column_map
 from fireflyer.dashboard import Dashboard
-from fireflyer.datasets import Dataset
+from fireflyer.datasets import Dataset, Version
 from fireflyer.params import COLUMN_TYPES, column_type, type_icon_svg
 from fireflyer.web import assets
 
@@ -51,6 +53,36 @@ _VERSIONS_SCHEMA = (
     " created_at BIGINT NOT NULL,"
     " PRIMARY KEY (dashboard_id, version))"
 )
+
+
+# What each dashboard reads — `(dataset, column)` pairs from `Dashboard.uses`,
+# written on every save — so the overviews (a dashboard's datasets, a dataset's
+# dashboards, a column's) are a query, not a parse of every dashboard. Each
+# indexed dashboard also has one `('', '')` row, so "indexed, uses nothing" is
+# told apart from "not indexed yet" (a dashboard from before the index).
+_USES_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS dashboard_uses ("
+    " dashboard_id TEXT NOT NULL,"
+    " dataset TEXT NOT NULL,"
+    " column_name TEXT NOT NULL)"
+)
+
+
+@dataclass(frozen=True)
+class Use:
+    """One thing a dashboard reads: a dataset (`column` ""), one of its columns,
+    or every column (`column` "*")."""
+    dashboard_id: str
+    dashboard_name: str
+    dataset: str
+    column: str
+
+
+def _uses_of(yaml: str) -> list[tuple[str, str]]:
+    try:
+        return Dashboard.uses(yaml)
+    except DashboardError:
+        return []
 
 
 @dataclass
@@ -145,6 +177,33 @@ class _SqlVersions:
         return DashboardVersion(int(row[0]), int(row[1]), row[2], row[3]) if row else None
 
 
+class _SqlUses:
+    """The `dashboard_uses` index over SQL, shared by both stores (`_run` as in
+    `_SqlVersions`). Written on create/save, dropped on delete; a dashboard not
+    indexed yet is indexed the first time the index is read."""
+
+    def _index(self, id: str, yaml: str) -> None:
+        self._run("DELETE FROM dashboard_uses WHERE dashboard_id = ?", (id,))
+        for dataset, column in [("", "")] + _uses_of(yaml):
+            self._run(
+                "INSERT INTO dashboard_uses (dashboard_id, dataset, column_name) VALUES (?, ?, ?)",
+                (id, dataset, column),
+            )
+
+    def uses(self) -> list[Use]:
+        for id, yaml in self._run(
+            "SELECT id, yaml FROM dashboards"
+            " WHERE id NOT IN (SELECT dashboard_id FROM dashboard_uses)"
+        ).fetchall():
+            self._index(str(id), yaml)
+        rows = self._run(
+            "SELECT u.dashboard_id, d.name, u.dataset, u.column_name FROM dashboard_uses u"
+            " JOIN dashboards d ON d.id = u.dashboard_id WHERE u.dataset <> ''"
+            " ORDER BY d.name, u.dataset, u.column_name"
+        ).fetchall()
+        return [Use(str(i), n, ds, c) for i, n, ds, c in rows]
+
+
 def _name_of(yaml_text: str) -> str:
     """The dashboard's display name, from the YAML's required top-level `name:`
     key. Also validates: `from_yaml` raises DashboardError on an invalid or
@@ -153,7 +212,7 @@ def _name_of(yaml_text: str) -> str:
     return Dashboard.from_yaml(yaml_text).name
 
 
-class SqliteStore(_SqlVersions):
+class SqliteStore(_SqlVersions, _SqlUses):
     """Local/test store. `:memory:` for tests, a file path for local portal dev."""
 
     def __init__(self, path: str = ":memory:"):
@@ -161,6 +220,7 @@ class SqliteStore(_SqlVersions):
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.execute(_SCHEMA)
         self._conn.execute(_VERSIONS_SCHEMA)
+        self._conn.execute(_USES_SCHEMA)
         self._conn.commit()
 
     def _run(self, sql: str, params=()):
@@ -192,6 +252,7 @@ class SqliteStore(_SqlVersions):
         )
         self._conn.commit()
         self._record(new_id, yaml, author)
+        self._index(new_id, yaml)
         return new_id
 
     def save(self, id: str, yaml: str, author: str = "") -> None:
@@ -205,14 +266,16 @@ class SqliteStore(_SqlVersions):
         )
         self._conn.commit()
         self._record(id, yaml, author)
+        self._index(id, yaml)
 
     def delete(self, id: str) -> None:
         self._conn.execute("DELETE FROM dashboards WHERE id = ?", (id,))
         self._conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", (id,))
+        self._conn.execute("DELETE FROM dashboard_uses WHERE dashboard_id = ?", (id,))
         self._conn.commit()
 
 
-class PostgresStore(_SqlVersions):
+class PostgresStore(_SqlVersions, _SqlUses):
     """Runtime store. Same schema, `%s` placeholders; imports psycopg lazily so
     this module stays importable without the `.[portal]` extra installed."""
 
@@ -222,6 +285,7 @@ class PostgresStore(_SqlVersions):
         self._conn = psycopg.connect(dsn, autocommit=True)
         self._conn.execute(_SCHEMA)
         self._conn.execute(_VERSIONS_SCHEMA)
+        self._conn.execute(_USES_SCHEMA)
 
     def _run(self, sql: str, params=()):
         return self._conn.execute(sql.replace("?", "%s"), params)
@@ -251,6 +315,7 @@ class PostgresStore(_SqlVersions):
             (new_id, name, author, yaml, now, now),
         )
         self._record(new_id, yaml, author)
+        self._index(new_id, yaml)
         return new_id
 
     def save(self, id: str, yaml: str, author: str = "") -> None:
@@ -263,10 +328,12 @@ class PostgresStore(_SqlVersions):
             (name, yaml, _now(), id),
         )
         self._record(id, yaml, author)
+        self._index(id, yaml)
 
     def delete(self, id: str) -> None:
         self._conn.execute("DELETE FROM dashboards WHERE id = %s", (id,))
         self._conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = %s", (id,))
+        self._conn.execute("DELETE FROM dashboard_uses WHERE dashboard_id = %s", (id,))
 
 
 def make_store(dsn: str | None):
@@ -285,7 +352,6 @@ def make_store(dsn: str | None):
 
 # Inline-SVG action icons (stroke=currentColor so they follow the button colour).
 _ICONS = {
-    "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.6v.1"/>',
     "pencil": '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
     "copy": '<rect x="9" y="9" width="12" height="12" rx="2"/>'
             '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
@@ -296,7 +362,39 @@ _ICONS = {
               '<path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>',
     "back": '<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>',
     "plus": '<path d="M12 5v14"/><path d="M5 12h14"/>',
+    "code": '<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>',
+    "compare": '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/>'
+               '<path d="M6 9h1M6 13h1M17 11h1M17 15h1"/>',
+    "check": '<path d="M5 12.5l4.5 4.5L19 7"/>',
+    # An eye, crossed out: a service column — in the dataset, hidden from dashboards.
+    "service": '<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>'
+               '<circle cx="12" cy="12" r="2.8"/><path d="M4 4l16 16"/>',
+    "cross": '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
+    "save": '<path d="M5 3h11l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 3v5h7V3"/><rect x="7" y="13" width="10" height="7" rx="1"/>',
 }
+
+
+_THEME_ICONS = {
+    "auto": '<path d="M5 20 12 4l7 16M7.5 14h9"/>',
+    "light": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4'
+             'M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    "dark": '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
+}
+
+
+def theme_switch() -> str:
+    """Auto / Light / Dark — in the topbar of every page, the editor's and the
+    gallery's alike (styled in nav.css, which both link). One choice for all:
+    kept in the browser (`ffTheme`) and applied as `data-ff-theme` on <html>."""
+    labels = {"auto": "Auto (follow OS)", "light": "Light", "dark": "Dark"}
+    buttons = "".join(
+        f'<button type="button" data-mode="{mode}" title="Theme: {labels[mode]}"'
+        f' aria-label="Theme: {labels[mode]}">'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"'
+        f' stroke-linecap="round" stroke-linejoin="round">{_THEME_ICONS[mode]}</svg></button>'
+        for mode in ("auto", "light", "dark")
+    )
+    return f'<div class="ff-theme" id="theme-switch" role="group" aria-label="Theme">{buttons}</div>'
 
 
 def _icon(name: str) -> str:
@@ -306,20 +404,15 @@ def _icon(name: str) -> str:
     )
 
 
-def info_tip(text: str, el_id: str = "") -> str:
-    """An ⓘ beside a name that shows `text` — a dashboard's or dataset's
-    description — as a tooltip on hover or keyboard focus. Styled in nav.css,
-    which the gallery and the editor both link. "" without text; with `el_id`
-    it is rendered anyway, hidden, for the editor's script to fill in when the
-    YAML gains a description."""
-    if not text and not el_id:
-        return ""
-    attr_id = f' id="{escape(el_id, quote=True)}"' if el_id else ""
-    tip = escape(text, quote=True)
-    return (
-        f'<span class="ff-info"{attr_id} tabindex="0" role="img" aria-label="{tip}"'
-        f' data-tip="{tip}"{"" if text else " hidden"}>{_icon("info")}</span>'
+def name_cell(href: str, name: str, description: str = "") -> str:
+    """A list row's name, linking to it, with its description as a small line
+    under it — cut with an ellipsis, whole on hover — as a selected item's title
+    shows it in the topbar."""
+    sub = (
+        f'<span class="sub" title="{escape(description, quote=True)}">{escape(description)}</span>'
+        if description else ""
     )
+    return f'<a class="name" href="{href}">{escape(name)}</a>{sub}'
 
 
 def _stamp(iso: str) -> str:
@@ -329,17 +422,48 @@ def _stamp(iso: str) -> str:
     return f'<time datetime="{escape(iso)}">{escape(text)} UTC</time>' if text else ""
 
 
-def _row(row: DashboardRow) -> str:
+def _author_cell(author: str, authors: bool) -> str:
+    """Who made it — a column only where there are people to name: with no
+    login (local mode) every row would read "—"."""
+    if not authors:
+        return ""
+    return f"<td>{escape(author) if author else '—'}</td>"
+
+
+def _ref_links(links: list[tuple[str, str]], missing: set[str] = frozenset()) -> str:
+    """What a list row is tied to — the datasets a dashboard reads, the
+    dashboards a dataset feeds — as small links. A name in `missing` (a dataset
+    a dashboard names that isn't uploaded) is shown, unlinked, so it stands out."""
+    if not links:
+        return '<span class="muted">—</span>'
+    chips = "".join(
+        f'<span class="ref is-missing" title="Not uploaded">{escape(label)}</span>' if label in missing
+        else f'<a class="ref" href="{href}" title="{escape(label, quote=True)}">{escape(label)}</a>'
+        for href, label in links
+    )
+    return f'<span class="refs">{chips}</span>'
+
+
+def _dashboard_datasets(row: DashboardRow, known: set[str] | None,
+                        uses: dict[str, list[str]] | None) -> str:
+    """The uploaded datasets a dashboard reads (inline ones are part of it) —
+    from the store's index when given, else worked out from its YAML."""
+    names = sorted(uses.get(row.id, []) if uses is not None else Dashboard.dataset_names(row.yaml))
+    missing = set(names) - known if known is not None else set()
+    return _ref_links([(f"/datasets/{quote(n)}", n) for n in names], missing)
+
+
+def _row(row: DashboardRow, authors: bool = True, known: set[str] | None = None,
+         uses: dict[str, list[str]] | None = None) -> str:
     updated = _stamp(row.updated_at)
-    author = escape(row.author) if row.author else "—"
-    name = escape(row.name)
     return (
         "<tr>"
-        f'<td><a class="name" href="/d/{row.id}">{name}</a>{info_tip(row.description)}</td>'
-        f"<td>{author}</td>"
+        f'<td>{name_cell(f"/d/{row.id}", row.name, row.description)}</td>'
+        f"{_author_cell(row.author, authors)}"
         f'<td class="muted">{updated}</td>'
+        f"<td>{_dashboard_datasets(row, known, uses)}</td>"
+        # The name opens the dashboard, so the row needs no edit button.
         '<td class="actions">'
-        f'<a class="act" href="/d/{row.id}" title="Edit">{_icon("pencil")}</a>'
         f'<button class="act" type="button" title="Clone" data-id="{row.id}"'
         f' data-name="{escape(row.name, quote=True)}" onclick="openClone(this)">{_icon("copy")}</button>'
         f'<form method="post" action="/d/{row.id}/delete"'
@@ -430,6 +554,7 @@ def _shell(
     paths: list[str] | None = None,
     active_path: str | None = None,
     detail: bool = False,
+    head: str = "",
 ) -> str:
     """The gallery page frame. Overview pages (dashboards/datasets lists) lead
     with a Dashboards | Datasets switch on the left; in local paths mode the path
@@ -437,7 +562,7 @@ def _shell(
     back button (+ switch, local) in `topbar_left`. Then optional `topbar_right`,
     then `body`. No second nav bar."""
     nav = "" if detail else nav_switch(active)
-    right = path_dropdown(paths, active_path) + topbar_right + user_menu
+    right = path_dropdown(paths, active_path) + topbar_right + theme_switch() + user_menu
     right_html = f'<span class="topbar-right">{right}</span>' if right else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -447,6 +572,7 @@ def _shell(
 {assets.favicons()}
 {assets.stylesheets("gallery.css", "nav.css", "profile.css")}
 {assets.script("gallery.js")}
+{head}
 </head>
 <body>
 <header class="topbar">{nav}{topbar_left}{right_html}</header>
@@ -458,14 +584,18 @@ def _shell(
 
 def render_gallery(
     rows: list[DashboardRow], title: str = "Fireflyer Portal", user_menu: str = "",
-    paths: list[str] | None = None, active_path: str | None = None,
+    paths: list[str] | None = None, active_path: str | None = None, authors: bool = True,
+    datasets: set[str] | None = None, uses: dict[str, list[str]] | None = None,
 ) -> str:
+    """`datasets`: the names uploaded, so a dashboard naming one that isn't can
+    say so; None links every name. `uses`: dashboard id -> the datasets it
+    reads, from the store's index; None works it out from each YAML."""
     if rows:
         body_table = (
             '<table class="dash-table"><thead><tr>'
-            "<th>Name</th><th>Author</th><th>Last updated</th><th></th>"
+            f"<th>Name</th>{'<th>Author</th>' if authors else ''}<th>Last updated</th><th>Datasets</th><th></th>"
             "</tr></thead><tbody>"
-            + "".join(_row(r) for r in rows)
+            + "".join(_row(r, authors, datasets, uses) for r in rows)
             + "</tbody></table>"
         )
     else:
@@ -497,16 +627,18 @@ def _type_icon(dtype: str) -> str:
 
 
 def _upload_dialog(action: str, heading: str, ok_label: str, dialog_id: str, name_field: bool) -> str:
-    name_row = (
+    # Name and description belong to a new dataset; a new version of one only
+    # brings a file (its description is edited from the dataset's title).
+    name_rows = (
         '<label>Name</label><input name="name" autocomplete="off" required>'
+        '<label>Description</label><textarea name="description"></textarea>'
         if name_field else ""
     )
     return f"""
 <dialog class="wide" id="{dialog_id}">
   <form method="post" action="{action}" enctype="multipart/form-data">
     <h3>{heading}</h3>
-    {name_row}
-    <label>Description</label><textarea name="description"></textarea>
+    {name_rows}
     <label>CSV file</label>
     <input type="file" name="file" accept=".csv,text/csv" required>
     <label>Delimiter</label>
@@ -524,22 +656,32 @@ def _upload_dialog(action: str, heading: str, ok_label: str, dialog_id: str, nam
 </dialog>"""
 
 
-def _dataset_row(ds: Dataset) -> str:
+def _version_cell(ds: Dataset) -> str:
+    """`2.1`, or `2.1 → 2.2` while the next one builds."""
+    if ds.building:
+        return f"{ds.version} → {ds.building}" if ds.version else f"→ {ds.building}"
+    return ds.version
+
+
+def _dataset_row(ds: Dataset, authors: bool = True,
+                 used_by: dict[str, list[tuple[str, str]]] | None = None) -> str:
     href = f"/datasets/{quote(ds.name)}"
     updated = _stamp(ds.updated_at)
-    author = escape(ds.author) if ds.author else "—"
+    dashboards = "" if used_by is None else (
+        "<td>" + _ref_links([(f"/d/{did}", name) for did, name in used_by.get(ds.name, [])]) + "</td>"
+    )
     return (
         "<tr>"
-        f'<td><a class="name" href="{href}">{escape(ds.name)}</a>{info_tip(ds.description)}</td>'
-        f'<td class="muted">{len(ds.columns)}</td>'
+        f'<td>{name_cell(href, ds.name, ds.description)}</td>'
+        f'<td class="muted mono">{_version_cell(ds)}</td>'
+        f'<td class="muted">{len(ds.columns) + len(ds.service)}</td>'
         f'<td class="muted">{ds.rows}</td>'
         f'<td class="muted">{updated}</td>'
-        f"<td>{author}</td>"
+        f"{_author_cell(ds.author, authors)}"
+        f"{dashboards}"
+        # The name opens the dataset — where it's renamed and described — so
+        # the row needs no view or edit button of its own.
         '<td class="actions">'
-        f'<a class="act" href="{href}" title="View">{_icon("eye")}</a>'
-        f'<button class="act" type="button" title="Edit" data-name="{escape(ds.name, quote=True)}"'
-        f' data-desc="{escape(ds.description, quote=True)}"'
-        f' onclick="openDsRename(this)">{_icon("pencil")}</button>'
         f'<form method="post" action="/datasets/{quote(ds.name)}/delete"'
         " onsubmit=\"return confirm('Remove this dataset?')\">"
         f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
@@ -547,40 +689,27 @@ def _dataset_row(ds: Dataset) -> str:
     )
 
 
-def _rename_dialog() -> str:
-    return """
-<dialog id="ds-rename-dialog">
-  <form id="ds-rename-form" method="post">
-    <h3>Edit dataset</h3>
-    <label>Name</label>
-    <input name="name" id="ds-rename-name" autocomplete="off" required>
-    <label>Description</label>
-    <textarea name="description" id="ds-rename-desc"></textarea>
-    <div class="dialog-actions">
-      <button type="button" class="cancel" onclick="this.closest('dialog').close()">Cancel</button>
-      <button type="submit" class="ok">Save</button>
-    </div>
-  </form>
-</dialog>"""
-
-
 def render_datasets(
     datasets: list[Dataset], title: str = "Fireflyer Portal", user_menu: str = "",
-    paths: list[str] | None = None, active_path: str | None = None,
+    paths: list[str] | None = None, active_path: str | None = None, authors: bool = True,
+    used_by: dict[str, list[tuple[str, str]]] | None = None,
 ) -> str:
+    """`used_by`: dataset name -> the (id, name) of each dashboard reading it;
+    None (no dashboards to look at, plain local mode) leaves the column out."""
     if datasets:
         table = (
             '<table class="dash-table"><thead><tr>'
-            "<th>Name</th><th>Columns</th><th>Rows</th><th>Updated</th><th>Author</th><th></th>"
+            "<th>Name</th><th>Version</th><th>Columns</th><th>Rows</th><th>Updated</th>"
+            f"{'<th>Author</th>' if authors else ''}"
+            f"{'<th>Dashboards</th>' if used_by is not None else ''}<th></th>"
             "</tr></thead><tbody>"
-            + "".join(_dataset_row(d) for d in datasets)
+            + "".join(_dataset_row(d, authors, used_by) for d in datasets)
             + "</tbody></table>"
         )
     else:
         table = '<div class="empty">No datasets yet. Use + to upload a CSV.</div>'
     extra = (
         _upload_dialog("/datasets/new", "New dataset", "Upload", "upload-dialog", True)
-        + _rename_dialog()
     )
     return _shell(
         title, user_menu, "datasets", table,
@@ -593,26 +722,17 @@ def render_datasets(
 
 def render_dataset_detail(
     ds: Dataset,
-    preview_cols: list[str],
-    preview_rows: list[list],
     title: str = "Fireflyer Portal",
     user_menu: str = "",
     used_by: list[tuple[str, str]] | None = None,
     paths: list[str] | None = None,
     active_path: str | None = None,
+    mapping: str = "",
+    versions: list[Version] | None = None,
+    examples: dict[str, list[str]] | None = None,
+    authors: bool = True,
+    used_in: dict[str, list[tuple[str, str]]] | None = None,
 ) -> str:
-    # Preview header carries each column's type icon and its exact dtype as a
-    # tooltip — so there's no need for a separate column-list card.
-    dtypes = {c.name: c.dtype for c in ds.columns}
-    head = "".join(
-        f'<th title="{escape(dtypes.get(c, ""), quote=True)}">'
-        f"{_type_icon(dtypes.get(c, ''))}{escape(c)}</th>"
-        for c in preview_cols
-    )
-    body_rows = "".join(
-        "<tr>" + "".join(f"<td>{escape('' if v is None else str(v))}</td>" for v in r) + "</tr>"
-        for r in preview_rows
-    )
     # The trash button: when the dataset is in use it shows a count badge and
     # opens the list of dashboards (open in a new tab) instead of deleting; when
     # nothing uses it, it deletes.
@@ -667,30 +787,209 @@ def render_dataset_detail(
         ' aria-label="Dataset description"></textarea>'
         '<span class="ff-title-error" id="ds-title-error" hidden></span></span>'
     )
-    # A selected item leads with just the back button + name — no Dashboards |
-    # Datasets switch (that's for the lists). The path dropdown still rides on the
-    # right in local paths mode (added by `_shell`).
+    versions = versions or []
+    # A selected item leads with the back button, the columns' mode switch and
+    # the name, then the version — which opens the history. No Dashboards |
+    # Datasets switch (that's for the lists); the path dropdown still rides on
+    # the right in local paths mode (added by `_shell`).
     topbar_left = (
         '<div class="topbar-lead">'
         + back_button("/datasets", "Back to datasets")
+        + _column_modes()
         + f'<div class="topbar-title" id="ds-title">{tname}{tabout}</div>'
+        + _history_menu(ds, versions, authors)
         + "</div>"
     )
     topbar_right = (
+        '<span class="ff-savebar" role="group" aria-label="Unsaved changes">'
+        '<button class="ff-discard" id="ds-discard" type="button" title="Discard unsaved changes"'
+        f' aria-label="Discard unsaved changes" hidden>{_icon("cross")}</button>'
+        '<button class="ff-save" id="ds-save" type="button" title="Save (⌘/Ctrl+S)" aria-label="Save"'
+        f' hidden>{_icon("save")}</button></span>'
         '<span class="detail-actions">'
-        '<button class="act" title="Replace data"'
+        '<button class="act" title="Upload a new file (the next version)"'
         f" onclick=\"document.getElementById('replace-dialog').showModal()\">{_icon('upload')}</button>"
         f"{trash}</span>"
     )
+    unreadable = _mapping_error(mapping, versions)
+    status = (f'<div class="ds-status is-error" id="ds-status">{escape(unreadable)}</div>'
+              if unreadable else _build_status(ds))
     body = f"""
-  <div class="preview-wrap"><table class="preview"><thead><tr>{head}</tr></thead>
-  <tbody>{body_rows}</tbody></table></div>"""
+  {status}
+  <section class="ds-columns" id="ds-columns" data-mode="view">{_columns_view(ds, mapping, versions, examples or {}, used_in or {})}</section>
+  <div class="ds-toast" id="ds-toast" role="status" hidden></div>
+  <script type="application/json" id="ds-data">{_page_data(ds, mapping, versions, examples or {}, used_in or {})}</script>"""
     replace = _upload_dialog(
-        f"/datasets/{quote(ds.name)}/replace", "Replace data", "Upload", "replace-dialog", False
+        f"/datasets/{quote(ds.name)}/replace", "Upload a new version", "Upload", "replace-dialog", False
+    )
+    page_head = (
+        assets.stylesheets("code.css")
+        + assets.import_map("yaml-look.js", "diff-view.js")
+        + assets.module("dataset-columns.js")
     )
     return _shell(
         title, user_menu, "datasets", body,
         extra=replace + usage_dialog,
         topbar_left=topbar_left, topbar_right=topbar_right,
-        paths=paths, active_path=active_path, detail=True,
+        paths=paths, active_path=active_path, detail=True, head=page_head,
     )
+
+
+# --- a dataset's columns: view / edit / code / compare -----------------------------
+# The page's columns panel switches between four modes, as the dashboard editor
+# does: the mapping read (view), edited in a form (edit) or as YAML (code), and
+# two versions of it side by side (compare). The view is rendered here; the
+# rest is static/dataset-columns.js, from the JSON the page carries.
+
+_COLUMN_MODES = (
+    ("view", "eye", "Columns"),
+    ("edit", "pencil", "Edit names and types"),
+    ("code", "code", "Edit as YAML"),
+    ("compare", "compare", "Compare versions"),
+)
+
+
+def _column_modes() -> str:
+    buttons = "".join(
+        f'<button type="button" data-mode="{mode}" title="{label}" aria-label="{label}"'
+        f'{" class=active" if mode == "view" else ""}>{_icon(icon)}</button>'
+        for mode, icon, label in _COLUMN_MODES
+    )
+    return f'<div class="ds-modes" id="ds-modes" role="group" aria-label="Columns">{buttons}</div>'
+
+
+def _mapping_rules(ds: Dataset, mapping: str, versions: list[Version]) -> list[column_map.Rule]:
+    latest = versions[0] if versions else None
+    try:
+        return column_map.parse(mapping, latest.sources if latest else [])
+    except column_map.MappingError:
+        return []
+
+
+def _mapping_error(mapping: str, versions: list[Version]) -> str:
+    """Why the mapping can't be read, if it can't — said, not an empty table."""
+    try:
+        column_map.parse(mapping, versions[0].sources if versions else [])
+    except column_map.MappingError as exc:
+        return str(exc)
+    return ""
+
+
+SERVICE_TITLE = "Service column — in the dataset, never in dashboards"
+
+
+def _service_mark() -> str:
+    return (f'<span class="col-service" title="{SERVICE_TITLE}" aria-label="{SERVICE_TITLE}">'
+            f'{_icon("service")}</span>')
+
+
+def _kinds(ds: Dataset) -> dict[str, tuple[str, str]]:
+    """Column name -> (icon, kind) from the built data: a column's type is what
+    its formula gave (text, a number from to_number(), a date from str2dt())."""
+    out = {}
+    for c in ds.columns + ds.service:
+        kind = column_type(c.dtype)
+        out[c.name] = (_type_icon(c.dtype), COLUMN_TYPES[kind][1] if kind in COLUMN_TYPES else c.dtype)
+    return out
+
+
+def _columns_view(ds: Dataset, mapping: str, versions: list[Version], examples: dict[str, list[str]],
+                  used_in: dict[str, list[tuple[str, str]]]) -> str:
+    kinds = _kinds(ds)
+    rows = "".join(
+        "<tr>"
+        f"<td>{kinds.get(r.name, ('', ''))[0]}<span class=\"col-name\">{escape(r.name)}</span>"
+        + (_service_mark() if r.service else "") + "</td>"
+        f'<td class="muted mono">{escape(r.formula)}</td>'
+        f'<td class="ex">{_examples(examples.get(r.name, []))}</td>'
+        f"<td>{_ref_links([(f'/d/{did}', n) for did, n in used_in.get(r.name, [])])}</td></tr>"
+        for r in _mapping_rules(ds, mapping, versions)
+    )
+    return (
+        # The type is the icon before the name — what the column's formula gave,
+        # read from the built data. "Dashboards": the ones whose charts read it.
+        '<table class="ds-cols"><thead><tr><th>Column</th><th>Formula</th><th>Examples</th><th>Dashboards</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _examples(values: list[str]) -> str:
+    """A column's first distinct values as it was uploaded, each in a label."""
+    return '<span class="col-examples">' + "".join(
+        f'<span class="col-example" style="--n:{len(v)}" title="{escape(v, quote=True)}"'
+        f' data-value="{escape(v, quote=True)}">{escape(v)}</span>'
+        for v in values
+    ) + "</span>"
+
+
+def _history_menu(ds: Dataset, versions: list[Version], authors: bool = True) -> str:
+    """The version chip — `v3.4` — opening every version, grouped by upload.
+    A version opens the comparison with the one in use; an upload that isn't
+    the one in use can be deleted, with its versions."""
+    in_use = {ds.version.split(".")[0], ds.building.split(".")[0]} - {""}
+    groups = []
+    for major in sorted({v.major for v in versions}, reverse=True):
+        mine = [v for v in versions if v.major == major]
+        delete = "" if str(major) in in_use else (
+            f'<form class="ds-major-delete" method="post" action="/datasets/{quote(ds.name)}/versions/{major}/delete"'
+            f' onsubmit="return confirm(\'Delete upload {major} and its {len(mine)} version(s)?\')">'
+            f'<button class="act act-danger" type="submit" title="Delete upload {major} and its versions"'
+            f' aria-label="Delete upload {major}">{_icon("trash")}</button></form>'
+        )
+        items = "".join(
+            f'<button type="button" class="ds-ver" data-version="{v.label}">'
+            f'<span class="ds-ver-label">{v.label}</span>'
+            f'<span class="muted">{_stamp(datetime.fromtimestamp(v.created_at, timezone.utc).isoformat())}</span>'
+            + (f'<span class="muted">{escape(v.author or "")}</span>' if authors else "")
+            + (f'<span class="ds-mark" title="In use" aria-label="In use">{_icon("check")}</span>'
+               if v.label == ds.version else "")
+            + ('<span class="ds-mark" title="Building" aria-label="Building"><span class="ds-spin"></span></span>'
+               if v.status == "building" else "")
+            + "</button>"
+            for v in mine
+        )
+        # One group per upload, set apart by a rule — no heading (named for
+        # screen readers only); an upload that can go shows just a trash icon,
+        # in its own strip beside the group's rows.
+        groups.append(f'<div class="ds-major" role="group" aria-label="Upload {major}">{delete}{items}</div>')
+    label = f"v{ds.version}" if ds.version else '<span class="ds-spin" title="Building"></span>'
+    return (
+        '<details class="ds-history" id="ds-history">'
+        f'<summary title="Versions">{label}</summary>'
+        f'<div class="ds-history-menu">{"".join(groups)}</div></details>'
+    )
+
+
+def _build_status(ds: Dataset) -> str:
+    """One line while a version builds, or when the last one failed."""
+    if ds.building:
+        return (f'<div class="ds-status is-building" id="ds-status" title="Building {ds.building}">'
+                f'<span class="ds-spin"></span>{ds.building}</div>')
+    if ds.error:
+        return f'<div class="ds-status is-error" id="ds-status">{escape(ds.error)}</div>'
+    return '<div class="ds-status" id="ds-status" hidden></div>'
+
+
+def _page_data(ds: Dataset, mapping: str, versions: list[Version], examples: dict[str, list[str]],
+               used_in: dict[str, list[tuple[str, str]]]) -> str:
+    """What dataset-columns.js works from. `</` is escaped so no value can end
+    the <script> it sits in."""
+    rules = _mapping_rules(ds, mapping, versions)
+    data = {
+        "name": ds.name,
+        "mapping": mapping,
+        "rules": [{"name": r.name, "formula": r.formula, "service": r.service} for r in rules],
+        "serviceIcon": _icon("service"),
+        "examples": examples,
+        "usedIn": used_in,
+        # Column name -> [icon, kind] from the built data (a column not built
+        # yet — an unsaved edit — has none).
+        "kinds": _kinds(ds),
+        "version": ds.version,
+        "building": ds.building,
+        "versions": [
+            {"version": v.label, "created_at": v.created_at, "author": v.author, "status": v.status}
+            for v in versions
+        ],
+    }
+    return json.dumps(data).replace("</", "<\\/")

@@ -1,0 +1,82 @@
+/* Code views shared by the dashboard editor and a dataset's page: YAML syntax
+   colours (static/yaml-look.js) and the side-by-side compare view
+   (@codemirror/merge). Its own palette, themed the way each page is — the OS,
+   or the editor's `data-ff-theme` switch — over the page's own --bg, --panel,
+   --text, --muted, --border and --accent. */
+:root {
+  --yaml-key: #0b62c4;
+  --yaml-string: #1a7f37;
+  --yaml-number: #b35900;
+  --yaml-keyword: #8250df;
+  --yaml-comment: #6e7781;
+  --yaml-punct: #57606a;
+  --yaml-meta: #bf3989;
+  --diff-add-line: #e6ffec;
+  --diff-add-word: #abf2bc;
+  --diff-del-line: #ffebe9;
+  --diff-del-word: #ffc1bc;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-ff-theme="light"]) {
+    --yaml-key: #6cb6ff;
+    --yaml-string: #8ddb8c;
+    --yaml-number: #f69d50;
+    --yaml-keyword: #dcbdfb;
+    --yaml-comment: #8b949e;
+    --yaml-punct: #9aa5b4;
+    --yaml-meta: #f47067;
+    --diff-add-line: rgba(46, 160, 67, 0.15);
+    --diff-add-word: rgba(46, 160, 67, 0.4);
+    --diff-del-line: rgba(248, 81, 73, 0.15);
+    --diff-del-word: rgba(248, 81, 73, 0.4);
+  }
+}
+:root[data-ff-theme="dark"] {
+  --yaml-key: #6cb6ff;
+  --yaml-string: #8ddb8c;
+  --yaml-number: #f69d50;
+  --yaml-keyword: #dcbdfb;
+  --yaml-comment: #8b949e;
+  --yaml-punct: #9aa5b4;
+  --yaml-meta: #f47067;
+  --diff-add-line: rgba(46, 160, 67, 0.15);
+  --diff-add-word: rgba(46, 160, 67, 0.4);
+  --diff-del-line: rgba(248, 81, 73, 0.15);
+  --diff-del-word: rgba(248, 81, 73, 0.4);
+}
+
+/* The compare view: a bar of pickers over two panes. */
+.ff-diff-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border); background: var(--bg); }
+.ff-diff-pick { flex: 0 1 340px; min-width: 0; padding: 5px 8px; font: inherit; font-size: 12.5px;
+  color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
+.ff-diff-icon[hidden] { display: none; }
+.ff-diff-icon { display: inline-flex; padding: 5px; border: 0; border-radius: 4px;
+  background: none; color: var(--muted); cursor: pointer; }
+.ff-diff-icon svg { width: 15px; height: 15px; }
+.ff-diff-icon:hover { color: var(--text); background: var(--panel); }
+.ff-diff-stats { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.ff-diff-stats:not(.is-same) { color: var(--text); }
+.ff-diff-restore { padding: 5px 10px; font: inherit; font-size: 12.5px; border-radius: 4px;
+  border: 1px solid var(--accent); background: none; color: var(--accent); cursor: pointer; }
+.ff-diff-restore:hover { background: var(--accent); color: #fff; }
+.ff-diff-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.ff-diff-body .cm-mergeView { height: 100%; overflow: auto; }
+.ff-diff-body .cm-mergeViewEditor + .cm-mergeViewEditor { border-left: 1px solid var(--border); }
+/* Removed (left) red, added (right) green — the whole line soft, the changed
+   words stronger. From the theme, so both read in light and dark. */
+.ff-diff-body .cm-merge-a .cm-changedLine, .ff-diff-body .cm-deletedChunk { background: var(--diff-del-line); }
+.ff-diff-body .cm-merge-b .cm-changedLine { background: var(--diff-add-line); }
+.ff-diff-body .cm-merge-a .cm-changedText { background: var(--diff-del-word); text-decoration: none; }
+.ff-diff-body .cm-merge-b .cm-changedText { background: var(--diff-add-word); text-decoration: none; }
+.ff-diff-body .cm-changeGutter { width: 3px; padding: 0; }
+.ff-diff-body .cm-merge-a .cm-changedLineGutter { background: var(--error, var(--danger)); }
+.ff-diff-body .cm-merge-b .cm-changedLineGutter { background: #2ea043; }
+.ff-diff-body .cm-collapsedLines { color: var(--muted); background: var(--bg);
+  font-size: 12px; padding: 4px 12px; cursor: pointer; }
+/* Restore: an undo arrow before the version it brings back. */
+.ff-diff-restore { display:inline-flex; align-items:center; gap:5px; }
+.ff-diff-restore[hidden] { display:none; }
+.ff-diff-restore-icon { width:13px; height:13px; background:currentColor;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7v6h6'/%3E%3Cpath d='M3.5 13a9 9 0 1 0 2.6-6.4L3 9.5'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7v6h6'/%3E%3Cpath d='M3.5 13a9 9 0 1 0 2.6-6.4L3 9.5'/%3E%3C/svg%3E") center/contain no-repeat; }
