@@ -28,6 +28,17 @@
   color:var(--text); text-decoration:none; font-size:14px; }
 .ff-pathdd-menu a:hover { background:var(--bg); }
 .ff-pathdd-menu a.active { color:var(--accent); font-weight:600; }
+/* The editor's view-as picker: the path dropdown's look, buttons for items.
+   Lit while a role is picked, so a narrowed dashboard never passes for the
+   whole one. */
+.ff-pathdd-menu button { display:block; width:100%; padding:8px 10px; border:0; border-radius:4px;
+  background:none; color:var(--text); font:inherit; font-size:14px; text-align:left; cursor:pointer; }
+.ff-pathdd-menu button:hover { background:var(--bg); }
+.ff-pathdd-menu button.active { color:var(--accent); font-weight:600; }
+.ff-pathdd-menu button[hidden] { display:none; }
+.ff-role summary > svg:first-child { width:15px; height:15px; opacity:1; }
+.ff-role-name:empty { display:none; }
+.ff-role.is-on summary { color:var(--accent); border-color:var(--accent); }
 
 /* A segmented icon control — the theme switch (Auto / Light / Dark) on every
    page, and the editor's mode switch. */

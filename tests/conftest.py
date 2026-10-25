@@ -25,6 +25,17 @@ def _portable(text: str) -> str:
     return _CHART_ID_RE.sub(r"\1<ID>", text)
 
 
+@pytest.fixture(autouse=True)
+def _roles_in_memory(monkeypatch):
+    """Roles live in a database the app opens on first use — a file under
+    FIREFLYER_DATA. Each test gets a fresh in-memory one instead, so the suite
+    writes no file and no test sees another's roles."""
+    from fireflyer.web import app as app_mod
+    from fireflyer.web.portal import RoleStore
+
+    monkeypatch.setattr(app_mod.app.state, "roles", RoleStore(":memory:"))
+
+
 @pytest.fixture
 def orders_csv() -> str:
     return str(DATA_DIR / "orders.csv")

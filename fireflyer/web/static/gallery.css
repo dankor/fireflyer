@@ -70,7 +70,7 @@ table.dash-table { width:100%; border-collapse:separate; border-spacing:0; backg
   text-transform:uppercase; letter-spacing:.03em; }
 .dash-table tbody tr:last-child td { border-bottom:0; }
 .dash-table tbody tr:hover { background:var(--bg); }
-.dash-table a.name { color:var(--text); font-weight:600; text-decoration:none; }
+.dash-table .name { color:var(--text); font-weight:600; text-decoration:none; }
 .dash-table a.name:hover { color:var(--accent); }
 /* The description under a name, as the topbar's title shows it. */
 .dash-table .sub { display:block; max-width:420px; margin-top:2px; font-size:12px; color:var(--muted);
@@ -100,9 +100,12 @@ dialog { border:1px solid var(--border); border-radius:10px; padding:0;
 dialog::backdrop { background:rgba(0,0,0,.4); }
 dialog form { padding:22px; margin:0; }
 dialog h3 { margin:0 0 14px; font-size:16px; }
-dialog input, dialog textarea, dialog select { width:100%; padding:8px 10px;
-  border:1px solid var(--border); border-radius:4px; background:var(--bg);
-  color:var(--text); font-size:14px; font-family:inherit; }
+dialog input, dialog textarea, dialog select { display:block; box-sizing:border-box; width:100%;
+  padding:8px 10px; border:1px solid var(--border); border-radius:4px; background:var(--bg);
+  color:var(--text); font-size:14px; font-family:inherit; outline:0; }
+dialog input:focus, dialog textarea:focus, dialog select:focus { border-color:var(--accent); }
+/* Fields one under another, with air between them. */
+dialog form > :is(input, textarea, select) + :is(input, textarea, select) { margin-top:10px; }
 dialog.wide { width:420px; }
 dialog label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
 dialog textarea { resize:vertical; min-height:52px; }
@@ -288,3 +291,76 @@ a.ref:hover { border-color:var(--accent); color:var(--accent); }
 .ds-value-copy { flex:0 0 auto; display:inline-flex; padding:2px; border:1px solid var(--border); border-radius:4px;
   background:none; color:var(--muted); cursor:pointer; user-select:none; }
 .ds-value-copy:hover { color:var(--text); border-color:var(--muted); }
+
+/* A dataset's permissions (`portal.render_access_form`): a row per role — its
+   name; its filters, listed as a chart's filter panel lists them, over the
+   chart builder's fields where a new one is built; the trash. */
+.ds-columns[data-mode="access"] { overflow:visible; }   /* menus spill out */
+.ds-access { padding:0 0 10px; }
+.ds-access-table td { vertical-align:top; }
+.ds-access-role { width:180px; padding-top:16px !important; }
+
+/* The filters: compact rows — type, column, op, values; ✎ ✕ quiet till hovered. */
+.ds-filter-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:12.5px; }
+.ds-filter-table:has(tbody:empty) { display:none; }
+.ds-filter-table col.c-col { width:200px; }
+.ds-filter-table col.c-op { width:24px; }
+.ds-filter-table col.c-act { width:52px; }
+.ds-filter-table td { padding:4px 8px 4px 0; border:0; vertical-align:middle; }
+.ds-filter-table .col { color:var(--accent); font-weight:600; white-space:nowrap; }
+.ds-filter-table .col .ff-type-glyph { margin-right:5px; vertical-align:-2px; }
+.ds-filter-table .col-name { display:inline-block; max-width:calc(100% - 24px); overflow:hidden;
+  text-overflow:ellipsis; vertical-align:bottom; }
+.ds-filter-table .op { color:var(--muted); font-size:14px; }
+.ds-filter-table .vals { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ds-filter-table .rm { text-align:right; white-space:nowrap; padding-right:0; }
+.ds-filter-table .rm button, .ds-draft-acts button { display:inline-flex; padding:4px; border:0; border-radius:4px;
+  background:none; color:var(--text); opacity:.5; cursor:pointer; }
+.ds-filter-table .rm button:hover, .ds-draft-acts button:hover { opacity:1; background:var(--bg); }
+.ds-filter-table .rm svg, .ds-draft-acts svg { width:13px; height:13px; }
+.ds-filter-table tr.is-editing { opacity:.4; }
+/* The draft: the chart builder's fields, divided off under the list. */
+.ds-filter-table:not(:has(tbody:empty)) + .ds-draft { margin-top:6px; padding-top:8px;
+  border-top:1px solid var(--border); }
+.ds-draft-acts { display:inline-flex; gap:2px; align-self:start; padding-top:4px; }
+.ds-draft-acts .ds-filter-ok { color:var(--accent); opacity:.8; }
+/* The draft row: closed until the role's + or a filter's ✎. */
+.ds-draft:not(.is-open) { display:none; }
+/* A role with no filters: Full, in the accent, where they would be. */
+.ds-full-chip { display:none; align-items:center; gap:6px; padding:4px 6px; margin-left:-6px;
+  border:0; border-radius:4px; background:none; color:var(--accent); font:inherit;
+  font-size:12.5px; font-weight:600; cursor:pointer; }
+.ds-full-chip svg { width:14px; height:14px; }
+.ds-full-chip svg:last-child { width:11px; height:11px; opacity:0; transition:opacity .12s; }
+.ds-full-chip:hover { background:var(--bg); }
+.ds-full-chip:hover svg:last-child, .ds-full-chip:focus-visible svg:last-child { opacity:.7; }
+.ds-access-row.is-full .ds-full-chip { display:inline-flex; }
+/* Open draft: Full is in its column list, so the label steps aside. */
+.ds-access-row.is-full:has(.ds-draft.is-open) .ds-full-chip { display:none; }
+/* A full role: just the trash — Full itself adds the first filter. */
+.ds-access-row.is-full .ds-tool-add { display:none; }
+/* Rows: how many the role sees — right-aligned, figures lined up. */
+.ds-access-table .ds-access-rows { width:90px; text-align:right; font-variant-numeric:tabular-nums;
+  color:var(--muted); padding-top:14px; white-space:nowrap; }
+.ds-access-table th.ds-access-rows { padding-top:10px; }
+/* The role's actions: the lists' own icon buttons (`.act`), as a dashboard's
+   row has them. */
+.ds-role-cell { width:84px; padding-top:9px !important; }
+.ds-role-tools { display:flex; justify-content:flex-end; gap:6px; }
+/* Full in the picker: a level, not a column — first, accent, ruled off. */
+.ff-colpick-item.ds-full { color:var(--accent); font-weight:600; margin-bottom:4px;
+  border-bottom:1px solid var(--border); border-radius:3px 3px 0 0; }
+.ff-colpick-item.ds-full svg { width:14px; height:14px; flex:none; }
+.ds-access-add { position:relative; display:flex; justify-content:flex-end; }
+.ds-access-add summary { list-style:none; }
+.ds-access-add summary::-webkit-details-marker { display:none; }
+.ds-access-add .ff-pathdd-menu { text-transform:none; letter-spacing:normal; font-weight:400; }
+.ds-access-new { display:flex; align-items:center; gap:6px; margin-top:4px; padding:8px 4px 2px 10px;
+  border-top:1px solid var(--border); color:var(--muted); }
+/* No role left to offer: the field alone, no rule above it. */
+.ff-pathdd-menu:not(:has(button[data-role]:not([hidden]))) .ds-access-new { margin-top:0; padding-top:2px; border-top:0; }
+.ds-access-new svg { width:13px; height:13px; flex:none; }
+.ds-access-new input { flex:1; min-width:0; padding:5px 6px; border:1px solid var(--border); border-radius:4px;
+  background:var(--bg); color:var(--text); font:inherit; font-size:13px; outline:0; }
+.ds-access-new input:focus { border-color:var(--accent); }
+th.ds-role-cell { padding-top:6px !important; padding-bottom:6px !important; }

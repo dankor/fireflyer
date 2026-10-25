@@ -1,0 +1,199 @@
+/* The filter builder's rows (`params.filter_fields` + `FilterListParam`): a
+   column picker, an op, and a values control — checkboxes, a date range, a
+   number range or text. Shared by the dashboard editor (the chart modal, the
+   calcs manager) and a dataset's permissions, which build the same filters.
+   Colours come from the page's own palette (the same token names on both). */
+.ff-input {
+  border: 1px solid var(--border); border-radius: 4px; padding: 7px 9px;
+  font-size: 13px; font-family: inherit; outline: 0;
+  background: var(--bg); color: var(--text);
+}
+.ff-input:focus { border-color: var(--accent); }
+/* A column's type, beside its name. */
+.ff-type-glyph { display: inline-flex; flex: none; color: var(--muted); }
+.ff-type-glyph svg { width: 14px; height: 14px; }
+/* The builder's copy of the panel's number range — editor colours. `between` on a number column (`number_range.html`): from / to, over a long
+   two-handle slider spanning the column's values. Two range inputs share one
+   track; only their handles take the pointer. The shaded stretch between them
+   is drawn from `--lo` / `--hi` (0..1), set by the server — offset by half a
+   handle, so it ends under each handle's centre. */
+.ff-filter-row .ff-numrange { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.ff-filter-row .ff-numrange-fields { display: flex; align-items: center; gap: 4px; }
+.ff-filter-row .ff-numrange-fields .ff-input { flex: 1 1 0; min-width: 0; font-variant-numeric: tabular-nums; }
+.ff-filter-row .ff-numrange-dash { opacity: 0.5; }
+.ff-filter-row .ff-numrange-track { --thumb: 14px; position: relative; height: 30px; }
+.ff-filter-row .ff-numrange-track::before,
+.ff-filter-row .ff-numrange-track::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  height: 4px;
+  border-radius: 2px;
+}
+.ff-filter-row .ff-numrange-track::before {
+  left: calc(var(--thumb) / 2);
+  right: calc(var(--thumb) / 2);
+  background: var(--border);
+}
+.ff-filter-row .ff-numrange-track::after {
+  left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--lo));
+  width: calc((100% - var(--thumb)) * (var(--hi) - var(--lo)));
+  background: var(--accent);
+}
+.ff-filter-row .ff-numrange-track input[type="range"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: none;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.ff-filter-row .ff-numrange-track.is-low-top input[name="slide_low"] { z-index: 2; }
+.ff-filter-row .ff-numrange-track input[type="range"]::-webkit-slider-runnable-track { background: none; border: 0; }
+.ff-filter-row .ff-numrange-track input[type="range"]::-moz-range-track { background: none; border: 0; }
+.ff-filter-row .ff-numrange-track input[type="range"]::-webkit-slider-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--panel);
+  cursor: grab;
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.ff-filter-row .ff-numrange-track input[type="range"]::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--panel);
+  cursor: grab;
+  pointer-events: auto;
+}
+.ff-filter-row .ff-numrange-track input[type="range"]:focus-visible { outline: none; }
+.ff-filter-row .ff-numrange-track input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(32, 167, 201, 0.4); }
+/* The column's own min and max, under the track's ends. */
+.ff-filter-row .ff-numrange-ends {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+/* A filter row's column field (`params._column_picker`): the chosen column
+   with its type icon, opening a list of every column with theirs. In the
+   builder's modal the list opens inline — the modal body scrolls, which would
+   clip a floating one. */
+.ff-colpick { min-width: 0; }
+.ff-colpick-field {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  list-style: none; cursor: pointer; white-space: nowrap;
+}
+.ff-colpick-field::-webkit-details-marker { display: none; }
+.ff-colpick-name { overflow: hidden; text-overflow: ellipsis; }
+.ff-colpick-chevron { margin-left: auto; flex: none; color: var(--muted); }
+.ff-colpick[open] > .ff-colpick-field { border-color: var(--accent); }
+.ff-colpick-list {
+  display: flex; flex-direction: column; margin-top: 4px; padding: 4px;
+  max-height: 220px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--panel);
+}
+.ff-colpick-item {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 0; border-radius: 3px;
+  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.ff-colpick-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ff-colpick-item:hover, .ff-colpick-item:focus-visible { background: var(--bg); outline: none; }
+.ff-colpick-item.is-selected { color: var(--accent); }
+.ff-colpick-item.is-selected .ff-type-glyph { color: var(--accent); }
+.ff-placeholder { color: var(--muted); }
+/* A filter row's op and values mean nothing until a column is picked. */
+.ff-filter-row .ff-input:disabled { opacity: 0.45; cursor: not-allowed; }
+.ff-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.ff-filters { display: flex; flex-direction: column; gap: 6px; }
+.ff-filter-row {
+  display: grid; grid-template-columns: 1fr 84px 1.4fr auto; gap: 6px;
+  align-items: center;
+}
+/* The shared fields (`params.filter_fields`) come wrapped so a row can swap
+   them in one piece; `contents` keeps them as the row's own grid items. */
+.ff-filter-fields { display: contents; }
+/* `in` / `not in` with the column's values in hand: tick, don't type. */
+.ff-filter-choices {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 140px; overflow: auto; padding: 4px 6px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg);
+}
+.ff-filter-choice { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.ff-filter-choice span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The value picker: a search box (long lists only) over the checkboxes. */
+.ff-filter-picker { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ff-filter-search { width: 100%; box-sizing: border-box; }
+.ff-filter-choices-note { color: var(--muted); font-size: 12px; font-style: italic; padding: 2px 0; }
+/* `between` on a date column: one field showing the range (`date_range.html`).
+   The modal body scrolls, which would clip a floating popover, so here the
+   calendar opens inline under the field — one month, to fit the column.
+   Scoped to the builder's rows: this stylesheet is on the editor page, and the
+   dashboard's own filter panel there draws its two-month popover itself. */
+.ff-filter-row .ff-range { min-width: 0; }
+.ff-filter-row .ff-range-field {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  list-style: none; cursor: pointer; white-space: nowrap;
+}
+.ff-filter-row .ff-range-field::-webkit-details-marker { display: none; }
+.ff-filter-row .ff-range-label { overflow: hidden; text-overflow: ellipsis; }
+.ff-filter-row .ff-range[open] > .ff-range-field { border-color: var(--accent); }
+.ff-filter-row .ff-cal { margin-top: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.ff-filter-row .ff-cal-month + .ff-cal-month { display: none; }
+.ff-filter-row .ff-cal-inputs { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 6px; }
+.ff-filter-row .ff-cal-typed { display: flex; flex-direction: column; flex: 1 1 0; gap: 2px; min-width: 0; }
+.ff-filter-row .ff-cal-typed span { font-size: 11px; color: var(--muted); }
+.ff-filter-row .ff-cal-typed .ff-input { width: 100%; box-sizing: border-box; padding: 4px 6px; font-variant-numeric: tabular-nums; }
+.ff-filter-row .ff-cal-dash { padding-bottom: 6px; color: var(--muted); }
+.ff-filter-row .ff-cal-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.ff-filter-row .ff-cal-hint { font-size: 11px; color: var(--muted); text-align: center; }
+.ff-filter-row .ff-cal-nav {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+  padding: 0; border: 0; border-radius: 50%; background: none; color: var(--text); cursor: pointer;
+}
+.ff-filter-row .ff-cal-nav:hover { background: var(--bg); }
+.ff-filter-row .ff-cal-title { margin-bottom: 4px; text-align: center; font-weight: 600; font-size: 12px; }
+.ff-filter-row .ff-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); row-gap: 2px; }
+.ff-filter-row .ff-cal-wd { text-align: center; font-size: 10px; color: var(--muted); }
+.ff-filter-row .ff-cal-day {
+  height: 26px; padding: 0; border: 0; border-radius: 50%; background: none;
+  color: var(--text); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.ff-filter-row .ff-cal-day:hover { box-shadow: inset 0 0 0 1px var(--text); }
+.ff-filter-row .ff-cal-day.is-today { text-decoration: underline; text-underline-offset: 3px; }
+.ff-filter-row .ff-cal-day.in-range { border-radius: 0; background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.ff-filter-row .ff-cal-day.is-start, .ff-filter-row .ff-cal-day.is-end { background: var(--accent); color: #fff; font-weight: 600; }
+.ff-filter-row .ff-range.is-picking .is-start ~ .ff-cal-day:has(~ .ff-cal-day:hover) {
+  border-radius: 0; background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ff-filter-row { align-items: start; }
+.ff-filter-del {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--muted);
+  cursor: pointer; padding: 0 4px;
+}
+.ff-filter-del svg { width: 14px; height: 14px; display: block; }
+.ff-filter-del:hover { color: var(--error, var(--danger)); }
+.ff-filter-add {
+  display: inline-flex; align-items: center; justify-content: center;
+  align-self: flex-start; width: 26px; height: 26px; padding: 0;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; cursor: pointer; color: var(--text);
+}
+.ff-filter-add svg { width: 14px; height: 14px; display: block; }

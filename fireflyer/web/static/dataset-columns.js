@@ -1,4 +1,5 @@
-// A dataset's columns, in four modes — as the dashboard editor has its own:
+// A dataset's columns, in four modes — as the dashboard editor has its own —
+// and its permissions:
 //   view     the columns: each one's name (its type icon: what its formula
 //            gives, from the built data), formula, example values and the
 //            dashboards using it
@@ -8,6 +9,11 @@
 //   compare  two versions of the mapping side by side (or one against yours);
 //            the left one can be restored — loaded as an unsaved edit, which
 //            saving builds as the next version (history only grows)
+//   access   the roles that may read the dataset — all of it (Full, the column
+//            picker's first entry), or the rows their filters let through
+//            (the chart builder's filter rows) —
+//            from the server (GET …/access); a role not listed may not. Save
+//            posts them with the mapping's
 //
 // The mapping's YAML is the one source of truth: the form writes it as you go,
 // the code editor edits it directly, and leaving the code editor has the server
@@ -60,7 +66,7 @@ async function setMode(next, opts = {}) {
   mode = next;
   for (const b of modes.querySelectorAll('button')) b.classList.toggle('active', b.dataset.mode === mode);
   panel.dataset.mode = mode;
-  ({view: showView, edit: showEdit, code: showCode, compare: showCompare})[mode](opts);
+  ({view: showView, edit: showEdit, code: showCode, compare: showCompare, access: showAccess})[mode](opts);
 }
 
 function el(tag, attrs = {}, ...children) {
@@ -330,7 +336,18 @@ function changed() {
 function dump(list) {
   const lines = list.filter(r => r.name)
     .map(r => `  ${scalar(r.name)}:\n    formula: ${scalar(r.formula || r.name)}` + (r.service ? '\n    service: true' : ''));
-  return 'columns:\n' + lines.join('\n') + '\n';
+  return 'columns:\n' + lines.join('\n') + '\n' + permissionsBlock(text);
+}
+
+// The mapping's `permissions:` block as written — the form above edits only the
+// columns, so a column edit keeps the permissions as they are.
+function permissionsBlock(yaml) {
+  const lines = yaml.split('\n');
+  const start = lines.findIndex(l => /^permissions:/.test(l));
+  if (start < 0) return '';
+  let end = start + 1;
+  while (end < lines.length && (lines[end] === '' || /^[\s#]/.test(lines[end]))) end++;
+  return lines.slice(start, end).join('\n').replace(/\n*$/, '\n');
 }
 
 function scalar(s) {
@@ -505,6 +522,252 @@ document.getElementById('ds-history').addEventListener('click', e => {
   setMode('compare', {left: b.dataset.version});
 });
 
+// --- permissions -----------------------------------------------------------------
+// They're part of the mapping (`permissions:`), so versioned with it: the form
+// is built by the server from the YAML being edited, and each change is written
+// back into that YAML (POST …/access/yaml) — Save, Discard, compare and code
+// mode all see it as one more edit of the mapping. The form is kept across
+// modes and rebuilt only when the YAML changed elsewhere.
+
+let accessForm = null;
+let accessFor = null;          // the YAML the form was built from, or last wrote
+
+// The form's roles and filters — not the draft rows, which hold a filter still
+// being built.
+function accessData() {
+  const fd = new FormData();
+  for (const el of accessForm.elements) {
+    if (!el.name || el.closest('.ds-draft, template')) continue;
+    if ((el.type === 'checkbox' || el.type === 'radio') && !el.checked) continue;
+    fd.append(el.name, el.value);
+  }
+  return fd;
+}
+
+async function showAccess() {
+  if (!accessForm || accessFor !== text) {
+    const res = await fetch(`${base}/access/form`, {method: 'POST', body: new URLSearchParams({mapping: text})});
+    const box = document.createElement('div');
+    box.innerHTML = await res.text();
+    if (mode !== 'access') return;           // switched away while it loaded
+    const form = box.querySelector('form');
+    if (!form) { accessForm = null; panel.replaceChildren(...box.childNodes); return; }  // no roles, or bad YAML
+    accessForm = form;
+    accessFor = text;
+    wireAccess(form);
+  }
+  panel.replaceChildren(accessForm);
+  if (window.htmx) window.htmx.process(accessForm);
+}
+
+// The form, into the YAML's `permissions:`. Ordered: each waits for the last,
+// so the YAML never goes back to an older state.
+let accessWrite = Promise.resolve();
+function syncAccess() {
+  accessWrite = accessWrite.then(async () => {
+    const fd = accessData();
+    fd.append('mapping', text);
+    const res = await fetch(`${base}/access/yaml`, {method: 'POST', body: fd});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { toast(body.error || 'Could not apply'); return; }
+    text = accessFor = body.mapping;
+    updateSave();
+  });
+}
+
+// The filter rows are the chart builder's (`FilterListParam`), run by the same
+// script, filter-builder.js: here it only needs telling that a row's data is
+// this dataset's, with no dashboard behind it.
+if (window.ffFilterBuilder) {
+  window.ffFilterBuilder.context = () => ({yaml_text: '', filter_dataset: data.name});
+}
+
+function wireAccess(form) {
+  const roleTpl = form.querySelector('template.ds-access-row-tpl');
+  const draftTpl = form.querySelector('template.ds-draft-tpl');
+  const fullTpl = form.querySelector('template.ds-full-tpl');
+  const menu = form.querySelector('.ds-access-add');
+  const tbody = form.querySelector('.ds-access-table > tbody');
+
+  // Full — all rows, no filter — is the draft's column picker's first entry: a
+  // level, not a column, so it's added here, drawn apart from the columns.
+  // Watched, since filter-builder.js re-renders the fields on its own.
+  const addFull = scope => {
+    for (const list of scope.querySelectorAll('.ds-draft .ff-colpick-list')) {
+      if (!list.querySelector('.ds-full')) list.prepend(fullTpl.content.cloneNode(true));
+    }
+  };
+  new MutationObserver(() => addFull(form)).observe(form, {childList: true, subtree: true});
+
+  // A role with no filters is full: it shows Full where its filters would be.
+  function paint(role) {
+    const full = !role.querySelector('tr.ds-filter');
+    role.classList.toggle('is-full', full);
+    role.classList.toggle('is-filter', !full);
+    recount(role);
+  }
+  // The Rows column: what the role's filters let through, counted again
+  // whenever they change (only if they did — paint runs often).
+  async function recount(role) {
+    const fd = new FormData();
+    for (const el of role.querySelectorAll('.ds-filter-table input[name]')) fd.append(el.name, el.value);
+    const key = new URLSearchParams(fd).toString();
+    const cell = role.querySelector('.ds-access-rows');
+    if (cell.dataset.key === key) return;
+    cell.dataset.key = key;
+    const res = await fetch(`${base}/access/rows`, {method: 'POST', body: fd});
+    const body = await res.json().catch(() => ({}));
+    if (cell.dataset.key !== key) return;      // changed again meanwhile
+    cell.textContent = body.rows == null ? '—' : body.rows.toLocaleString('en-US');
+  }
+  // The draft row, blank, open (the role's +) or closed.
+  function resetDraft(role, open = false) {
+    const editing = role.querySelector('tr.ds-filter.is-editing');
+    if (editing) editing.classList.remove('is-editing');
+    const draft = role.querySelector('.ds-draft');
+    draft.replaceChildren(draftTpl.content.cloneNode(true));
+    draft.classList.toggle('is-open', open);
+    addFull(role);
+    paint(role);
+  }
+
+  // ✓: the draft, read by the server into a filter, as a compact row — in
+  // place of the one being edited, or added after the others.
+  async function addFilter(role) {
+    const draft = role.querySelector('.ds-draft');
+    const fd = new FormData();
+    for (const el of draft.querySelectorAll('[name]')) {
+      if (el.type === 'checkbox' && !el.checked) continue;
+      fd.append(el.name, el.value);
+    }
+    const res = await fetch(`${base}/access/filter`, {method: 'POST', body: fd});
+    const html = await res.text();
+    if (!res.ok) {
+      const box = document.createElement('div');
+      box.innerHTML = html;
+      toast(box.textContent.trim() || 'Not a filter yet');
+      return;
+    }
+    const holder = document.createElement('tbody');
+    holder.innerHTML = html;
+    const row = holder.firstElementChild;
+    const editing = role.querySelector('tr.ds-filter.is-editing');
+    if (editing) editing.replaceWith(row);
+    else role.querySelector('.ds-filter-table tbody').appendChild(row);
+    resetDraft(role);                          // closed again
+    syncAccess();
+  }
+
+  // ✎: the filter back in the draft's fields, to change; ✓ puts it back.
+  async function editFilter(role, row) {
+    resetDraft(role, true);
+    row.classList.add('is-editing');
+    const fd = new FormData();
+    fd.append('yaml_text', '');
+    fd.append('filter_dataset', data.name);
+    for (const el of row.querySelectorAll('input[name]')) fd.append(el.name, el.value);
+    const res = await fetch('/filter/fields', {method: 'POST', body: fd});
+    if (!res.ok) return;
+    role.querySelector('.ds-draft .ff-filter-fields').outerHTML = await res.text();
+    if (window.htmx) window.htmx.process(role);
+  }
+
+  // Only roles with access are listed: the + menu offers the others.
+  const syncMenu = () => {
+    const listed = new Set([...tbody.querySelectorAll('tr[data-role]')].map(r => r.dataset.role));
+    const offers = [...menu.querySelectorAll('button[data-role]')];
+    for (const b of offers) b.hidden = listed.has(b.dataset.role);
+  };
+  // A new role, made here: created on the Access list's route, then given
+  // access to this dataset like any other offered role.
+  const newRole = menu.querySelector('.ds-access-new input');
+  newRole.addEventListener('keydown', async e => {
+    if (e.key === 'Escape') { newRole.value = ''; menu.open = false; return; }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const name = newRole.value.trim();
+    if (!name) return;
+    const res = await fetch('/access/new', {method: 'POST', body: new URLSearchParams({name})});
+    if (!res.ok) {
+      const box = document.createElement('div');
+      box.innerHTML = await res.text();
+      toast(box.textContent.trim() || 'Could not create the role');
+      return;
+    }
+    const offer = document.createElement('button');
+    offer.type = 'button';
+    offer.dataset.role = name;
+    offer.textContent = name;
+    menu.querySelector('.ff-pathdd-menu').insertBefore(offer, newRole.closest('label'));
+    newRole.value = '';
+    giveAccess(offer);
+    syncAccess();
+  });
+  function giveAccess(b) {
+    const role = roleTpl.content.firstElementChild.cloneNode(true);
+    role.dataset.role = b.dataset.role;
+    role.querySelector('input[name=role]').value = b.dataset.role;
+    role.querySelector('.name').textContent = b.dataset.role;
+    tbody.appendChild(role);
+    resetDraft(role);
+    if (window.htmx) window.htmx.process(role);
+    menu.open = false;
+    syncMenu();
+  }
+
+  // Runs before filter-builder.js (this form, then the document), which does
+  // the draft's fields; this does the rest.
+  form.addEventListener('click', e => {
+    const role = e.target.closest('.ds-access-row');
+    const full = e.target.closest('.ds-full');
+    if (full) {                                // all of it: drop every filter
+      full.closest('.ff-colpick').open = false;
+      for (const row of role.querySelectorAll('tr.ds-filter')) row.remove();
+      resetDraft(role);
+    }
+    if (e.target.closest('.ds-tool-add, .ds-full-chip')) {
+      resetDraft(role, true);
+      // Straight to the columns — once this click is done, or the builder's
+      // close-on-click-elsewhere would shut the list again at once.
+      const pick = role.querySelector('.ds-draft .ff-colpick');
+      setTimeout(() => { pick.open = true; });
+    }
+    if (e.target.closest('.ds-filter-ok')) addFilter(role);
+    if (e.target.closest('.ds-filter-cancel')) resetDraft(role);
+    const edit = e.target.closest('.ds-filter-edit');
+    if (edit) editFilter(role, edit.closest('tr.ds-filter'));
+    const remove = e.target.closest('.ds-filter-remove');
+    if (remove) {
+      const row = remove.closest('tr.ds-filter');
+      if (row.classList.contains('is-editing')) resetDraft(role);
+      row.remove();
+      paint(role);
+    }
+    const offer = e.target.closest('.ds-access-add button[data-role]');
+    if (offer) giveAccess(offer);
+    const revoke = e.target.closest('.ds-tool-del');
+    if (revoke) { role.remove(); syncMenu(); }
+    if (full || remove || offer || revoke) syncAccess();
+  });
+  form.addEventListener('submit', e => e.preventDefault());
+
+  addFull(form);
+  for (const role of tbody.querySelectorAll('.ds-access-row')) {
+    // Counted by the server already: remember for what, so paint won't ask.
+    const fd = new FormData();
+    for (const el of role.querySelectorAll('.ds-filter-table input[name]')) fd.append(el.name, el.value);
+    role.querySelector('.ds-access-rows').dataset.key = new URLSearchParams(fd).toString();
+    paint(role);
+  }
+}
+
+// The + menu closes on a click anywhere else, as a native menu would.
+document.addEventListener('click', e => {
+  const open = document.querySelector('.ds-access-add[open]');
+  if (open && !open.contains(e.target)) open.open = false;
+});
+
+
 // --- save, and the build it starts -----------------------------------------------
 
 function updateSave() {
@@ -517,6 +780,7 @@ discardBtn.addEventListener('click', () => {
   text = data.mapping;
   rules = data.rules.map(r => ({...r}));
   codeStale = false;
+  accessForm = null;                         // re-read from the server
   updateSave();
   setMode(mode);
 });

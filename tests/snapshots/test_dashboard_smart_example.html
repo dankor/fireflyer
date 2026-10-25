@@ -172,6 +172,23 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;
 }
+/* A chart whose dataset the role being viewed as can't read (`Dashboard.as_role`):
+   a lock where the data would be, the chart's id under it. */
+.fireflyer-no-access {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  background: var(--ff-panel);
+  border: 1px dashed var(--ff-muted);
+  border-radius: 4px;
+  color: var(--ff-muted);
+}
+.fireflyer-no-access-id { font-size: 12px; }
 .fireflyer-dashboard-header {
   font-size: 18px;
   font-weight: 600;
@@ -850,10 +867,8 @@ body.fireflyer-resizing-col * {
   vertical-align: bottom;
 }
 .fireflyer-filter-table .col .ff-type-glyph { margin-right: 4px; }
-/* The source icon. What this chart selects is what it is doing *to others*;
-   what arrives from another chart is being done *to it* — red and blue, the
-   badge's own emitter / filtered colours. A typed (global) filter has no chart
-   colour to borrow, and a built-in one is quiet: it's part of the chart. */
+/* The source icon: what kind of filter the row is — a globe (typed), a lock
+   (built in), a cursor (a click: this chart's or another's), a role. */
 .fireflyer-src {
   position: relative;
   display: inline-flex;
@@ -865,10 +880,10 @@ body.fireflyer-resizing-col * {
 }
 .fireflyer-src > svg { width: 13px; height: 13px; }
 .fireflyer-src:focus-visible { box-shadow: 0 0 0 2px var(--ff-accent); }
-.src-emitter .fireflyer-src { color: var(--ff-danger); }
-.src-incoming .fireflyer-src { color: var(--ff-accent); }
-.src-global .fireflyer-src { color: var(--ff-tooltip-ink); }
-.src-declared .fireflyer-src { color: var(--ff-tooltip-ink); opacity: 0.55; }
+/* One quiet tone for every source, the same as the column's type glyph beside
+   it: monochrome icons that say *what kind*; the tooltip names which. (The
+   badge keeps its colours for the chart as a whole.) */
+.fireflyer-src { color: rgba(255, 255, 255, 0.55); }
 /* Its name, shown on hover — or focus, which a click gives it (`tabindex`), so
    it works on touch too. Light on the dark panel, like the dataset's ⓘ. A
    chart source leads with the chart's type icon; this chart's own selection

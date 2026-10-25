@@ -57,6 +57,13 @@ def _columns(dataset: str | None, resolve=None) -> list[str]:
         return []
 
 
+def dataset_context(dataset: str, resolve=None) -> ParamContext:
+    """What a widget needs for one dataset with no dashboard behind it — a
+    dataset's own filters (its permissions): its columns, their types and
+    values."""
+    return _context({}, {"dataset": dataset}, resolve)
+
+
 def _chart_config(config: dict, cid: str) -> dict:
     charts = config.get("charts")
     if not isinstance(charts, dict) or cid not in charts:

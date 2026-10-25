@@ -52,7 +52,9 @@ async function run() {
     // /dashboard route as you filter), so every render — first load, a shared
     // link, a YAML edit — starts from them instead of dropping them.
     const state = new URLSearchParams(location.search).get('f') || '';
-    const res = await fetch('/execute?active_tab=' + activeTab + '&f=' + encodeURIComponent(state), {
+    const role = currentMode === 'view' ? viewRole : '';
+    const res = await fetch('/execute?active_tab=' + activeTab + '&f=' + encodeURIComponent(state)
+      + '&role=' + encodeURIComponent(role), {
       method: 'POST',
       headers: {'Content-Type': 'application/yaml'},
       body: codeEl.value,
@@ -422,15 +424,7 @@ calcsBody.addEventListener('click', async e => {
     return;
   }
   if (e.target.closest('.ff-calcs-cancel')) { loadCalcs(); return; }
-  const fadd = e.target.closest('.ff-filter-add');
-  if (fadd) {
-    const wrap = fadd.closest('.ff-filters');
-    wrap.querySelector('.ff-filter-rows').appendChild(
-      wrap.querySelector('.ff-filter-tpl').content.cloneNode(true));
-    return;
-  }
-  const fdel = e.target.closest('.ff-filter-del');
-  if (fdel) fdel.closest('.ff-filter-row').remove();
+  // A filter row's + and × are filter-builder.js's.
 });
 
 // Kind dropdown flips the form between aggregate (agg + filters shown) and a
@@ -474,6 +468,47 @@ const layoutEl = document.getElementById('layout');
 // editing affordances without the JS touching each one.
 // `diff` has no side panel: comparing two YAMLs wants the whole width, so
 // diff-view.js shows its own full-width view while the mode is on.
+// --- view as a role ------------------------------------------------------------
+// View mode's role picker (`portal.role_picker`): the dashboard rendered as a
+// role sees it — its datasets narrowed by the role's filters, the rest locked.
+// The pick rides in the URL (`?role=<id>`), so a reload or a link keeps it, and
+// it holds only in view mode: every other mode is for building the dashboard,
+// which wants all of it. `var`: run() reads it before this line runs.
+var viewRole = '';
+const rolePick = document.getElementById('ff-role');
+
+function paintRole() {
+  if (!rolePick) return;
+  let name = '';
+  for (const b of rolePick.querySelectorAll('button[data-role]')) {
+    const on = b.dataset.role === viewRole;
+    b.classList.toggle('active', on);
+    if (on && viewRole) name = b.textContent;
+  }
+  if (viewRole && !name) viewRole = '';              // a role since removed
+  document.getElementById('ff-role-name').textContent = name;
+  rolePick.classList.toggle('is-on', !!viewRole);
+  rolePick.querySelector('summary').title = name ? 'Viewing as ' + name + ' (pick again to stop)' : 'View as role';
+}
+
+if (rolePick) {
+  viewRole = new URLSearchParams(location.search).get('role') || '';
+  rolePick.addEventListener('click', e => {
+    const b = e.target.closest('button[data-role]');
+    if (!b) return;
+    rolePick.open = false;
+    // The active role again: back to all of it.
+    viewRole = b.dataset.role === viewRole ? '' : b.dataset.role;
+    const url = new URL(location.href);
+    if (viewRole) url.searchParams.set('role', viewRole);
+    else url.searchParams.delete('role');
+    window.history.replaceState(null, '', url);
+    paintRole();
+    run();
+  });
+  paintRole();
+}
+
 const MODES = { view: null, edit: null, code: 'ff-yaml', diff: null, chat: 'ff-chat', docs: 'ff-docs', calcs: 'ff-calcs' };
 const modeSwitch = document.getElementById('ff-modes');
 let currentMode = 'view';
@@ -482,7 +517,13 @@ const modeHooks = [];
 
 function setMode(mode) {
   if (!(mode in MODES)) return;
+  const wasView = currentMode === 'view';
   currentMode = mode;
+  // A role only holds in view mode: crossing in or out of it re-renders.
+  if (rolePick) {
+    rolePick.hidden = mode !== 'view';
+    if (viewRole && wasView !== (mode === 'view')) run();
+  }
   // The server always renders the editor chrome; the mode class decides whether
   // it is shown, so switching costs no re-render.
   // Derived from MODES, not a written-out list: `code` was added to the switch
@@ -1524,59 +1565,15 @@ modalBox.addEventListener('change', async e => {
   modalBox.innerHTML = await res.text();
 });
 
-// Filter builder: add clones the blank-row template; the × removes a row.
-modalBox.addEventListener('click', e => {
-  const add = e.target.closest('.ff-filter-add');
-  if (add) {
-    const wrap = add.closest('.ff-filters');
-    const tpl = wrap.querySelector('.ff-filter-tpl');
-    wrap.querySelector('.ff-filter-rows').appendChild(tpl.content.cloneNode(true));
-    return;
-  }
-  const del = e.target.closest('.ff-filter-del');
-  if (del) del.closest('.ff-filter-row').remove();
-});
-
-// Filter builder (chart modal and calcs manager): a new column or op re-renders
-// that row's fields, so `in` / `not in` list the column's values to tick. Only
-// this row's fields are sent — the form holds every row, which is why this is
-// done here rather than with htmx like the dashboard's filter panel.
-async function refreshFilterRow(row) {
-  const fields = row.querySelector('.ff-filter-fields');
-  const form = row.closest('form');
-  const fd = new FormData();
-  fd.append('yaml_text', codeEl.value);
-  fd.append('filter_dataset', form && form.elements.dataset ? form.elements.dataset.value : '');
-  for (const el of fields.querySelectorAll('[name]')) {
-    if (el.type === 'checkbox' && !el.checked) continue;
-    fd.append(el.name, el.value);
-  }
-  const res = await fetch('/filter/fields', { method: 'POST', body: fd });
-  if (res.ok) fields.outerHTML = await res.text();
+// The filter builder's rows (chart modal, calcs manager) are filter-builder.js,
+// shared with a dataset's permissions; it asks here which dashboard and dataset
+// a row belongs to — its form's `dataset` field.
+if (window.ffFilterBuilder) {
+  window.ffFilterBuilder.context = row => {
+    const form = row.closest('form');
+    return {yaml_text: codeEl.value, filter_dataset: form && form.elements.dataset ? form.elements.dataset.value : ''};
+  };
 }
-// The column field is a list of buttons, not a <select> (see `_column_picker`
-// in params.py). In the builder and calcs manager a pick is ours to apply —
-// the dashboard's own panel does it over htmx.
-document.addEventListener('click', e => {
-  const item = e.target.closest('.ff-colpick-item');
-  const row = item && item.closest('.ff-filter-row');
-  if (row) {
-    e.preventDefault();
-    row.querySelector('input[name=filter_column]').value = item.dataset.column;
-    item.closest('.ff-colpick').open = false;
-    refreshFilterRow(row);
-  }
-  // A click anywhere else closes an open column list, as a native menu would.
-  for (const open of document.querySelectorAll('.ff-colpick[open]')) {
-    if (!open.contains(e.target)) open.open = false;
-  }
-});
-document.addEventListener('change', e => {
-  const name = e.target.name;
-  if (name !== 'filter_column' && name !== 'filter_op') return;
-  const row = e.target.closest('.ff-filter-row');
-  if (row) refreshFilterRow(row);
-});
 
 // The date-range picker is htmx (the same control the dashboard's filter panel
 // uses), but htmx only wires markup it swapped in itself — not the modal's and
@@ -1589,33 +1586,6 @@ if (typeof MutationObserver !== 'undefined') {
   });
   for (const el of [modalBox, calcsBody]) wireHtmx.observe(el, { childList: true, subtree: true });
 }
-
-// A row's value search: re-fetch just its list after a pause in typing, so the
-// box keeps focus. Ticked values ride along and stay listed. A response that
-// arrives after a newer search was sent is dropped, or a slow early one could
-// overwrite the later result.
-let searchTimer = null;
-let searchSeq = 0;
-async function searchFilterValues(row, box) {
-  const seq = ++searchSeq;
-  const form = row.closest('form');
-  const fd = new FormData();
-  fd.append('yaml_text', codeEl.value);
-  fd.append('filter_dataset', form && form.elements.dataset ? form.elements.dataset.value : '');
-  fd.append('filter_column', row.querySelector('[name=filter_column]').value);
-  fd.append('filter_q', box.value);
-  for (const el of row.querySelectorAll('[name=filter_value]:checked')) fd.append('filter_value', el.value);
-  const res = await fetch('/filter/values', { method: 'POST', body: fd });
-  if (!res.ok || seq !== searchSeq) return;
-  row.querySelector('.ff-filter-choices').outerHTML = await res.text();
-}
-document.addEventListener('input', e => {
-  if (e.target.name !== 'filter_q') return;
-  const row = e.target.closest('.ff-filter-row');
-  if (!row) return;                       // the dashboard panel searches over htmx
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => searchFilterValues(row, e.target), 250);
-});
 
 // Save/Add: submit fields + current YAML; on success swap the editor and re-run.
 // Edit posts to /save (needs cid); add posts to /create (placement is in the
