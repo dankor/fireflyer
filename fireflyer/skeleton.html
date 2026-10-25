@@ -45,6 +45,10 @@
   {%- if editing %}
   <input type="hidden" name="editing" value="1">
   {%- endif %}
+  {#- The role the editor views the dashboard as, so every cell renders as it. -#}
+  {%- if role %}
+  <input type="hidden" name="role" value="{{ role }}">
+  {%- endif %}
   <span id="ff-grain-state">
     {%- for tok in grain_tokens %}
     <input type="hidden" name="grain" value="{{ tok }}">

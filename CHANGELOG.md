@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-25
+
+### Added
+
+- **Access tab.** A third segment beside Dashboards and Datasets lists roles —
+  name, description (also each role's tooltip elsewhere), last change and the
+  datasets granting it access — with add, edit and remove. Roles live in a `roles`
+  table: in the portal database, or locally in a sqlite file
+  (`<FIREFLYER_DATA>/fireflyer.db`) shared by every path.
+- **Dataset permissions.** A dataset page's mode switch gains a fifth mode,
+  permissions: a Role | Filters | Rows table of the roles that may read the
+  dataset, Rows counting what each one sees (recounted as its filters change).
+  A role's filters read as a chart's filter panel lists them (type, column,
+  op, values; edit, remove), over the chart builder's own fields where a new
+  one is built and ✓ adds it. No filters is **Full** — the fields' column
+  picker's first entry, set apart from the columns. A role not listed has no
+  access; the header's **+** gives one access — or makes a new role right
+  there — and the trash takes it away. Kept in the
+  dataset's **mapping YAML** under a `permissions:` key, by role name
+  (`viewer: [filters…]`, `admin: full`) — so they're **versioned** with the
+  columns: a change is the next minor, shown in code mode and compare, and
+  restorable; a new upload carries them forward; the published version's are
+  in force. Renaming or removing a role writes a new version of every dataset
+  naming it. Permissions kept beside the versions earlier move into the
+  mapping on first load.
+- **View as a role.** In view mode the dashboard editor's topbar has a role
+  picker (every role; picking the active one again stops). Picking one renders the dashboard as that
+  role sees it: each chart narrowed by the role's filters — listed first in its
+  filter panel, under a role icon — and a lock in place of a chart whose
+  dataset the role can't read (or whose role filter names a column the data
+  lacks). Inline data is the dashboard's own and never locked. The pick rides
+  in the URL (`?role=`) and holds only in view mode.
+
+### Changed
+
+- The filter builder is one implementation for every page that builds
+  filters: its styles moved from `editor.css` to a shared `filters.css`, and
+  its behaviour (add / remove a row, pick a column, search values) from
+  `editor.js` to a shared `filter-builder.js` — the chart modal, the calcs
+  manager and a dataset's permissions all run it.
+- A filter panel's source icons are one monochrome tone (no red / blue click
+  icons, no dimmed lock); the tooltip still names the source.
+
+### Fixed
+
+- The Built-in source's tooltip was see-through — the lock's dimming faded the
+  bubble inside it too.
+- Gallery dialogs: fields touched each other and ran past the dialog's edge,
+  and the name field drew the browser's focus ring.
+- A dropdown's hidden entries still showed (a `display` rule overrode
+  `hidden`).
+
 ## [0.19.0] - 2026-10-25
 
 ### Added
@@ -1118,7 +1170,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/dankor/fireflyer/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/dankor/fireflyer/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/dankor/fireflyer/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/dankor/fireflyer/compare/v0.16.0...v0.17.0

@@ -23,11 +23,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
+from pathlib import Path
 from urllib.parse import quote
 
 import yaml
 
 from fireflyer import column_map
+from fireflyer import filters as filters_mod
 from fireflyer.dashboard import Dashboard
 from fireflyer.datasets import Dataset, Version
 from fireflyer.params import COLUMN_TYPES, column_type, type_icon_svg
@@ -204,6 +206,101 @@ class _SqlUses:
         return [Use(str(i), n, ds, c) for i, n, ds, c in rows]
 
 
+# The Access tab's roles: a name each, and when it was made and last renamed.
+_ROLES_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS roles ("
+    " id TEXT PRIMARY KEY,"
+    " name TEXT NOT NULL UNIQUE,"
+    " description TEXT NOT NULL DEFAULT '',"
+    " created_at TEXT NOT NULL,"
+    " updated_at TEXT NOT NULL)"
+)
+
+
+class RoleError(ValueError):
+    """A role name that's empty or already taken."""
+
+
+@dataclass
+class Role:
+    id: str
+    name: str
+    created_at: str        # ISO UTC, as the dashboards' timestamps
+    updated_at: str
+    description: str = ""  # what the role is for — under its name, and in tooltips
+
+
+def _role_name(name: str, roles: list[Role], keep: str = "") -> str:
+    """`name` trimmed, checked: not empty, and no other role (than `keep`, the
+    one being renamed) has it."""
+    name = name.strip()
+    if not name:
+        raise RoleError("a role needs a name")
+    if any(r.name == name and r.id != keep for r in roles):
+        raise RoleError(f"there is already a role named {name!r}")
+    return name
+
+
+class RoleStore:
+    """The roles, in a database — the portal's (sqlite, or Postgres with a
+    `postgresql://` DSN; `psycopg` imported only then), or a local sqlite file
+    when there's no portal. Its own connection, like the dataset catalog's."""
+
+    def __init__(self, dsn: str):
+        self._pg = dsn.startswith(("postgres://", "postgresql://"))
+        if self._pg:
+            import psycopg
+
+            self._conn = psycopg.connect(dsn, autocommit=True)
+        else:
+            if dsn != ":memory:":
+                Path(dsn).parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(dsn, check_same_thread=False)
+        self._run(_ROLES_SCHEMA)
+        self._add_description()
+
+    def _run(self, sql: str, params: tuple = ()) -> list[tuple]:
+        if self._pg:
+            sql = sql.replace("?", "%s")
+        cursor = self._conn.execute(sql, params)
+        rows = cursor.fetchall() if cursor.description else []
+        if not self._pg:
+            self._conn.commit()
+        return rows
+
+    def _add_description(self) -> None:
+        """A roles table from before descriptions gets the column."""
+        try:
+            self._run("ALTER TABLE roles ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass                                   # there already
+
+    def roles(self) -> list[Role]:
+        rows = self._run("SELECT id, name, created_at, updated_at, description FROM roles ORDER BY name")
+        return [Role(str(i), n, str(c), str(u), d or "") for i, n, c, u, d in rows]
+
+    def create_role(self, name: str, description: str = "") -> str:
+        name = _role_name(name, self.roles())
+        new_id, now = str(uuid.uuid4()), _now()
+        self._run(
+            "INSERT INTO roles (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (new_id, name, description.strip(), now, now),
+        )
+        return new_id
+
+    def rename_role(self, id: str, name: str, description: str | None = None) -> None:
+        """A new name — and description, unless None (kept as it is)."""
+        name = _role_name(name, self.roles(), keep=id)
+        if description is None:
+            self._run("UPDATE roles SET name = ?, updated_at = ? WHERE id = ?", (name, _now(), id))
+        else:
+            self._run("UPDATE roles SET name = ?, description = ?, updated_at = ? WHERE id = ?",
+                      (name, description.strip(), _now(), id))
+
+    def delete_role(self, id: str) -> None:
+        self._run("DELETE FROM roles WHERE id = ?", (id,))
+
+
 def _name_of(yaml_text: str) -> str:
     """The dashboard's display name, from the YAML's required top-level `name:`
     key. Also validates: `from_yaml` raises DashboardError on an invalid or
@@ -370,6 +467,11 @@ _ICONS = {
     "service": '<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>'
                '<circle cx="12" cy="12" r="2.8"/><path d="M4 4l16 16"/>',
     "cross": '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
+    # Every row: a table with nothing struck out — a role's full access.
+    "full": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 10v10"/>',
+    # A person with a shield: a role — who may see what.
+    "role": '<circle cx="9" cy="7" r="3.5"/><path d="M2.5 20c0-3.8 2.9-6.5 6.5-6.5 1.4 0 2.7.4 3.7 1.1"/>'
+            '<path d="M18 12.5l3.5 1.4v2.8c0 2.1-1.5 3.7-3.5 4.3-2-.6-3.5-2.2-3.5-4.3v-2.8z"/>',
     "save": '<path d="M5 3h11l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 3v5h7V3"/><rect x="7" y="13" width="10" height="7" rx="1"/>',
 }
 
@@ -404,15 +506,19 @@ def _icon(name: str) -> str:
     )
 
 
+def _sub(description: str) -> str:
+    """A description as the small line under a name, cut with an ellipsis and
+    whole on hover."""
+    if not description:
+        return ""
+    return f'<span class="sub" title="{escape(description, quote=True)}">{escape(description)}</span>'
+
+
 def name_cell(href: str, name: str, description: str = "") -> str:
     """A list row's name, linking to it, with its description as a small line
     under it — cut with an ellipsis, whole on hover — as a selected item's title
     shows it in the topbar."""
-    sub = (
-        f'<span class="sub" title="{escape(description, quote=True)}">{escape(description)}</span>'
-        if description else ""
-    )
-    return f'<a class="name" href="{href}">{escape(name)}</a>{sub}'
+    return f'<a class="name" href="{href}">{escape(name)}</a>{_sub(description)}'
 
 
 def _stamp(iso: str) -> str:
@@ -475,7 +581,7 @@ def _row(row: DashboardRow, authors: bool = True, known: set[str] | None = None,
 
 def _dialog(
     dialog_id: str, form_id: str, action: str, heading: str, ok_label: str,
-    description: bool = False,
+    description: bool = False, placeholder: str = "Dashboard name",
 ) -> str:
     # `action` is empty for the clone dialog — set by JS from the clicked row.
     # Only a new dashboard asks for a description: a clone keeps its source's.
@@ -487,7 +593,7 @@ def _dialog(
 <dialog id="{dialog_id}">
   <form id="{form_id}" method="post" action="{action}">
     <h3>{heading}</h3>
-    <input name="name" id="{form_id}-name" placeholder="Dashboard name"
+    <input name="name" id="{form_id}-name" placeholder="{placeholder}"
            autocomplete="off" required>{about}
     <div class="dialog-actions">
       <button type="button" class="cancel"
@@ -512,8 +618,9 @@ def back_button(href: str, title: str) -> str:
 
 
 def nav_switch(active: str) -> str:
-    """The list pages' left-nav control: a segmented Dashboards | Datasets switch
-    (`active` marks the current list). Not shown on selected-item pages."""
+    """The list pages' left-nav control: a segmented Dashboards | Datasets |
+    Access switch (`active` marks the current list). Not shown on selected-item
+    pages."""
     def seg(href, label, key):
         cls = " active" if key == active else ""
         return f'<a class="ff-switch-seg{cls}" href="{href}">{label}</a>'
@@ -521,6 +628,7 @@ def nav_switch(active: str) -> str:
         '<nav class="ff-switch">'
         + seg("/", "Dashboards", "dashboards")
         + seg("/datasets", "Datasets", "datasets")
+        + seg("/access", "Access", "access")
         + "</nav>"
     )
 
@@ -539,6 +647,31 @@ def path_dropdown(paths: list[str] | None, active_path: str | None) -> str:
     return (
         '<details class="ff-pathdd"><summary title="Switch path">'
         f"{label}{_CHEVRON}</summary>"
+        f'<div class="ff-pathdd-menu">{items}</div></details>'
+    )
+
+
+def _tip(text: str) -> str:
+    """` title="…"` for a role's description — its tooltip — or nothing."""
+    return f' title="{escape(text, quote=True)}"' if text else ""
+
+
+def role_picker(roles: list[Role]) -> str:
+    """The editor's view-as dropdown (view mode): every role, by name (what
+    datasets' `permissions:` name). Picking one renders the dashboard as that
+    role sees it (`Dashboard.as_role`); picking it again goes back to all of
+    it. The summary shows the role's name, or just the icon. Empty with no
+    roles — there's nothing to view as. editor.js does the rest."""
+    if not roles:
+        return ""
+    items = "".join(
+        f'<button type="button" data-role="{escape(r.name, quote=True)}"{_tip(r.description)}>{escape(r.name)}</button>'
+        for r in roles
+    )
+    return (
+        '<details class="ff-pathdd ff-role" id="ff-role">'
+        '<summary title="View as role" aria-label="View as role">'
+        f'{_icon("role")}<span class="ff-role-name" id="ff-role-name"></span>{_CHEVRON}</summary>'
         f'<div class="ff-pathdd-menu">{items}</div></details>'
     )
 
@@ -720,6 +853,221 @@ def render_datasets(
     )
 
 
+# --- a dataset's permissions -------------------------------------------------------
+# The dataset page's fifth mode: each role, and what it may see of the dataset —
+# nothing (the default), all of it, or the rows a set of filters lets through.
+# The filter rows are the chart builder's (`params.filter_fields`), so a role's
+# filters read and pick values as a chart's do; dataset-columns.js adds/removes
+# rows and re-fetches one on a column or op change, as editor.js does.
+
+# A listed role may read the dataset — all of it, or what its filters let
+# through; a role that may not isn't listed (the trash takes a role off, the +
+# menu puts one back). Its filters read as a chart's filter panel shows them —
+# a compact row each (type, column, op, values; ✎ edits, ✕ removes) — over the
+# chart builder's own fields (`params.filter_fields`, driven by the shared
+# filter-builder.js), where ✓ adds the filter built there. With no filters a
+# role has all of it: Full, which the fields' column picker offers first.
+
+
+def access_filter_row(f: dict, types: dict[str, str]) -> str:
+    """One of a role's filters, as a chart's filter panel lists it. Its parts
+    ride along as hidden inputs, which the save reads (`parse_filters`)."""
+    from fireflyer.params import FILTER_OPS, OP_WORDS, type_glyph
+
+    filt = filters_mod.normalize([f])[0]
+    column = escape(filt.column, quote=True)
+    vals = escape(filt.values_text, quote=True)
+    hidden = (
+        f'<input type="hidden" name="filter_column" value="{column}">'
+        f'<input type="hidden" name="filter_op" value="{filt.op}">'
+        + "".join(f'<input type="hidden" name="filter_value" value="{escape(str(v), quote=True)}">'
+                  for v in filt.values)
+    )
+    return (
+        '<tr class="ds-filter">'
+        f'<td class="col">{type_glyph(types.get(filt.column))}'
+        f'<span class="col-name" title="{column}">{escape(filt.column)}</span>{hidden}</td>'
+        f'<td class="op" title="{OP_WORDS[filt.op]}">{dict(FILTER_OPS)[filt.op]}</td>'
+        f'<td class="vals" title="{vals}">{vals}</td>'
+        '<td class="rm">'
+        f'<button type="button" class="ds-filter-edit" title="Edit filter" aria-label="Edit filter on {column}">{_icon("pencil")}</button>'
+        f'<button type="button" class="ds-filter-remove" title="Remove filter" aria-label="Remove filter on {column}">{_icon("cross")}</button>'
+        "</td></tr>"
+    )
+
+
+def access_draft(fields: str) -> str:
+    """The row a filter is built in — the chart builder's fields, then ✓ (add,
+    or replace the one being edited) and ✕ (close). Shown only once asked
+    for: the role's + or a filter's ✎."""
+    return (
+        f'<div class="ff-filter-row ds-draft-row">{fields}<span class="ds-draft-acts">'
+        f'<button type="button" class="ds-filter-ok" title="Apply filter" aria-label="Apply filter">{_icon("check")}</button>'
+        f'<button type="button" class="ds-filter-cancel" title="Cancel" aria-label="Cancel">{_icon("cross")}</button>'
+        "</span></div>"
+    )
+
+
+def _rows_cell(count) -> str:
+    """How many rows the role sees: a number, or a lock when one of its filters
+    names a column the data lacks (it would see nothing)."""
+    text = "—" if count is None else f"{count:,}"
+    tip = "A filter names a column the data lacks" if count is None else "Rows this role sees"
+    return f'<td class="ds-access-rows" title="{tip}">{text}</td>'
+
+
+def _access_row(name: str, filters: list, chip, draft: str, count=None, description: str = "") -> str:
+    """One listed role: its name; its filters — or Full, with none — over the
+    draft row, closed; and the lists' own icon buttons: + (a filter, for a
+    filtered role — a full one's Full opens the draft) and the trash (no
+    access)."""
+    level = "filter" if filters else "full"
+    label = escape(name, quote=True)
+    return (
+        f'<tr class="ds-access-row is-{level}" data-role="{label}">'
+        f'<td class="ds-access-role"><input type="hidden" name="role" value="{label}">'
+        f'<span class="name"{_tip(description)}>{escape(name)}</span></td>'
+        '<td class="ds-access-filters">'
+        # Full is also how a full role gets its first filter: it opens the
+        # draft at the columns, so the toolbar needs no + for it.
+        f'<button type="button" class="ds-full-chip" title="All rows — pick a column to narrow"'
+        f' aria-label="Full access of {label}: add a filter">{_icon("full")}<span>Full</span>{_CHEVRON}</button>'
+        '<table class="ds-filter-table"><colgroup><col class="c-col"><col class="c-op"><col><col class="c-act"></colgroup>'
+        f'<tbody>{"".join(chip(f) for f in filters)}</tbody></table>'
+        f'<div class="ds-draft">{draft}</div></td>'
+        f"{_rows_cell(count)}"
+        '<td class="ds-role-cell"><div class="ds-role-tools">'
+        f'<button type="button" class="act ds-tool-add" title="Add a filter" aria-label="Add a filter for {label}">{_icon("plus")}</button>'
+        f'<button type="button" class="act act-danger ds-tool-del" title="Remove access" aria-label="Remove access of {label}">{_icon("trash")}</button>'
+        "</div></td></tr>"
+    )
+
+
+def render_access_form(roles: list[Role], access: dict[str, list[dict]], chip, draft: str,
+                       counts: dict[str, int | None] | None = None) -> str:
+    """`access`: role name -> its filters (`[]`: full), as the dataset's
+    `permissions:` hold them (`DatasetStore.permissions`). `chip(filter)` is
+    `access_filter_row` for this dataset's column types; `draft` its blank
+    `access_draft`. Only the roles with access are listed; the + menu offers
+    the rest, each as a ready row (`ds-access-row-tpl`, filled in by
+    dataset-columns.js). A role is named, as in the YAML. `counts`: role name
+    -> the rows it sees (`DatasetStore.rows_seen`)."""
+    counts = counts or {}
+    rows = "".join(
+        _access_row(r.name, access[r.name], chip, draft, counts.get(r.name), r.description)
+        for r in roles if r.name in access
+    )
+    offers = "".join(
+        f'<button type="button" data-role="{escape(r.name, quote=True)}"{_tip(r.description)}'
+        f'{" hidden" if r.name in access else ""}>{escape(r.name)}</button>'
+        for r in roles
+    )
+    # Always there, at the head of the actions column: the roles without
+    # access, then a field that makes a new one — on this page, given access
+    # at once (dataset-columns.js posts it to /access/new).
+    add = (
+        '<details class="ds-access-add">'
+        f'<summary class="act" title="Give a role access" aria-label="Give a role access">{_icon("plus")}</summary>'
+        f'<div class="ff-pathdd-menu">{offers}'
+        f'<label class="ds-access-new">{_icon("plus")}'
+        '<input type="text" placeholder="New role" aria-label="New role" autocomplete="off" spellcheck="false">'
+        "</label></div></details>"
+    )
+    return (
+        '<form class="ds-access" id="ds-access" autocomplete="off">'
+        '<table class="dash-table ds-access-table"><thead><tr><th>Role</th><th>Filters</th>'
+        f'<th class="ds-access-rows">Rows</th><th class="ds-role-cell">{add}</th></tr></thead>'
+        f'<tbody>{rows}</tbody></table>'
+        f'<template class="ds-access-row-tpl">{_access_row("", [], chip, draft)}</template>'
+        f'<template class="ds-draft-tpl">{draft}</template>'
+        # The column picker's first entry, ahead of the columns.
+        '<template class="ds-full-tpl"><button type="button" class="ff-colpick-item ds-full">'
+        f'{_icon("full")}<span>Full</span></button></template></form>'
+    )
+
+
+class _Items:
+    """A slice of a submitted form, for `params.parse_filters` (which reads
+    `multi_items()`)."""
+
+    def __init__(self, items):
+        self._items = items
+
+    def multi_items(self):
+        return self._items
+
+
+def parse_access_form(form) -> dict[str, list[dict]]:
+    """What `render_access_form` submits, back as role name -> filters (`[]`:
+    full) — the listed roles; one not listed has no access. Each role's
+    filters follow its `role` input, in document order. (The draft row isn't
+    sent: dataset-columns.js leaves it out.)"""
+    from fireflyer.params import parse_filters
+
+    groups: list[list] = []
+    for key, value in form.multi_items():
+        if key == "role":
+            groups.append([(key, value)])
+        elif groups:
+            groups[-1].append((key, value))
+    return {items[0][1]: parse_filters(_Items(items)) for items in groups}
+
+
+# --- access gallery -----------------------------------------------------------
+
+
+def _role_row(role: Role, datasets: list[str] | None = None) -> str:
+    """`datasets`: the ones whose permissions name the role, linked as the
+    dashboards list links a dashboard's; None leaves the column out."""
+    used = "" if datasets is None else (
+        "<td>" + _ref_links([(f"/datasets/{quote(n)}", n) for n in datasets]) + "</td>"
+    )
+    return (
+        "<tr>"
+        f'<td><span class="name">{escape(role.name)}</span>{_sub(role.description)}</td>'
+        f'<td class="muted">{_stamp(role.updated_at)}</td>'
+        f"{used}"
+        '<td class="actions">'
+        f'<button class="act" type="button" title="Edit" data-id="{role.id}"'
+        f' data-name="{escape(role.name, quote=True)}" data-description="{escape(role.description, quote=True)}"'
+        f' onclick="openRename(this)">{_icon("pencil")}</button>'
+        f'<form method="post" action="/access/{role.id}/delete"'
+        " onsubmit=\"return confirm('Remove this role?')\">"
+        f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
+        "</td></tr>"
+    )
+
+
+def render_access(
+    roles: list[Role], title: str = "Fireflyer Portal", user_menu: str = "",
+    paths: list[str] | None = None, active_path: str | None = None,
+    datasets: dict[str, list[str]] | None = None,
+) -> str:
+    """The Access list: every role, by name, with when it last changed and —
+    `datasets`, role name -> the datasets naming it — where it's used."""
+    if roles:
+        table = (
+            '<table class="dash-table"><thead><tr>'
+            f"<th>Name</th><th>Updated</th>{'<th>Datasets</th>' if datasets is not None else ''}<th></th>"
+            "</tr></thead><tbody>"
+            + "".join(_role_row(r, None if datasets is None else datasets.get(r.name, [])) for r in roles)
+            + "</tbody></table>"
+        )
+    else:
+        table = '<div class="empty">No roles yet. Use + to add one.</div>'
+    add_dialog = _dialog("add-dialog", "add-form", "/access/new", "New role", "Create",
+                         description=True, placeholder="Role name")
+    rename_dialog = _dialog("rename-dialog", "rename-form", "", "Edit role", "Save",
+                            description=True, placeholder="Role name")
+    return _shell(
+        title, user_menu, "access", table,
+        extra=add_dialog + rename_dialog,
+        topbar_right=f'<button class="act" type="button" title="New role"'
+                     f' onclick="openAdd()">{_icon("plus")}</button>',
+        paths=paths, active_path=active_path,
+    )
+
+
 def render_dataset_detail(
     ds: Dataset,
     title: str = "Fireflyer Portal",
@@ -823,7 +1171,10 @@ def render_dataset_detail(
         f"/datasets/{quote(ds.name)}/replace", "Upload a new version", "Upload", "replace-dialog", False
     )
     page_head = (
-        assets.stylesheets("code.css")
+        assets.stylesheets("code.css", "filters.css")
+        # htmx for the permissions' filter rows: their date-range picker is htmx.
+        + '<script src="/static/vendor/htmx@1.9.12.min.js"></script>\n'
+        + assets.script("filter-builder.js")
         + assets.import_map("yaml-look.js", "diff-view.js")
         + assets.module("dataset-columns.js")
     )
@@ -846,6 +1197,7 @@ _COLUMN_MODES = (
     ("edit", "pencil", "Edit names and types"),
     ("code", "code", "Edit as YAML"),
     ("compare", "compare", "Compare versions"),
+    ("access", "role", "Permissions"),
 )
 
 

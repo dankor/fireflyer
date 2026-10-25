@@ -244,6 +244,11 @@ class Dashboard:
     _inline_names = frozenset()
     # Inline datasets' descriptions (the longer `{description, csv}` form).
     _inline_descriptions = {}
+    # Rendering as a role (`as_role`): dataset -> the role's filters on it
+    # (empty: full access); a managed dataset not listed is out of its reach.
+    # None renders unrestricted.
+    _access = None
+    _role_name = ""
 
     @classmethod
     def from_yaml(cls, text: str, datasets=None) -> "Dashboard":
@@ -362,6 +367,22 @@ class Dashboard:
             used |= calcs.dataset_columns(names) if calcs is not None else names
         return used
 
+    def as_role(self, name: str, grants: dict[str, list]) -> "Dashboard":
+        """Render as role `name` sees it: `grants` (dataset -> filters, `[]` for
+        full access) narrow each chart's rows, and a chart on a managed dataset
+        the role can't read shows that instead of its data. Inline data is the
+        dashboard's own, so it's never restricted."""
+        self._access = {d: filters_mod.normalize(fs) for d, fs in grants.items()}
+        self._role_name = name
+        return self
+
+    def _role_filters(self, dataset: str) -> list[filters_mod.Filter] | None:
+        """The role's filters on `dataset` — [] when unrestricted — or None when
+        the role can't read it."""
+        if self._access is None or dataset in self._inline_names:
+            return []
+        return self._access.get(dataset)
+
     def _tab_context(self, active_tab: int):
         """(tabs_meta | None, clamped_active, active_items).
 
@@ -404,6 +425,7 @@ class Dashboard:
         theme: str | None = None,
         grain_tokens: list[str] | None = None,
         open_filter: str = "",
+        role: str = "",
     ) -> str:
         """Layout-only render: cells are placeholders that hx-trigger on load.
 
@@ -426,6 +448,9 @@ class Dashboard:
         would close the panel under the viewer's pointer; that one cell is asked
         to come back with its panel open. Only in this response — it isn't kept
         as state, so the next click elsewhere doesn't reopen it.
+
+        `role` (an id) rides in a hidden input so each cell is rendered as that
+        role (`as_role`, applied by the route) — the editor's view-as picker.
         """
         cf_tokens = list(cf_tokens or [])
         grain_tokens = list(grain_tokens or [])
@@ -476,6 +501,7 @@ class Dashboard:
             grain_tokens=grain_tokens,
             editing=editing,
             open_filter=open_filter,
+            role=role,
             ff_theme=_normalize_theme(theme),
         )
 
@@ -576,7 +602,7 @@ class Dashboard:
             "col_count": len(item.columns_css.split()),
         }
 
-    def _filter_rows(self, cid, cf_tokens, declared, types, labels):
+    def _filter_rows(self, cid, cf_tokens, declared, types, labels, role=()):
         """One row per filter in play for this chart: **who set it**, then what
         it says. A viewer looking at a narrowed chart needs to know which chart
         to go and click to undo it, which the old two-section list never said.
@@ -604,7 +630,11 @@ class Dashboard:
             }
 
         rows = []
-        # Declared first: it is the chart's own definition, always in force.
+        # The role being viewed as, first: what it may see bounds everything.
+        # The role's icon and name, as a chart's row shows its type icon and title.
+        source = {"name": self._role_name, "glyph": SOURCE_ICONS["access"], "role": "access"}
+        rows += [{"source": source, **label(f)} for f in role]
+        # Declared next: it is the chart's own definition, always in force.
         for f in declared:
             if applies(f):
                 rows.append({"source": _DECLARED_SOURCE, **label(f)})
@@ -699,14 +729,21 @@ class Dashboard:
         # the source chart stays unfiltered while showing its own selection.
         cfg = self.chart_configs[cid]
         kwargs = dict(cfg.kwargs)
+        calcs = self.calc_sets.get(kwargs["dataset"])
+        types = _column_types_of(kwargs["dataset"], self._resolve, calcs)
+        role = self._role_filters(kwargs["dataset"])
+        # A role filter on a column the data doesn't have would be skipped, as a
+        # crossfilter is — which here would show everything. Refuse instead.
+        if role is None or (types is not None and any(f.column not in types for f in role)):
+            return {"html": _no_access_html(cid, self._role_name), "panel": ""}
         declared = filters_mod.normalize(kwargs.pop("filters", None))
         cross = filters_mod.decode_tokens(cf_tokens, exclude_emitter=cid)
-        merged = declared + cross
+        merged = role + declared + cross
         kwargs["filters"] = [f.as_dict() for f in merged]
         chart = cfg.cls(**kwargs)
         chart._resolve = self._resolve  # name -> Parquet source at read time
         # Calcs for this chart's dataset, so a `calc:` key resolves.
-        chart._calcs = self.calc_sets.get(kwargs["dataset"])
+        chart._calcs = calcs
 
         refresh = {
             "endpoint": CELL_ENDPOINT,
@@ -787,7 +824,6 @@ class Dashboard:
         # When both apply (chart is both source and downstream of others),
         # the template prefers the emitter state — the user typically wants
         # to know which chart is causing the cascade.
-        types = _column_types_of(kwargs["dataset"], self._resolve, chart._calcs)
         applied = [f for f in merged if types is None or f.column in types]
         emitted = filters_mod.emitted_by(cf_tokens, cid)
         # Display names for the columns those filters name, so a relabelled
@@ -797,7 +833,7 @@ class Dashboard:
         if chart._calcs is not None:
             for f in [*applied, *emitted]:
                 labels[f.column] = chart._calcs.column_label(f.column)
-        rows = self._filter_rows(cid, cf_tokens, declared, types, labels)
+        rows = self._filter_rows(cid, cf_tokens, declared, types, labels, role)
         dataset = self._dataset_info(kwargs["dataset"])
         return {
             "html": chart_html,
@@ -826,6 +862,20 @@ def _chart_error_html(cid: str, exc: Exception) -> str:
     )
 
 
+def _no_access_html(cid: str, role: str) -> str:
+    """A chart whose dataset the role being viewed as can't read: a lock in
+    place of the data, the role named on hover."""
+    tip = escape(f"{role}: no access", quote=True)
+    return (
+        f'<article class="fireflyer-no-access" role="note" title="{tip}" aria-label="{tip}">'
+        '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor"'
+        ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>'
+        f'<span class="fireflyer-no-access-id">{escape(cid)}</span>'
+        "</article>"
+    )
+
+
 # Sources of filters that no chart set, as the panel shows them.
 def _source_icon(paths: str) -> str:
     return (
@@ -841,6 +891,11 @@ def _source_icon(paths: str) -> str:
 # the dashboard; a lock for one built into the chart (it can't be removed);
 # an arrow cursor for one a click selected (its row colour says whose click).
 SOURCE_ICONS = {
+    # A person with a shield: the role the dashboard is viewed as.
+    "access": _source_icon(
+        '<circle cx="6.5" cy="5" r="2.5"/><path d="M2 14c0-2.8 2-4.5 4.5-4.5 1 0 1.9.3 2.6.8"/>'
+        '<path d="M12 8.5l2.5 1v2c0 1.5-1.1 2.6-2.5 3-1.4-.4-2.5-1.5-2.5-3v-2z"/>'
+    ),
     "global": _source_icon(
         '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6'
         's-.8 4.3-2.6 6M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/>'

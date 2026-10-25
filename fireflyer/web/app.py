@@ -22,7 +22,7 @@ from fireflyer import filters as filters_mod
 from fireflyer import calcs_edit
 from fireflyer import column_map
 from fireflyer.datasets import DatasetError, DatasetStore, SqlCatalog
-from fireflyer.params import parse_filters
+from fireflyer.params import filter_fields as builder_fields, parse_filters
 from fireflyer.storage import make_object_store
 from fireflyer.chart.map.chart import Map
 from fireflyer.chart.table.chart import Table
@@ -339,10 +339,11 @@ def render_editor_page(
     page = (_DIR / "editor.html").read_text()
     # nav + profile are shared with the gallery, and come after the editor's own
     # rules — the order they were inlined in, so the cascade is unchanged.
-    styles = assets.favicons() + "\n" + assets.stylesheets("editor.css", "code.css", "nav.css", "profile.css")
+    styles = assets.favicons() + "\n" + assets.stylesheets("editor.css", "filters.css", "code.css", "nav.css", "profile.css")
     return (
         page.replace("__FF_STYLES__", styles)
-        .replace("__FF_SCRIPT__", assets.script("editor.js") + "\n" + assets.module("yaml-editor.js"))
+        .replace("__FF_SCRIPT__", assets.script("filter-builder.js") + "\n" + assets.script("editor.js")
+                 + "\n" + assets.module("yaml-editor.js"))
         .replace("__FF_CHAT__", CHAT_PANEL)
         # Which dashboard: its version history, and the key its unsaved draft
         # is kept under in the browser ("" for the plain single-dashboard editor).
@@ -351,6 +352,7 @@ def render_editor_page(
         .replace("__FF_NAV__", nav)
         .replace("__FF_MODES__", _mode_switch())
         .replace("__FF_DASH_NAME__", dash_name)
+        .replace("__FF_ROLES__", portal_mod.role_picker(_role_store().roles()))
         .replace("__FF_PATHDD__", path_dropdown)
         .replace("__FF_SAVE__", save)
         .replace("__FF_THEME__", theme)
@@ -680,6 +682,94 @@ def datasets_gallery(request: Request) -> str:
     )
 
 
+# --- access (roles) -------------------------------------------------------------
+# In a database in every mode: the portal's, or a local sqlite file (shared by
+# every path) when there's no portal. Opened on first use, so importing the app
+# — as the tests do — creates no file. Tests set `app.state.roles`.
+app.state.roles = None
+
+
+def _role_store():
+    if app.state.roles is None:
+        local = f"{_DATA_BASE}/fireflyer.db"
+        dsn = (os.environ.get("DATABASE_URL") or "portal.db") if PORTAL_ENABLED else local
+        app.state.roles = portal_mod.RoleStore(dsn)
+    return app.state.roles
+
+
+def _every_dataset_store() -> list[DatasetStore]:
+    """Every dataset store a role can be named in: the one, or each path's —
+    roles are shared by every path."""
+    if not _paths_mode():
+        return [app.state.datasets]
+    return [DatasetStore(make_object_store({"base": f"{_DATA_BASE}/{p}"}))
+            for p in paths_mod.list_paths(PATHS_BASE)]
+
+
+@app.get("/access", response_class=HTMLResponse)
+def access_gallery(request: Request) -> str:
+    kwargs = _gallery_kwargs(request)
+    return portal_mod.render_access(
+        _role_store().roles(), _page_title(), _user_menu(request),
+        paths=kwargs.get("paths"), active_path=kwargs.get("active_path"),
+        datasets=_datasets_by_role(request),
+    )
+
+
+def _datasets_by_role(request: Request) -> dict[str, list[str]]:
+    """Role name -> the datasets whose (published) permissions name it — the
+    Access list's Datasets column. This path's datasets, in paths mode."""
+    store = _dataset_store(request)
+    out: dict[str, list[str]] = {}
+    for ds in store.list():
+        try:
+            roles = store.permissions(ds.name)
+        except DatasetError:
+            continue
+        for role in roles:
+            out.setdefault(role, []).append(ds.name)
+    return out
+
+
+@app.post("/access/new")
+async def access_new(request: Request, name: str = Form(""), description: str = Form("")):
+    try:
+        _role_store().create_role(name, description)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
+    return RedirectResponse("/access", status_code=303)
+
+
+def _role_named(role_id: str) -> str | None:
+    return next((r.name for r in _role_store().roles() if r.id == role_id), None)
+
+
+@app.post("/access/{role_id}/rename")
+async def access_rename(role_id: str, request: Request, name: str = Form(""),
+                        description: str | None = Form(None)):
+    old = _role_named(role_id)
+    try:
+        _role_store().rename_role(role_id, name, description)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
+    # Datasets name their roles in `permissions:`: they follow the new name.
+    new = _role_named(role_id)
+    if old and new != old:
+        for datasets in _every_dataset_store():
+            datasets.rename_role(old, new, author=_current_author(request))
+    return RedirectResponse("/access", status_code=303)
+
+
+@app.post("/access/{role_id}/delete")
+async def access_delete(role_id: str, request: Request) -> RedirectResponse:
+    name = _role_named(role_id)
+    _role_store().delete_role(role_id)
+    if name:
+        for datasets in _every_dataset_store():
+            datasets.drop_role(name, author=_current_author(request))
+    return RedirectResponse("/access", status_code=303)
+
+
 # --- dataset builds --------------------------------------------------------------
 # An upload or a new column mapping is a new version, computed in the
 # background (`DatasetStore.build`): the request returns at once, the page shows
@@ -900,6 +990,72 @@ async def dataset_rename(
     return RedirectResponse(back, status_code=303)
 
 
+@app.post("/datasets/{name}/access/form", response_class=HTMLResponse)
+async def dataset_access(name: str, request: Request, mapping: str = Form("")):
+    """The dataset page's permissions mode: the roles the posted mapping's
+    `permissions:` name, as a form, with a + for the rest — built from the YAML
+    being edited, so it shows exactly what Save would keep."""
+    store = _dataset_store(request)
+    try:
+        access = column_map.permissions(mapping)
+    except column_map.MappingError as exc:
+        return _error(exc)
+    context = config_edit.dataset_context(name, store.source)
+    draft = portal_mod.access_draft(builder_fields(context.columns, types=context.column_types))
+    counts = {}
+    for role, filters in access.items():
+        try:
+            counts[role] = store.rows_seen(name, filters)
+        except DatasetError:
+            counts[role] = None
+    return portal_mod.render_access_form(
+        _role_store().roles(), access,
+        lambda f: portal_mod.access_filter_row(f, context.column_types), draft, counts,
+    )
+
+
+@app.post("/datasets/{name}/access/rows")
+async def dataset_access_rows(name: str, request: Request) -> JSONResponse:
+    """How many rows a role with the posted filters would see — the Rows
+    column, recounted as its filters change."""
+    try:
+        count = _dataset_store(request).rows_seen(name, parse_filters(await request.form()))
+    except (filters_mod.FilterError, DatasetError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"rows": count})
+
+
+@app.post("/datasets/{name}/access/yaml")
+async def dataset_access_yaml(request: Request) -> JSONResponse:
+    """The permissions form, written into the posted mapping's `permissions:` —
+    the YAML Save then keeps as the next version. Only roles that exist."""
+    form = await request.form()
+    known = {r.name for r in _role_store().roles()}
+    try:
+        grants = portal_mod.parse_access_form(form)
+        mapping = column_map.with_permissions(
+            form.get("mapping", ""), {r: fs for r, fs in grants.items() if r in known},
+        )
+    except (filters_mod.FilterError, column_map.MappingError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"mapping": mapping})
+
+
+@app.post("/datasets/{name}/access/filter", response_class=HTMLResponse)
+async def dataset_access_filter(name: str, request: Request):
+    """The filter built in a role's draft row, as the compact row its list
+    shows — or why it isn't a filter yet."""
+    rows = parse_filters(await request.form())
+    try:
+        filters_mod.normalize(rows[:1])
+    except filters_mod.FilterError as exc:
+        return _error(exc)
+    if not rows:
+        return _error(ValueError("pick a column and its values"))
+    context = config_edit.dataset_context(name, _dataset_store(request).source)
+    return portal_mod.access_filter_row(rows[0], context.column_types)
+
+
 @app.post("/datasets/{name}/delete")
 async def dataset_delete(name: str, request: Request):
     used = _dashboards_using(request, name)
@@ -912,13 +1068,13 @@ async def dataset_delete(name: str, request: Request):
 
 
 @app.post("/execute")
-async def execute(request: Request, active_tab: int = 0, f: str = "") -> dict:
+async def execute(request: Request, active_tab: int = 0, f: str = "", role: str = "") -> dict:
     """`f` is the page URL's filter state (see `filters.encode_state`): the
     editor passes it on every render, so a reload, a shared link, or a YAML edit
     all keep the filters in play."""
     body = (await request.body()).decode("utf-8")
     try:
-        dashboard = Dashboard.from_yaml(body, datasets=_dataset_store(request))
+        dashboard = _as_role(request, Dashboard.from_yaml(body, datasets=_dataset_store(request)), role)
         # The response is a skeleton — each cell fetches itself via htmx so
         # charts render in parallel and slow charts don't block fast ones.
         # editing=True adds the editor-only row resize handles. `active_tab`
@@ -929,6 +1085,7 @@ async def execute(request: Request, active_tab: int = 0, f: str = "") -> dict:
                 cf_tokens=filters_mod.decode_state(f),
                 editing=True,
                 active_tab=active_tab,
+                role=role,
             ),
             # For the toolbar's ⓘ, which follows the YAML like the name does.
             "description": dashboard.description,
@@ -940,6 +1097,15 @@ async def execute(request: Request, active_tab: int = 0, f: str = "") -> dict:
             "ok": False,
             "html": f'<pre class="error">{escape(traceback.format_exc())}</pre>',
         }
+
+
+def _as_role(request: Request, dashboard: Dashboard, role: str) -> Dashboard:
+    """`dashboard` as `role` (a name) sees it — the editor's view-as picker —
+    from the `permissions:` of this path's datasets. A role no dataset names
+    sees no managed dataset at all."""
+    if not role:
+        return dashboard
+    return dashboard.as_role(role, _dataset_store(request).grants(role))
 
 
 class ChatRequest(BaseModel):
@@ -1069,6 +1235,7 @@ async def dashboard_render(
     editing: str = Form(""),
     active_tab: int = Form(0),
     open_filter: str = Form(""),
+    role: str = Form(""),
 ) -> str:
     """Re-render the dashboard with an updated crossfilter set.
 
@@ -1127,6 +1294,7 @@ async def dashboard_render(
         active_tab=active_tab,
         grain_tokens=grains,
         open_filter=open_filter,
+        role=role,
     )
 
 
@@ -1145,6 +1313,7 @@ async def dashboard_cell(
     row: str = Form("1"),
     editing: str = Form(""),
     open_filter: str = Form(""),
+    role: str = Form(""),
 ) -> str:
     """Render a single dashboard cell. Triggered by the skeleton's per-cell
     hx-post; the response replaces the placeholder via outerHTML swap.
@@ -1159,7 +1328,7 @@ async def dashboard_cell(
     out-of-band swap, since a cell response doesn't otherwise touch it."""
     grains = set_grain_token(list(grain), set_grain) if set_grain else list(grain)
     try:
-        dashboard = Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request))
+        dashboard = _as_role(request, Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request)), role)
         html = dashboard.render_cell(
             cid,
             cf_tokens=list(cf),

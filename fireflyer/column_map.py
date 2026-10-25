@@ -25,6 +25,16 @@ any text, in any script.
 with its type and values — but never for dashboards. It's built, then left out
 of the data charts read, so nothing can use it.
 
+`permissions:` names the roles that may read the dataset — each `full`, or the
+filters that narrow the rows it sees; a role not named may not. Part of the
+mapping, so it's versioned with it: a change is the next minor, compared and
+restored like the columns.
+
+    permissions:
+      viewer:
+        - {column: order_status, op: in, values: [paid]}
+      admin: full
+
 Pure functions over Polars frames — the dataset store calls them, and they
 test without any storage.
 """
@@ -37,6 +47,7 @@ from dataclasses import dataclass
 import polars as pl
 import yaml
 
+from fireflyer import filters as filters_mod
 from fireflyer.calcs import CalcError, compile_formula, formula_names
 
 # Polars dtypes of an older, type-guessed dataset that were numbers.
@@ -44,6 +55,8 @@ _NUMERIC_DTYPES = ("Int", "UInt", "Float", "Decimal")
 # The types a mapping could name before formulas decided them.
 _OLD_TYPES = ("string", "numeric", "integer", "float", "boolean", "date", "datetime")
 _OLD_NUMERIC = ("numeric", "integer", "float")
+# A role's permission that narrows nothing.
+FULL = "full"
 _TO_NUMBER_ARG = re.compile(r"\bto_number\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)")
 
 
@@ -91,6 +104,7 @@ def parse(text: str, sources: list[str]) -> list[Rule]:
     if not isinstance(columns, dict) or not columns:
         raise MappingError("the mapping needs a `columns:` block, one entry per column")
     rules = [_rule(str(name), spec) for name, spec in columns.items()]
+    _permissions(doc.get("permissions"))          # refuse a bad one here, where it's typed
     have = set(sources)
     for r in rules:
         missing = sorted(formula_names(r.formula) - have)
@@ -101,14 +115,66 @@ def parse(text: str, sources: list[str]) -> list[Rule]:
     return rules
 
 
-def dump(rules: list[Rule]) -> str:
-    """`rules` as the YAML `parse` reads: each column's formula on its own line."""
+def dump(rules: list[Rule], permissions: dict[str, list[dict]] | None = None) -> str:
+    """`rules` as the YAML `parse` reads: each column's formula on its own line
+    — then `permissions` (role -> filters, `[]` for full), each filter on one."""
     lines = ["columns:"]
     for r in rules:
         lines += [f"  {_scalar(r.name)}:", f"    formula: {_scalar(r.formula)}"]
         if r.service:
             lines.append("    service: true")
+    if permissions:
+        lines.append("permissions:")
+        for role, filters in permissions.items():
+            if not filters:
+                lines.append(f"  {_scalar(role)}: {FULL}")
+                continue
+            lines.append(f"  {_scalar(role)}:")
+            lines += [f"    - {_flow(f)}" for f in filters]
     return "\n".join(lines) + "\n"
+
+
+def permissions(text: str) -> dict[str, list[dict]]:
+    """The mapping's `permissions:` — role name -> its filters (`[]`: full).
+    Empty when there are none, or the YAML doesn't read."""
+    try:
+        doc = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        return {}
+    return _permissions(doc.get("permissions")) if isinstance(doc, dict) else {}
+
+
+def with_permissions(text: str, grants: dict[str, list[dict]]) -> str:
+    """`text` with its `permissions:` replaced by `grants` — its columns as
+    they are."""
+    doc = yaml.safe_load(text) or {}
+    columns = doc.get("columns") if isinstance(doc, dict) else None
+    rules = [_rule(str(n), spec) for n, spec in (columns or {}).items()]
+    return dump(rules, _permissions(grants))
+
+
+def _permissions(raw) -> dict[str, list[dict]]:
+    if raw in (None, {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise MappingError("`permissions:` maps each role to `full` or a list of filters")
+    out = {}
+    for role, spec in raw.items():
+        if spec in (FULL, [], None):
+            out[str(role)] = []
+            continue
+        try:
+            out[str(role)] = [f.as_dict() for f in filters_mod.normalize(spec)]
+        except filters_mod.FilterError as exc:
+            raise MappingError(f"permissions of {role!r}: {exc}") from exc
+    return out
+
+
+def _flow(f: dict) -> str:
+    """A filter on one line — `{column: status, op: in, values: [paid]}` — in
+    its own script."""
+    return yaml.safe_dump(f, default_flow_style=True, width=10_000, allow_unicode=True,
+                          sort_keys=False).strip()
 
 
 def renames(before: list[Rule], after: list[Rule]) -> dict[str, str]:
@@ -148,7 +214,10 @@ def upgrade(text: str) -> str:
             rules.append(_rule(key, spec))
         except MappingError:
             return text
-    return dump(rules)
+    try:
+        return dump(rules, _permissions(doc.get("permissions")))
+    except MappingError:
+        return text
 
 
 def _rule(name: str, spec) -> Rule:

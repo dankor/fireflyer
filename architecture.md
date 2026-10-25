@@ -238,6 +238,11 @@ Rules:
 * It applies to **every** chart whose dataset has the column (the crossfilter contract); a chart without that column ignores it and doesn't list it. No chart is exempt — nothing emitted it.
 * It **ANDs** with every other filter. (Clicked `in` values on one column still merge across clicks; a typed filter is not one more click, so it never merges into them.)
 * The panel lists it with source **Global**. Every row except a **declared** one (part of the chart's definition) has a remove button: a global filter's drops that filter; a crossfilter's drops every click behind the row — clicks on one column merge into one row — and a multi-part selection (a bar segment) goes whole, the unit a second click would clear. The **+** column list is that chart's own columns, column calcs included.
+* Each row leads with its **source** as an icon, one monochrome tone for all
+  — a globe (Global), a lock (built into the chart), a cursor (a click: this
+  chart's or another's), a role (viewing as a role, see **Permissions**) — its
+  tooltip naming which: Global, Built-in, the chart by its type icon and title,
+  the role by its icon and name.
 * A global filter can also be **edited**: its row's pencil loads it into the panel's bottom row (`/filter/edit`, swapping only that row), the **+** becomes ✓ and a ✕ cancels back to a blank row. Saving replaces it **in place** — same position in the list — and stays viewer state. Click filters have no pencil: a click is undone by clicking.
 * Adding the same filter twice keeps one. A filter the model rejects (a `between` without exactly two bounds) is dropped.
 * **The fields follow the column's type** (`params.column_type`: number / boolean / date / text, a `str2dt()` column calc counting as a date). Each column in the picker — and in the panel's filter rows — carries the type glyph the dataset page uses (`#`, `✓`, `◷`, `T`).
@@ -458,6 +463,45 @@ But it's **left out of the Parquet charts read** and out of `Dataset.columns`,
 which is what dashboards' column pickers, autocomplete and the assistant are
 offered: no chart can name it (one that does gets "column not found"), and
 nothing suggests it.
+
+**Permissions.** The mapping also says who may read the dataset —
+`permissions:`, each role by name with `full` or the filters that narrow the
+rows it sees (the `{column, op, values}` shape of **Filters**). A role not named
+may not read it at all:
+
+```yaml
+permissions:
+  viewer:
+    - {column: order_status, op: in, values: [paid]}
+  admin: full
+```
+
+They're **part of the mapping, so versioned with it**: a change is the next
+minor — in code mode, in compare, restorable — a new upload carries them
+forward, and the **published** version's are the ones in force. A permission
+change rebuilds like any mapping change. (`column_map.dump(rules, permissions)`
+writes them, `permissions(text)` reads them, `parse` refuses a malformed one.)
+
+The dataset page's fifth mode edits them: a **Role | Filters | Rows** table of
+the roles with access. A role's filters read as a chart's filter panel lists
+them — type, column, op, values; ✎ edits, ✕ removes — over the chart builder's
+own fields (shared with the chart modal and calcs manager: `filter-builder.js`,
+`filters.css`), where ✓ adds the filter built there. With no filters a role is
+**Full**, the fields' column picker's first entry. **Rows** counts what each
+role sees, recounted as its filters change. A header **+** gives another role
+access, or makes a new role on the spot; a row's trash takes it away. The form
+is built from, and written back into, the YAML being edited, so Save, Discard
+and compare treat a permission change as one more mapping edit.
+
+**Viewing as a role** (the dashboard editor, view mode): a role picker in the
+topbar renders the dashboard as that role would see it — each chart's filters
+start with the role's on its dataset, listed first in the filter panel under a
+role icon and not removable; a chart on a dataset the role can't read, or whose
+role filter names a column the data lacks, shows a lock instead of data (never
+the unfiltered rows). Inline data is the dashboard's own and never restricted.
+The pick rides in the URL (`?role=<name>`), holds only in view mode, and picking
+it again turns it off. This is a **preview**: nothing yet ties a viewer to a
+role, so nothing is enforced.
 
 **Builds run in the background.** Saving a mapping or uploading a file only
 records the new version (`create` / `replace` / `remap` with `build=False`);
@@ -1221,7 +1265,8 @@ browser's own state, per viewer and per device; the server stores only saves.
 
 ## Datasets tab
 
-The gallery's overview pages lead with a **Dashboards | Datasets** switch. A
+The gallery's overview pages lead with a **Dashboards | Datasets | Access**
+switch (Access: see below). A
 selected dataset is a **detail** page led by a **back button** (no switch — that's
 for the list pages); in local paths mode it, like the dashboard editor, carries
 the path dropdown on the right, so the selected-item pages are consistent (portal
@@ -1232,7 +1277,7 @@ The Datasets tab manages datasets (see the
 shows each dataset's version, its description under the name, and — as its
 last column — links to the dashboards reading it (the dashboards list likewise
 links each dashboard's datasets; one that isn't uploaded shows dashed). A
-dataset's page leads with the **columns**, in four modes as the dashboard editor
+dataset's page leads with the **columns**, in five modes as the dashboard editor
 has its own — **view** (each column's name, type and its first five distinct
 uploaded values as small labels — enough to see what a column holds, so the page
 carries no separate data preview — and, per column, the dashboards whose charts
@@ -1240,8 +1285,9 @@ read it: a **Dashboards** column, from the index in **What each dashboard reads*
 the header filters them — a type checkbox list, a name search, a dashboards
 checkbox list — and a click on a value shows it whole, selectable, with a copy
 button), **edit** (a name and a formula per column, a service toggle, ✕ / ＋),
-**code** (the mapping as YAML, in the same CodeMirror editor) and **compare** (two
-mapping revisions side by side, with restore and step older/newer). Its
+**code** (the mapping as YAML, in the same CodeMirror editor), **compare** (two
+mapping revisions side by side, with restore and step older/newer) and
+**permissions** (the roles that may read it; see **Permissions**). Its
 **version chip** opens the history,
 grouped by upload: a check marks the version in use, a version opens the
 comparison, and an upload not in use can be deleted. A dataset **can't be
@@ -1253,6 +1299,30 @@ local folder for dev/tests, S3-compatible **Garage** at runtime
 (`FIREFLYER_S3_ENDPOINT`, `boto3` in the `.[portal]` extra, imported lazily).
 `app.state.datasets` resolves dataset names in the render routes; the store is
 unit-tested with a local folder, never a live object store.
+
+## Access tab
+
+The third list page lists **roles**: a name each (trimmed, unique, required),
+its **description** (optional — the small line under the name, as a dashboard's
+is, and the role's tooltip wherever it's offered: the view-as picker and a
+dataset's permissions), when it last changed, and a **Datasets** column linking
+the datasets whose published permissions name it (see **Permissions**). It's the
+gallery's usual CRUD — **+** in the topbar adds one, a pencil edits its name and
+description, the trash removes it (with a confirm) — in the same native
+`<dialog>` the dashboards list uses. Routes: `GET /access`, `POST /access/new`,
+`POST /access/{id}/rename`, `POST /access/{id}/delete`; a bad name (empty,
+taken) is a 400, not a redirect.
+
+Roles are kept **in a database** in every mode — a `roles` table (`id`, `name`
+UNIQUE, `description`, `created_at`, `updated_at`; an older table gets the
+`description` column when opened), through `RoleStore`, which opens its own
+connection as the dataset catalog does: the portal's database in portal mode
+(`DATABASE_URL`, else `portal.db`), and otherwise a local sqlite file,
+`<FIREFLYER_DATA>/fireflyer.db`, shared by every path — roles are about who
+may see what, not about one folder of dashboards. So the Access tab is on every
+list page, in every mode. Datasets name roles **by name**, so renaming a role
+rewrites — and removing one drops it from — every dataset's permissions, in
+every path: a new mapping version each.
 
 ## Authentication
 
@@ -1316,7 +1386,7 @@ YAML works locally and remotely.
 Turn it on with **`FIREFLYER_PATHS`** — a base directory inside the container.
 **Each host folder you Docker-map under that base is a switchable "path"** — a
 labelled **path dropdown** on the **right** of the topbar, present on the gallery,
-the dataset detail, and the dashboard editor (the Dashboards | Datasets switch is
+the dataset detail, and the dashboard editor (the Dashboards | Datasets | Access switch is
 on the left, but **only on the list pages** — selected items lead with just a
 back button); there is no
 filesystem browser and no in-app path management — you add / remove / repoint a

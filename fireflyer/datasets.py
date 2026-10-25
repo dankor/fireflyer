@@ -24,6 +24,11 @@ Everything about a dataset but its files is one **YAML document** — name,
 description, versions with their mappings — kept by a catalog: as a file next
 to the data in local mode (`ObjectCatalog`, the default), in the portal's
 database in portal mode (`SqlCatalog`).
+
+A mapping also carries the dataset's **permissions** (`permissions:`, see
+`column_map`): who may read it, and which rows. So they're versioned with the
+columns — a change is the next minor — and the published version's are the
+ones in force.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ import polars as pl
 import yaml
 
 from fireflyer import column_map
+from fireflyer import filters as filters_mod
 from fireflyer.storage import ObjectStore
 
 
@@ -99,6 +105,8 @@ def _iso(unix: int) -> str:
 # else kept in the same place — a path's dashboard history — can collide with a
 # dataset's name.
 _ROOT = "datasets/"
+# A role's permission that narrows nothing.
+FULL = "full"
 
 
 def _folder(name: str) -> str:
@@ -254,7 +262,61 @@ class DatasetStore:
             raise DatasetError(f"{name!r} has no version {label}")
         latest = _latest(doc)
         rules = column_map.parse(old["mapping"], old["sources"])
-        return column_map.dump(column_map.default(latest["sources"], rules, old["sources"]))
+        return column_map.dump(column_map.default(latest["sources"], rules, old["sources"]),
+                               column_map.permissions(old["mapping"]))
+
+    # --- permissions -----------------------------------------------------------
+
+    def permissions(self, name: str) -> dict[str, list[dict]]:
+        """Role name -> its filters on dataset `name` (`[]`: full), for each
+        role that may read it — the published version's (`column_map`)."""
+        doc = self._require(name)
+        return column_map.permissions((_find(doc, doc.get("current")) or _latest(doc))["mapping"])
+
+    def grants(self, role: str) -> dict[str, list[dict]]:
+        """Dataset -> `role`'s filters on it (`[]`: full), for each dataset it
+        may read — what viewing a dashboard as `role` applies."""
+        out = {}
+        for name in self._catalog.names():
+            try:
+                perms = self.permissions(name)
+            except DatasetError:
+                continue
+            if role in perms:
+                out[name] = perms[role]
+        return out
+
+    def rows_seen(self, name: str, filters: list[dict]) -> int | None:
+        """How many of `name`'s rows `filters` let through — what a role with
+        them sees. None when one names a column the data lacks: viewing as that
+        role locks the dataset rather than skip the filter (`Dashboard.as_role`)."""
+        uri, options = self.source(name)
+        lf = pl.scan_parquet(uri, storage_options=options)
+        wanted = filters_mod.normalize(filters)
+        if any(f.column not in lf.collect_schema().names() for f in wanted):
+            return None
+        preds = filters_mod.predicates(wanted, lf.collect_schema().names())
+        return lf.filter(*preds).select(pl.len()).collect().item() if preds else lf.select(pl.len()).collect().item()
+
+    def rename_role(self, old: str, new: str, author: str = "") -> None:
+        """A role renamed: every dataset naming it names it anew — a new version
+        of each one's mapping."""
+        self._edit_permissions(lambda p: {new if r == old else r: fs for r, fs in p.items()}, author)
+
+    def drop_role(self, role: str, author: str = "") -> None:
+        """A role removed: no dataset names it any more."""
+        self._edit_permissions(lambda p: {r: fs for r, fs in p.items() if r != role}, author)
+
+    def _edit_permissions(self, change, author: str) -> None:
+        for name in self._catalog.names():
+            doc = self._load(name)
+            if not doc or not doc.get("versions"):
+                continue
+            latest = _latest(doc)["mapping"]
+            before = column_map.permissions(latest)
+            after = change(before)
+            if after != before:
+                self.remap(name, column_map.with_permissions(latest, after), author=author)
 
     def mapping(self, name: str) -> str:
         """The YAML of the version being built, or else of the published one."""
@@ -338,11 +400,12 @@ class DatasetStore:
         latest = _latest(doc)
         previous = column_map.parse(latest["mapping"], latest["sources"])
         rules = column_map.default(sources, previous, latest["sources"])
+        perms = column_map.permissions(latest["mapping"])       # who may read it carries over too
         major = max(v["major"] for v in doc["versions"]) + 1
         self._store.put(_raw_key(name, major, "csv"), csv_bytes)
         _drop_building(doc)
-        minor = _next_minor(doc, column_map.dump(rules))
-        doc["versions"].append(_new_version(major, minor, sources, rules, author, "csv"))
+        minor = _next_minor(doc, column_map.dump(rules, perms))
+        doc["versions"].append(_new_version(major, minor, sources, rules, author, "csv", perms))
         doc["delimiter"] = delimiter
         doc["error"] = ""                        # a new try: the last failure is history
         if description is not None:
@@ -358,11 +421,12 @@ class DatasetStore:
         latest = _latest(doc)
         try:
             rules = column_map.parse(mapping, latest["sources"])
+            perms = column_map.permissions(mapping)
         except column_map.MappingError as exc:
             raise DatasetError(str(exc)) from exc
-        if column_map.dump(rules) == latest["mapping"]:
+        text = column_map.dump(rules, perms)
+        if text == latest["mapping"]:
             raise DatasetError("the mapping hasn't changed")
-        text = column_map.dump(rules)
         if latest["status"] == "building":
             # Not built yet: this edit replaces it. Its number follows the same
             # rule against what's built — and an edit back to exactly that is
@@ -374,11 +438,11 @@ class DatasetStore:
                 return self.get(name)
             minor = _next_minor(doc, text) if doc["versions"] else latest["minor"]
             doc["versions"].append(_new_version(latest["major"], minor, latest["sources"],
-                                                rules, author, latest["raw"]))
+                                                rules, author, latest["raw"], perms))
         else:
             minor = max(v["minor"] for v in doc["versions"]) + 1
             doc["versions"].append(
-                _new_version(latest["major"], minor, latest["sources"], rules, author, latest["raw"])
+                _new_version(latest["major"], minor, latest["sources"], rules, author, latest["raw"], perms)
             )
         doc["error"] = ""
         self._save(doc)
@@ -493,6 +557,14 @@ class DatasetStore:
         # Mappings saved under the earlier, wider set of types read as today's.
         for v in doc.get("versions", []):
             v["mapping"] = column_map.upgrade(v.get("mapping", ""))
+        # Permissions kept beside the versions, before they were part of the
+        # mapping: into the published and the latest mapping, as they stood.
+        loose = doc.pop("permissions", None)
+        if loose is not None and doc.get("versions"):
+            grants = {r: [] if spec == FULL else list(spec) for r, spec in loose.items()}
+            for v in {id(v): v for v in (_find(doc, doc.get("current")), _latest(doc)) if v}.values():
+                v["mapping"] = column_map.with_permissions(v["mapping"], grants)
+            self._save(doc)
         return doc
 
     def _require(self, name: str) -> dict:
@@ -536,12 +608,13 @@ class DatasetStore:
 # --- version records (plain dicts in the YAML document) -----------------------------
 
 
-def _new_version(major: int, minor: int, sources: list[str], rules, author: str, raw: str) -> dict:
+def _new_version(major: int, minor: int, sources: list[str], rules, author: str, raw: str,
+                 permissions: dict | None = None) -> dict:
     return {
         "major": major, "minor": minor, "status": "building",
         "created_at": _now(), "author": author, "rows": 0,
         "raw": raw, "sources": list(sources), "columns": [],
-        "mapping": column_map.dump(rules),
+        "mapping": column_map.dump(rules, permissions),
     }
 
 

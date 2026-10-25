@@ -34,6 +34,15 @@ function openClone(btn){
   input.value = btn.dataset.name + ' (copy)';
   d.showModal(); input.select();
 }
+function openRename(btn){
+  var d = document.getElementById('rename-dialog');
+  document.getElementById('rename-form').action = '/access/' + btn.dataset.id + '/rename';
+  var input = document.getElementById('rename-form-name');
+  input.value = btn.dataset.name;
+  var about = document.querySelector('#rename-form textarea[name=description]');
+  if (about) about.value = btn.dataset.description || '';
+  d.showModal(); input.select();
+}
 function openUpload(){ document.getElementById('upload-dialog').showModal(); }
 
 // A dataset's name and description, as a dashboard's in the editor: the
