@@ -20,7 +20,9 @@ Display a single aggregated scalar — a "big number" KPI — from a calc.
   (`--ff-ink` — near-black in light mode, near-white in dark), with no caption
   beneath it. The value **auto-sizes to the cell** (container-query units, not the
   viewport) and never wraps, so a long figure shrinks to fit a short/narrow KPI
-  cell instead of overflowing. The value carries a `title` attribute with the full-precision
+  cell instead of overflowing. Its width allowance follows the figure's length
+  (the template passes it as `--ff-chars`), so `$92,537.10` fits a quarter-width
+  card as surely as `7` does. The value carries a `title` attribute with the full-precision
   figure, so hovering a shaped value can still reveal its exact one. No other
   interactivity — a scalar has nothing to click, so the chart is not a
   crossfilter source.

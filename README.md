@@ -24,7 +24,7 @@ For engineers. Describe a whole dashboard in a single YAML file.
 
 **Why it's good:** your dashboards live in your editor and in git — you review them like any other code, drop them into a Jupyter notebook, and script them for reports that run themselves. No clicking through menus, no BI server to babysit.
 
-[yaml-edit.webm](https://github.com/user-attachments/assets/772943e5-f59d-4cf5-b74d-8dc1c220f5be)
+![Creating a dashboard from code](media/create-code.webp)
 
 ### 🖱️ Build it in the UI
 
@@ -32,7 +32,7 @@ For everyone. Open the browser editor and build by pointing and clicking: add ch
 
 **Why it's good:** there's nothing to memorize and you see every change instantly. People who don't write code get a real dashboard on their own — and each edit is written back as clean YAML, so the visual and code views never fall out of sync.
 
-[ui-edit.webm](https://github.com/user-attachments/assets/5e0ebd86-2a30-4eed-907c-bde191415a4a)
+![Creating a dashboard from the UI](media/create-ui.webp)
 
 ### 🤖 Ask the AI
 
@@ -40,7 +40,9 @@ For anyone in a hurry. The built-in chat rewrites your dashboard from plain-Engl
 
 **Why it's good:** you describe what you want instead of building it. The assistant checks every change before applying it, and since it writes the same YAML, you can keep editing in code or the UI afterward.
 
-[ai-edit.webm](https://github.com/user-attachments/assets/c3360915-7e6c-4c61-8554-e4240c98a830)
+![Creating a dashboard by asking the AI assistant](media/create-ai.webp)
+
+**See more:** [use cases](docs/use-cases.md) — layout, filters, datasets, permissions and two end-to-end walkthroughs, each with a recording.
 
 ---
 

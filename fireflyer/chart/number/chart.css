@@ -100,8 +100,12 @@
   justify-content: center;
   overflow: hidden;
 }
+/* Its width follows its length (`--ff-chars`, from the template): a digit is
+   about 0.6em wide, so 150cqw / chars keeps the whole value inside the cell —
+   "$92,537.10" as well as "7". Counted as at least 5, so a short value doesn't
+   outgrow the height cap. */
 .fireflyer-number-value {
-  font-size: clamp(16px, min(55cqh, 22cqw), 56px);
+  font-size: clamp(16px, min(55cqh, calc(150cqw / max(var(--ff-chars, 5), 5))), 56px);
   font-weight: 400;
   line-height: 1.05;
   letter-spacing: -0.02em;

@@ -172,6 +172,22 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;
 }
+/* An empty dashboard in the editor: one big + for the first chart. */
+.fireflyer-add-first {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 320px;
+  margin: 0;
+  border: 2px dashed var(--ff-border);
+  border-radius: 8px;
+  background: none;
+  color: var(--ff-muted);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.fireflyer-add-first:hover { color: var(--ff-accent); border-color: var(--ff-accent); }
 /* A chart whose dataset the role being viewed as can't read (`Dashboard.as_role`):
    a lock where the data would be, the chart's id under it. */
 .fireflyer-no-access {

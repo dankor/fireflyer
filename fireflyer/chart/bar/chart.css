@@ -272,7 +272,9 @@
   min-width: 100%;
 }
 .fireflyer-bar-scroll .fireflyer-bar-canvas {
-  min-height: 220px;
+  /* No floor: a 220px minimum in a shorter row pushed the centred plot up under
+     the title, hiding the tallest bars. Sized by height, it shrinks instead. */
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: safe center;

@@ -12,6 +12,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from fastapi import BackgroundTasks, FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from fireflyer import config_edit
@@ -648,6 +649,12 @@ def _columns_used_in(request: Request, name: str, columns: list[str]) -> dict[st
     return out
 
 
+def _dataset_descriptions(request: Request) -> dict[str, str]:
+    """Name -> description of the uploaded datasets — what a chart form's
+    dataset field offers as you type."""
+    return {d.name: d.description for d in _dataset_store(request).list()}
+
+
 def _dataset_names(request: Request) -> set[str]:
     """The uploaded datasets' names, for the dashboards list's links."""
     return {d.name for d in _dataset_store(request).list()}
@@ -1127,8 +1134,11 @@ async def chat(request: Request, req: ChatRequest) -> dict:
             "reply": "AI assistant is disabled. Set ANTHROPIC_API_KEY in .env and restart.",
         }
     try:
-        result = chat_mod.run_chat(
-            req.message, req.yaml, req.history, datasets=_dataset_schemas(request)
+        # A thread: the assistant can take a minute, and waiting on it in the
+        # event loop froze every other request — other pages, chart cells.
+        result = await run_in_threadpool(
+            chat_mod.run_chat, req.message, req.yaml, req.history,
+            datasets=_dataset_schemas(request),
         )
         return {"ok": True, **result}
     except Exception as exc:  # surface SDK/auth/network errors as a chat reply
@@ -1458,15 +1468,17 @@ async def chart_config_form(
     yaml_text: str = Form(""),
     cid: str = Form(""),
     type_override: str = Form(""),
+    dataset: str = Form(""),
 ) -> str:
     """Build the edit-modal form for one chart from the current YAML.
 
     `type_override` re-renders the fields for a different chart type when the
-    user changes the type dropdown."""
+    user changes the type dropdown; `dataset`, for a dataset picked there."""
     try:
         return config_edit.build_form(
             yaml_text, cid, type_override=type_override,
             resolve=_dataset_store(request).source,
+            datasets=_dataset_descriptions(request), dataset_override=dataset.strip(),
         )
     except (config_edit.ConfigEditError, DashboardError) as exc:
         return f'<div class="ff-modal-error" role="alert">{escape(str(exc))}</div>'
@@ -1474,15 +1486,23 @@ async def chart_config_form(
 
 @app.post("/chart/config/add-form", response_class=HTMLResponse)
 async def chart_config_add_form(
+    request: Request,
     yaml_text: str = Form(""),
     add_type: str = Form("table"),
     add_mode: str = Form("row"),
     add_index: str = Form("end"),
+    dataset: str = Form(""),
+    title: str = Form(""),
 ) -> str:
     """Build the create-chart modal (defaults for a fresh chart of `add_type`).
-    Placement (`add_mode`/`add_index`) rides along as hidden inputs."""
+    Placement (`add_mode`/`add_index`) rides along as hidden inputs; with a
+    `dataset` its calc and column fields list that dataset's."""
     try:
-        return config_edit.build_add_form(yaml_text, add_type, add_mode, add_index)
+        return config_edit.build_add_form(
+            yaml_text, add_type, add_mode, add_index,
+            dataset=dataset.strip(), title=title, resolve=_dataset_store(request).source,
+            datasets=_dataset_descriptions(request),
+        )
     except (config_edit.ConfigEditError, DashboardError) as exc:
         return f'<div class="ff-modal-error" role="alert">{escape(str(exc))}</div>'
 

@@ -6,6 +6,9 @@ Plot a point dataset (lat/lng) as a pointy-top hex grid heatmap over an OpenStre
 ## Behavior
 - Reads the CSV.
 - Applies the chart's `filters` (see architecture.md "Filters") before binning.
+- Reads `lat`/`lng` as numbers, so a text column of coordinates (how an
+  uploaded CSV arrives) plots the same as a numeric one; a value that isn't a
+  number counts as missing.
 - Drops rows where `lat` or `lng` is null.
 - Uses Web Mercator projection. `lat`/`lng` are converted to world-pixel coordinates at the current tile zoom; tiles and hexes share that coordinate space so they always align.
 - Tile zoom is either user-set (`zoom` parameter, exposed as `+`/`−` buttons in the UI) or auto-fit. The auto fit picks the largest zoom level at which the data bounding box still fits inside the canvas (plus a small margin).

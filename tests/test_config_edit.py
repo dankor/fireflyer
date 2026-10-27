@@ -805,3 +805,153 @@ def test_a_tab_can_go_first_or_last():
 def test_dropping_a_tab_beside_itself_changes_nothing():
     assert ce.reorder_tab(_THREE_TABS, 1, 1) == _THREE_TABS
     assert ce.reorder_tab(_THREE_TABS, 1, 2) == _THREE_TABS
+
+
+# --- a new dashboard's first items --------------------------------------------------
+
+
+_NEW = 'name: "Fresh"\n\ndatasets: {}\n\ncharts: {}\n\nlayout: []\n'
+
+
+def test_a_new_dashboards_first_chart_can_be_added():
+    """A new dashboard starts `charts: {}` / `layout: []` — the add form's first
+    chart went nowhere ("no `charts:` section")."""
+    from fireflyer.config_edit import add_chart
+    from fireflyer.dashboard import Dashboard
+
+    from starlette.datastructures import FormData
+
+    form = FormData({"type": "table", "dataset": "orders", "title": "Orders", "add_mode": "row", "add_index": "end"})
+    for new in (_NEW, _NEW.replace("\n", "\r\n")):         # as a browser's form sends it
+        text = add_chart(new, form)
+        dash = Dashboard.from_yaml(text)
+        assert list(dash.chart_configs) == ["table"]
+        assert "charts: {}" not in text and "layout: []" not in text
+
+
+def test_a_new_dashboards_first_header_can_be_inserted():
+    from fireflyer.config_edit import insert_layout_item
+
+    text = insert_layout_item(_NEW, "header", "end")
+    assert "layout:\n" in text and "New header" in text
+
+
+def test_the_add_form_lists_a_typed_datasets_calcs(orders_parquet):
+    """Adding a chart, the form is rebuilt once a dataset is typed, so a calc
+    can be picked — before, the calc list of a new pie was empty."""
+    from fireflyer.config_edit import build_add_form
+
+    text = f"name: x\ncalcs:\n  {orders_parquet}:\n    n: {{agg: count}}\ncharts: {{}}\nlayout: []\n"
+    blank = build_add_form(text, "pie", "row", "end")
+    assert '<select class="ff-input" name="calc"></select>' in blank
+    typed = build_add_form(text, "pie", "row", "end", dataset=orders_parquet, title="By status")
+    assert 'value="n"' in typed and 'value="By status"' in typed and 'value="status"' in typed
+
+
+def test_the_edit_form_shows_a_left_out_key_as_the_charts_default(orders_parquet):
+    """A pie's `total` defaults on; with no `total:` in the YAML the form showed
+    it off, and saving it switched the pie's total off."""
+    from fireflyer.config_edit import build_form
+
+    text = (f"name: x\ncalcs:\n  {orders_parquet}:\n    n: {{agg: count}}\n"
+            f"charts:\n  p: {{type: pie, dataset: {orders_parquet}, calc: n, column: status, title: P}}\n"
+            'layout:\n  - ["@30", "p"]\n')
+    html = build_form(text, "p")
+    total = html[html.index('data-param="total"'):]
+    assert "checked" in total[:total.index("</div>")]
+
+
+def test_the_add_form_title_follows_the_type_unless_typed():
+    from fireflyer.config_edit import build_add_form
+
+    text = "name: x\ncharts: {}\nlayout: []\n"
+    assert 'name="title" value="Pie"' in build_add_form(text, "pie", "row", "end", title="Table")
+    assert 'name="title" value="Sales"' in build_add_form(text, "pie", "row", "end", title="Sales")
+
+
+# --- comments survive the editor's edits ---------------------------------------------
+
+
+def _commented(ds):
+    return f'''name: Sales  # the name
+description: Orders by status  # what it is for
+calcs:  # counts
+  {ds}:
+    n: {{agg: count, name: Orders}}  # one per order
+charts:
+  # the pie
+  byStatus:  # pie chart
+    type: pie  # a pie
+    dataset: {ds}
+    title: By status  # shown on top
+    description: Orders per status  # under the title
+    column: status
+    calc: n
+  rows: {{type: table, dataset: {ds}, title: Rows}}  # every order
+layout:  # one row
+  - ["@40", "byStatus", "rows"]  # side by side
+  - Notes  # a header
+'''
+
+
+def _comments(text):
+    return [line.split("#", 1)[1].strip() for line in text.splitlines() if "#" in line]
+
+
+def test_editing_a_chart_keeps_the_comments_of_its_lines(orders_parquet):
+    """The form re-writes the chart's block: its comments come back on the
+    lines that are still there, whatever their values became."""
+    from starlette.datastructures import FormData
+
+    from fireflyer.config_edit import apply_edit
+
+    text = _commented(orders_parquet)
+    form = FormData([("type", "pie"), ("dataset", orders_parquet), ("title", "Orders by status"),
+                     ("description", "How many in each"), ("column", "status"), ("calc", "n"), ("total", "true")])
+    out = apply_edit(text, "byStatus", form)
+    assert _comments(out) == _comments(text)
+    assert "  title: Orders by status  # shown on top" in out
+    assert "  description: How many in each  # under the title" in out
+
+
+def test_layout_edits_keep_their_lines_comments(orders_parquet):
+    from fireflyer.config_edit import move_placement, resize_columns, set_header_text
+
+    text = _commented(orders_parquet)
+    for out in (
+        set_header_text(text, 0, "More notes"),
+        move_placement(text, "rows", "byStatus", "before"),
+        resize_columns(text, [0], [2, 1]),
+    ):
+        assert _comments(out) == _comments(text)
+
+
+def test_deleting_a_chart_takes_only_its_own_comments(orders_parquet):
+    from fireflyer.config_edit import delete_chart
+
+    text = _commented(orders_parquet)
+    assert [c for c in _comments(text) if c not in _comments(delete_chart(text, "rows"))] == ["every order"]
+
+
+def test_a_comment_on_a_section_key_doesnt_hide_the_section():
+    """`layout:  # …` read as no layout at all — every layout edit failed."""
+    from fireflyer.config_edit import insert_layout_item
+
+    text = 'name: x\ncharts: {}  # none yet\nlayout:  # rows\n  - Notes\n'
+    assert "New header" in insert_layout_item(text, "header", "end")
+
+
+def test_saving_a_calc_keeps_the_calcs_comments(orders_parquet):
+    from fireflyer.calcs_edit import upsert_calc
+
+    text = _commented(orders_parquet)
+    out = upsert_calc(text, orders_parquet, "m", {"agg": "count"})
+    assert _comments(out) == _comments(text)
+
+
+def test_a_hash_inside_quotes_isnt_a_comment():
+    from fireflyer.config_edit import keep_comments
+
+    old = '  a:\n    title: "No. #1"  # real\n'
+    new = '  a:\n    title: "No. #2"\n'
+    assert keep_comments(old, new) == '  a:\n    title: "No. #2"  # real\n'

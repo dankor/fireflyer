@@ -55,7 +55,8 @@ Display a calc distribution as **stacked** vertical bars, broken down by a secon
 - **Long axis scrolls.** Few categories fill the cell as before; once there are
   too many for each bar to keep a minimum width (~28px), the plot grows and the
   canvas **scrolls horizontally** so every bar stays readable (the title and
-  legend stay put). Each bar owns a **slot** — its width plus one gap — and the
+  legend stay put). The plot still fits the row's height — no minimum — so in a
+  short row it shrinks rather than running up under the title. Each bar owns a **slot** — its width plus one gap — and the
   gap is a share of that slot, so once the plot hits its ceiling (`MAX_PLOT_W`,
   about 400 bars at full width) the bars thin out rather than the canvas growing
   without bound. Deriving the gap from the slot is also what keeps widths

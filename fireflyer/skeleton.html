@@ -115,7 +115,12 @@
   </div>
   {%- endif %}
   {%- endfor %}
-  {%- if editing %}
+  {%- if editing and not items and not tabs %}
+  {#- Nothing on it yet: one big + that adds the first chart, in any mode. -#}
+  <button type="button" class="fireflyer-add-first" title="Add a chart" aria-label="Add a chart">
+    <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  {%- elif editing %}
   <div class="fireflyer-add-row" data-before="{{ end_before }}"><button type="button" class="fireflyer-add-row-btn" title="Add a row at the end">+</button></div>
   {%- endif %}
 </div>

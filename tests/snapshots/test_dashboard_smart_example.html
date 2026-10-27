@@ -172,6 +172,22 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;
 }
+/* An empty dashboard in the editor: one big + for the first chart. */
+.fireflyer-add-first {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 320px;
+  margin: 0;
+  border: 2px dashed var(--ff-border);
+  border-radius: 8px;
+  background: none;
+  color: var(--ff-muted);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.fireflyer-add-first:hover { color: var(--ff-accent); border-color: var(--ff-accent); }
 /* A chart whose dataset the role being viewed as can't read (`Dashboard.as_role`):
    a lock where the data would be, the chart's id under it. */
 .fireflyer-no-access {
@@ -1931,14 +1947,18 @@ layout:
 }
 .fireflyer-pie-canvas {
   position: relative;
-  width: 220px;
-  height: 220px;
-  flex-shrink: 0;
+  /* 220px at most, smaller when the row is short: a fixed square under the
+     title and legend ran past a short card's bottom edge and was cut off.
+     The height flexes and the width follows it, so the donut stays round. */
+  flex: 0 1 220px;
+  min-height: 0;
+  max-height: 220px;
+  aspect-ratio: 1;
   /* The layout stretches its items so the legend can inherit a height; the
-     donut has a fixed size, so centre it in whatever space it's given. */
+     donut is a square, so centre it in whatever space it's given. */
   align-self: center;
 }
-.fireflyer-pie svg { display: block; }
+.fireflyer-pie svg { display: block; width: 100%; height: 100%; }
 /* Slice separators and the donut hole take the card colour so slices read as
    distinct on any theme (each slice's fill is data-driven, set inline). Only
    multi-slice paths get a separator stroke; a lone full-circle slice has none. */
@@ -1946,7 +1966,7 @@ layout:
 .fireflyer-pie-hole { fill: var(--ff-panel); }
 /* Grand total in the donut centre. Not a pointer target — the click surface is
    the slices, so it never eats slice hovers/clicks. */
-.fireflyer-pie-total { fill: var(--ff-ink); font-size: 24px; font-weight: 700;
+.fireflyer-pie-total { fill: var(--ff-ink); font-weight: 700;  /* size: inline, by length */
   pointer-events: none; }
 /* Percent label drawn on each big-enough slice (small slices are skipped). White
    with a faint dark halo so it stays legible over any slice colour. */
@@ -2233,7 +2253,7 @@ layout:
         <text x="44.7" y="124.9" class="fireflyer-pie-pct" text-anchor="middle" dominant-baseline="central">28.57%</text>
         <rect class="fireflyer-pie-pct-bg" data-i="2" x="54.5" y="41.6" width="52.8" height="16" rx="3" />
         <text x="80.9" y="49.6" class="fireflyer-pie-pct" text-anchor="middle" dominant-baseline="central">14.29%</text>
-        <text x="110" y="110" class="fireflyer-pie-total" text-anchor="middle" dominant-baseline="central"><title>Total: 7</title>7</text>
+        <text x="110" y="110" class="fireflyer-pie-total" style="font-size: 24px" text-anchor="middle" dominant-baseline="central"><title>Total: 7</title>7</text>
         <foreignObject x="200.0" y="130.0" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-pie-tip-anchor" style="anchor-name: --ff-pie-s0"></div></foreignObject>
         <foreignObject x="20.0" y="130.0" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-pie-tip-anchor" style="anchor-name: --ff-pie-s1"></div></foreignObject>
         <foreignObject x="20.0" y="28.9" width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml" class="fireflyer-pie-tip-anchor" style="anchor-name: --ff-pie-s2"></div></foreignObject>

@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import fireflyer as ff
@@ -232,3 +234,15 @@ def test_map_empty_dataset_renders_no_polygons(csv_to_parquet):
     html = chart.to_html()
     assert "<polygon" not in html
     assert ">No data<" in html
+
+
+def test_map_plots_text_coordinates(tmp_path, orders_parquet):
+    """An uploaded CSV arrives as text: its lat/lng plot as numbers do."""
+    import polars as pl
+
+    text = tmp_path / "text.parquet"
+    pl.read_parquet(orders_parquet).cast(pl.String).write_parquet(text)
+    numeric = ff.chart.map(dataset=orders_parquet, title="t", lat="lat", lng="lng", grid_size=20)
+    as_text = ff.chart.map(dataset=str(text), title="t", lat="lat", lng="lng", grid_size=20)
+    bins = lambda html: sorted(re.findall(r'data-count="(\d+)"', html))
+    assert bins(as_text.to_html()) == bins(numeric.to_html()) == ["1", "1", "2", "3"]

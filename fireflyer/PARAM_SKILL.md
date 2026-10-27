@@ -96,7 +96,9 @@ moment you add a constructor field (and vice versa).
 `build_form(text, cid)` renders the modal; `apply_edit(text, cid, form)` parses
 each Param, rebuilds the chart's YAML block via `emit_chart_block`, and
 **surgically replaces** just that block (`replace_chart_block`) — siblings,
-comments, and blank lines elsewhere stay byte-for-byte. It then re-validates with
+comments, and blank lines elsewhere stay byte-for-byte, and the block's own
+comments come back on the lines that are still there (`keep_comments`). It then
+re-validates with
 `Dashboard.from_yaml`. You only touch this file if you change how a block is
 emitted or located. Keep this logic here (pure) — not in `app.py` — so it
 unit-tests without FastAPI/anthropic.

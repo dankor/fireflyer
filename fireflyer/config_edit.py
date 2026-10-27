@@ -74,6 +74,16 @@ def _chart_config(config: dict, cid: str) -> dict:
     return cfg
 
 
+def _dataset_choices(config: dict, stored: dict[str, str] | None) -> dict[str, str]:
+    """Name -> description of every dataset a chart here can name: the uploaded
+    ones (`stored`), then the dashboard's own inline ones, which win a shared
+    name as they do when the dashboard reads it."""
+    raw = config.get("datasets")
+    inline = {n: "" for n in raw} if isinstance(raw, dict) else {}
+    inline.update(inline_data.descriptions(raw))
+    return {**(stored or {}), **inline}
+
+
 def _context(config: dict, cfg: dict, resolve=None) -> ParamContext:
     # `dataset` is a name (resolved via `resolve`) or a Parquet path directly.
     # Column calcs are dimensions, so they join the column dropdowns; the rest
@@ -318,24 +328,34 @@ def _type_select(current: str) -> str:
     )
 
 
-def build_form(text: str, cid: str, type_override: str = "", resolve=None) -> str:
+def build_form(text: str, cid: str, type_override: str = "", resolve=None,
+               datasets: dict[str, str] | None = None, dataset_override: str = "") -> str:
     """Render the edit-modal form for chart `cid` against the current YAML.
 
     `type_override` (set when the user changes the type dropdown) builds the form
     for a different chart type, carrying over the current config's overlapping
-    values (dataset, title, filters, shared columns) and defaulting the rest.
-    `resolve` (the app's dataset store) turns the chart's dataset name into its
-    Parquet so the column dropdown can list its columns."""
+    values (dataset, title, filters, shared columns) and defaulting the rest;
+    `dataset_override` (a dataset picked in the form) does the same for another
+    dataset, so its columns and calcs are offered. `resolve` (the app's dataset
+    store) turns the chart's dataset name into its Parquet so the column
+    dropdown can list its columns; `datasets` (name -> description, the
+    uploaded ones) is what the dataset field offers, with the inline ones."""
     config = _load(text)
-    cfg = _chart_config(config, cid)
+    cfg = dict(_chart_config(config, cid))
+    if dataset_override:
+        cfg["dataset"] = dataset_override
     ctype = type_override or cfg.get("type")
     cls = CHART_TYPES.get(ctype)
     if cls is None:
         raise ConfigEditError(f"chart {cid!r}: unknown type {ctype!r}")
 
     ctx = _context(config, cfg, resolve)
+    ctx.datasets = _dataset_choices(config, datasets)
+    # A key the YAML leaves out shows the chart's own default — a pie's total
+    # is on — or saving the form would write the opposite of what's drawn.
+    defaults = _defaults(cls)
     fields = _type_select(ctype) + "".join(
-        p.render(cfg.get(p.name), ctx) for p in cls.PARAMS
+        p.render(cfg[p.name] if p.name in cfg else defaults.get(p.name), ctx) for p in cls.PARAMS
     )
     return (
         f'<form id="ff-modal-form" data-cid="{escape(cid, quote=True)}">'
@@ -352,6 +372,104 @@ def build_form(text: str, cid: str, type_override: str = "", resolve=None) -> st
     )
 
 
+# --- comments, kept through an edit ---------------------------------------------
+#
+# A form re-writes a block (a chart's, the calcs) from its values, which would
+# drop whatever comments were in it. They're carried over by *key path* — the
+# chain of keys down to a line (`byStatus` > `description`), a list item counted
+# by its place (`filters` > [0] > `column`): a comment after a line stays after
+# the line with the same path, and comment lines above it stay above it. Only a
+# line that's really gone takes its comments with it.
+
+_KEY_LINE = re.compile(r"^(\s*)(- +)?([^\s#'\"\-][^:#]*?|'[^']*'|\"[^\"]*\"):(\s|$)")
+
+
+def _comment_at(line: str) -> int | None:
+    """Where a trailing `# comment` starts on `line` (the whitespace before it),
+    or None — a `#` inside quotes, or not after whitespace, is text."""
+    quote = None
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
+            j = i
+            while j > 0 and line[j - 1] in " \t":
+                j -= 1
+            return j
+    return None
+
+
+def _strip_comment(line: str) -> str:
+    at = _comment_at(line)
+    return line if at is None else line[:at]
+
+
+def _with_comment(old: str, new: str) -> str:
+    """`new`, a re-written `old` line, keeping `old`'s trailing comment."""
+    at = _comment_at(old)
+    return new if at is None else new + old[at:]
+
+
+def _key_paths(lines: list[str]) -> list[tuple | None]:
+    """Each line's key path, or None for a line that isn't a key (a comment, a
+    blank, a flow list's continuation)."""
+    stack: list[tuple[int, object]] = []           # (indent, path element)
+    items: dict[tuple, int] = {}                   # list item counts per parent
+    out: list[tuple | None] = []
+    for line in lines:
+        body = _strip_comment(line)
+        m = _KEY_LINE.match(body)
+        if not m or not body.strip():
+            out.append(None)
+            continue
+        indent = len(m.group(1))
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        parent = tuple(e for _, e in stack)
+        if m.group(2):                             # `- key:` opens a list item
+            n = items.get(parent, 0)
+            items[parent] = n + 1
+            stack.append((indent, n))
+            indent += len(m.group(2))
+            parent = parent + (n,)
+        key = m.group(3).strip("'\"")
+        stack.append((indent, key))
+        out.append(parent + (key,))
+    return out
+
+
+def keep_comments(old: str, new: str) -> str:
+    """`new` (a block re-written from a form) with `old`'s comments put back on
+    the lines that still have the same key path."""
+    old_lines, new_lines = old.split("\n"), new.split("\n")
+    trailing: dict[tuple, str] = {}
+    above: dict[tuple, list[str]] = {}
+    pending: list[str] = []
+    for line, path in zip(old_lines, _key_paths(old_lines)):
+        if line.strip().startswith("#"):
+            pending.append(line.strip())
+            continue
+        if path is not None:
+            at = _comment_at(line)
+            if at is not None:
+                trailing[path] = line[at:]
+            if pending:
+                above[path] = pending
+        pending = []
+    out = []
+    for line, path in zip(new_lines, _key_paths(new_lines)):
+        if path in above:
+            pad = line[:len(line) - len(line.lstrip())]
+            out += [pad + c for c in above[path]]
+        if path in trailing and _comment_at(line) is None:
+            line = line + trailing[path]
+        out.append(line)
+    return "\n".join(out)
+
+
 # --- surgical block replace ---------------------------------------------------
 
 
@@ -363,7 +481,7 @@ def _find_block(lines: list[str], cid: str) -> tuple[int, int, int]:
     key line's indentation. Raises if the block isn't found in flow the parser
     can see (block-style mapping under `charts:`)."""
     charts_i = next(
-        (i for i, ln in enumerate(lines) if ln.rstrip() == "charts:"), None
+        (i for i, ln in enumerate(lines) if _strip_comment(ln).rstrip() == "charts:"), None
     )
     if charts_i is None:
         raise ConfigEditError("no `charts:` section to edit")
@@ -446,8 +564,9 @@ def apply_edit(text: str, cid: str, form) -> str:
 
     kwargs = {p.name: p.parse(form) for p in cls.PARAMS}
     lines = text.split("\n")
-    _, _, indent = _find_block(lines, cid)
+    start, end, indent = _find_block(lines, cid)
     new_block = emit_chart_block(cid, ctype, kwargs, cls.PARAMS, indent)
+    new_block = keep_comments("\n".join(lines[start:end]), new_block)
     new_text = replace_chart_block(text, cid, new_block)
 
     # Validate the whole document the same way a manual edit would be — this
@@ -481,22 +600,33 @@ def _defaults(cls) -> dict:
     return out
 
 
-def build_add_form(text: str, ctype: str, add_mode: str, add_index: str) -> str:
+def build_add_form(text: str, ctype: str, add_mode: str, add_index: str,
+                   dataset: str = "", title: str = "", resolve=None,
+                   datasets: dict[str, str] | None = None) -> str:
     """Render the create-chart modal for a fresh chart of type `ctype`. Carries
     the placement (`add_mode`/`add_index`) as hidden inputs so the save knows
-    where to drop the chart."""
+    where to drop the chart.
+
+    The dataset starts blank; once one is typed the form is rebuilt for it
+    (`dataset`, keeping the typed `title`), so its calc and column fields list
+    that dataset's calcs and columns — `resolve` reads them, as in `build_form`;
+    `datasets` is what the dataset field offers, as there."""
     config = _load(text)
     cls = CHART_TYPES.get(ctype)
     if cls is None:
         raise ConfigEditError(f"unknown type {ctype!r}")
 
-    # No datasets: block anymore — the new chart's dataset starts blank (the
-    # author types a dataset name / picks one once the gallery is wired).
-    ctx = ParamContext(datasets={}, dataset_id=None, columns=[])
+    if dataset:
+        ctx = _context(config, {"dataset": dataset}, resolve)
+    else:
+        ctx = ParamContext(datasets={}, dataset_id=None, columns=[])
+    ctx.datasets = _dataset_choices(config, datasets)
     values = _defaults(cls)
-    values["dataset"] = ""
-    if not values.get("title"):
-        values["title"] = ctype.capitalize()
+    values["dataset"] = dataset
+    # A title that's only another type's default ("Table") follows the type.
+    if title.strip().lower() in CHART_TYPES:
+        title = ""
+    values["title"] = title or values.get("title") or ctype.capitalize()
 
     hidden = (
         f'<input type="hidden" name="add_mode" value="{escape(add_mode, quote=True)}">'
@@ -527,8 +657,16 @@ def _unique_cid(config: dict, base: str) -> str:
     return f"{base}_{i}"
 
 
+def _open_section(text: str, key: str) -> str:
+    """`text` with an empty one-line section — `charts: {}`, `layout: []`, as a
+    new dashboard starts — written as a bare `key:`, so a first item can be
+    inserted under it the way every later one is."""
+    # `\r?`: a browser's form posts the text with CRLF line ends.
+    return re.sub(rf"^{key}:[ \t]*(\{{\}}|\[\])[ \t]*(?=\r?$)", f"{key}:", text, count=1, flags=re.M)
+
+
 def _section_i(lines: list[str], key: str) -> int:
-    i = next((i for i, ln in enumerate(lines) if ln.rstrip() == f"{key}:"), None)
+    i = next((i for i, ln in enumerate(lines) if _strip_comment(ln).rstrip() == f"{key}:"), None)
     if i is None:
         raise ConfigEditError(f"no `{key}:` section")
     return i
@@ -540,8 +678,8 @@ def _charts_child_indent(lines: list[str]) -> int:
         if ln.strip() == "" or ln.lstrip().startswith("#"):
             continue
         indent = len(ln) - len(ln.lstrip())
-        return indent if indent > 0 else 4
-    return 4
+        return indent if indent > 0 else 2
+    return 2                                   # a first chart: the usual two spaces
 
 
 def _insert_chart_block(text: str, block: str) -> str:
@@ -681,7 +819,7 @@ def set_header_text(text: str, index: int, new_text: str) -> str:
         raise ConfigEditError(f"header {index} not found")
     ln = lines[headers[index]]
     indent = ln[:len(ln) - len(ln.lstrip())]
-    lines[headers[index]] = f"{indent}- {_yaml_inline_str(new_text)}"
+    lines[headers[index]] = _with_comment(ln, f"{indent}- {_yaml_inline_str(new_text)}")
     result = "\n".join(lines)
 
     from fireflyer.dashboard import Dashboard
@@ -694,7 +832,7 @@ def insert_layout_item(text: str, kind: str, before) -> str:
     """Insert a header or separator into the layout. `kind` is 'header' (a plain
     string item, defaulting to "New header") or 'separator' (the `"-"` item).
     `before` is a layout-item index to insert above, or "end" to append."""
-    lines = text.split("\n")
+    lines = _open_section(text, "layout").split("\n")
     di = _section_i(lines, "layout")
     rows = _row_line_indices(lines, di)
     indent = "  "
@@ -871,7 +1009,7 @@ def set_tab_text(text: str, index: int, new_name: str) -> str:
         raise ConfigEditError(f"tab {index} not found")
     ln = lines[keys[index]]
     indent = ln[:len(ln) - len(ln.lstrip())]
-    lines[keys[index]] = f"{indent}{_yaml_inline_str(new_name)}:"
+    lines[keys[index]] = _with_comment(ln, f"{indent}{_yaml_inline_str(new_name)}:")
     result = "\n".join(lines)
 
     from fireflyer.dashboard import Dashboard
@@ -1001,8 +1139,9 @@ def _add_to_layout_row(text: str, cid: str, ordinal: int) -> str:
     if not (0 <= ordinal < len(rows)):
         raise ConfigEditError(f"row {ordinal} not found")
     ln = lines[rows[ordinal]]
-    pos = ln.rindex("]")
-    lines[rows[ordinal]] = ln[:pos] + f', "{cid}:1"' + ln[pos:]
+    body = _strip_comment(ln)
+    pos = body.rindex("]")
+    lines[rows[ordinal]] = _with_comment(ln, body[:pos] + f', "{cid}:1"' + body[pos:])
     return "\n".join(lines)
 
 
@@ -1016,7 +1155,7 @@ def _remove_from_layout(text: str, cid: str) -> str:
         if i not in row_idx:
             out.append(ln)
             continue
-        toks = re.findall(r'"([^"]*)"', ln)          # ["@h", "a:1", "b:2", ...]
+        toks = _row_tokens(ln)                        # ["@h", "a:1", "b:2", ...]
         widgets = toks[1:]
         kept = [w for w in widgets if w.split(":", 1)[0] != cid]
         if len(kept) == len(widgets):
@@ -1024,7 +1163,7 @@ def _remove_from_layout(text: str, cid: str) -> str:
         elif kept:
             indent = ln[:len(ln) - len(ln.lstrip())]
             arr = ", ".join(f'"{t}"' for t in [toks[0], *kept])
-            out.append(f"{indent}- [{arr}]")
+            out.append(_with_comment(ln, f"{indent}- [{arr}]"))
         # else: row now has no widgets -> drop the line entirely
     return "\n".join(out)
 
@@ -1055,8 +1194,9 @@ def delete_chart(text: str, cid: str) -> str:
 
 
 def _row_tokens(line: str) -> list[str]:
-    """Quoted tokens of a flow row line: [height, "id:w", ...]."""
-    return re.findall(r'"([^"]*)"', line)
+    """Quoted tokens of a flow row line: [height, "id:w", ...] — not its
+    comment's."""
+    return re.findall(r'"([^"]*)"', _strip_comment(line))
 
 
 def _rebuild_row(indent: str, height: str, widgets: list[str]) -> str:
@@ -1105,7 +1245,7 @@ def _emit(lines: list[str], metas: list[dict]) -> str:
         if m is None:
             out.append(ln)
         elif m["tokens"]:
-            out.append(_rebuild_row(m["indent"], m["height"], m["tokens"]))
+            out.append(_with_comment(ln, _rebuild_row(m["indent"], m["height"], m["tokens"])))
         # else: emptied row -> drop
     return "\n".join(out)
 
@@ -1399,6 +1539,7 @@ def add_chart(text: str, form) -> str:
 
     cid = _unique_cid(config, ctype)
     kwargs = {p.name: p.parse(form) for p in cls.PARAMS}
+    text = _open_section(_open_section(text, "charts"), "layout")
     indent = _charts_child_indent(text.split("\n"))
     block = emit_chart_block(cid, ctype, kwargs, cls.PARAMS, indent)
     text = _insert_chart_block(text, block)

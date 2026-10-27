@@ -63,7 +63,7 @@ def icon(name: str) -> str:
 @dataclass
 class ParamContext:
     """What a widget needs to render without reaching into chart code."""
-    datasets: dict[str, str] = field(default_factory=dict)  # dataset id -> path
+    datasets: dict[str, str] = field(default_factory=dict)  # dataset name -> its description
     dataset_id: str | None = None                           # this chart's dataset
     columns: list[str] = field(default_factory=list)        # its dataset's columns
     calcs: list[str] = field(default_factory=list)       # calc keys for its dataset
@@ -146,18 +146,33 @@ class TextParam(Param):
 
 
 class DatasetParam(Param):
-    """The chart's dataset — its unique name. A plain text field for now; once
-    the portal's dataset gallery is wired in, `ctx.datasets` can turn this back
-    into a dropdown of the stored dataset names."""
+    """The chart's dataset — its unique name, typed or picked. With
+    `ctx.datasets` (the names there are, uploaded and inline) the field is a
+    search: a list under it narrows as you type, each name with its
+    description (the editor's script drives it). A name not in the list stays
+    as typed — an inline dataset still to be written, or one not uploaded yet."""
 
     kind = "dataset"
     reads = "none"
 
     def render(self, value, ctx: ParamContext) -> str:
         val = "" if value is None else str(value)
+        name = escape(self.name, quote=True)
+        if not ctx.datasets:
+            return self._wrap(f'<input class="ff-input" type="text" name="{name}" value="{escape(val, quote=True)}">')
+        options = "".join(
+            f'<button type="button" class="ff-combo-item" data-value="{escape(n, quote=True)}">'
+            f'<span class="ff-combo-name">{escape(n)}</span>'
+            + (f'<span class="ff-combo-about">{escape(about)}</span>' if about else "")
+            + "</button>"
+            for n, about in sorted(ctx.datasets.items(), key=lambda kv: kv[0].lower())
+        )
         return self._wrap(
-            f'<input class="ff-input" type="text" name="{escape(self.name, quote=True)}" '
-            f'value="{escape(val, quote=True)}">'
+            '<div class="ff-combo">'
+            f'<input class="ff-input" type="text" name="{name}" value="{escape(val, quote=True)}"'
+            ' placeholder="Search datasets" autocomplete="off" spellcheck="false" role="combobox"'
+            ' aria-autocomplete="list" aria-expanded="false">'
+            f'<div class="ff-combo-list" role="listbox" hidden>{options}</div></div>'
         )
 
     def parse(self, form):

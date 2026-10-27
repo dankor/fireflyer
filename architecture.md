@@ -747,8 +747,12 @@ usable and it's confined to editor support:
   type — so a chart can be re-typed from the modal, not just reconfigured.
 * **Saving is a surgical edit** (`fireflyer/config_edit.py`): only the edited
   chart's YAML block is rewritten; every other chart, comment, and blank line is
-  preserved byte-for-byte. Comments inside the edited block are regenerated. The
-  whole document is re-validated with `Dashboard.from_yaml` before it's accepted.
+  preserved byte-for-byte. Comments inside the edited block are kept too, on the
+  line with the same key (`config_edit.keep_comments`); only a line that's gone
+  takes its comment with it. The same holds for every editor change: the calcs
+  manager, layout edits (a re-written row or header keeps its trailing comment),
+  and the title card's `description:`. The whole document is re-validated with
+  `Dashboard.from_yaml` before it's accepted.
 
 ### Charts read only the columns they declare
 

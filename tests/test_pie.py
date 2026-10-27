@@ -444,3 +444,13 @@ layout:
     ).group(1)
     assert re.fullmatch(r"\d+\.\d\d", centre("a")), centre("a")
     assert "." not in centre("b") or centre("b").endswith("k")
+
+
+def test_pie_long_total_shrinks_to_fit_the_hole():
+    """A short total keeps the full size; a long one shrinks inside the hole."""
+    from fireflyer.chart.pie.chart import R_IN, TOTAL_EM_PER_CHAR, TOTAL_FONT_MAX, _total_font
+
+    assert _total_font("4,854") == TOTAL_FONT_MAX
+    long = "$20,549.80"
+    assert _total_font(long) < TOTAL_FONT_MAX
+    assert _total_font(long) * TOTAL_EM_PER_CHAR * len(long) <= 2 * R_IN
