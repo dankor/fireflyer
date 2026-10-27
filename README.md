@@ -30,7 +30,7 @@ For everyone. Open the browser editor and build by pointing and clicking: add ch
 
 For engineers. Describe a whole dashboard in a single YAML file.
 
-**Why it's good:** your dashboards live in your editor and in git — you review them like any other code and script them for reports that run themselves. No clicking through menus, no BI server to babysit.
+**Why it's good:** your dashboards live in your editor and in git — you review them like any other code and script them for reports that run themselves. No clicking through menus.
 
 ![Creating a dashboard from code](media/create-code.webp)
 
