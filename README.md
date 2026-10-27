@@ -18,7 +18,7 @@ Today it turns a CSV into charts (tables, pie, bar, and more), YAML dashboards, 
 
 One engine, three ways in. Pick whichever fits you — and switch anytime. Whatever you build, it's the same dashboard underneath, saved as clean YAML you can commit.
 
-### 🖱️ Build it in the UI
+### 🎨 Build it in the UI
 
 For everyone. Open the browser editor and build by pointing and clicking: add charts from a menu, fill in a short form, drag rows and columns to resize, click a pie slice to filter the rest.
 
@@ -26,7 +26,7 @@ For everyone. Open the browser editor and build by pointing and clicking: add ch
 
 ![Creating a dashboard from the UI](media/create-ui.webp)
 
-### 🛠️ Write it in code
+### 💻 Write it in code
 
 For engineers. Describe a whole dashboard in a single YAML file.
 
