@@ -18,6 +18,7 @@ from html import escape
 import yaml
 
 from fireflyer import calcs as calcs_mod
+from fireflyer.config_edit import keep_comments
 from fireflyer.params import FilterListParam, ParamContext, icon, parse_filters
 
 
@@ -172,6 +173,10 @@ def _splice(text: str, block: dict) -> str:
 
     if found:
         start, end = found
+        # The block is written afresh from the calcs; its comments are kept
+        # on the lines that are still there.
+        if new_lines:
+            new_lines = keep_comments("\n".join(lines[start:end]), "\n".join(new_lines)).split("\n")
         # Keep a single blank separator line after the block if the original had
         # one (blocks in these docs are separated by a blank line).
         trailing = [""] if new_lines and end < len(lines) and lines[end - 1] == "" else []

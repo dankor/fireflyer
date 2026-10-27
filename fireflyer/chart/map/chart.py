@@ -229,10 +229,13 @@ class Map:
         )
         if preds:
             lf = lf.filter(*preds)
+        # An uploaded column is text until its mapping says otherwise, so the
+        # coordinates are read as numbers here — text compared as text sorted
+        # "38.7" below "9.1" and put every point off the map.
         df = (
             lf.select(
-                pl.col(self.lat).alias("_lat"),
-                pl.col(self.lng).alias("_lng"),
+                calcs_mod.to_number_expr(pl.col(self.lat)).alias("_lat"),
+                calcs_mod.to_number_expr(pl.col(self.lng)).alias("_lng"),
                 weight.alias("_w"),
             )
             .filter(pl.col("_lat").is_not_null() & pl.col("_lng").is_not_null())

@@ -54,3 +54,22 @@ def test_a_chart_description_is_left_alone():
     text = "name: Sales\ncharts:\n  a: {type: number, dataset: d, title: T}\n  b:\n    description: keep me\nlayout: []\n"
     out = set_description(text, "top")
     assert "    description: keep me" in out and yaml.safe_load(out)["description"] == "top"
+
+
+def test_a_comment_after_it_stays():
+    """Changing the description from the editor's title card dropped the
+    comment after it."""
+    text = "name: Sales\ndescription: old  # what this is for\ncharts: {}\nlayout: []\n"
+    out = set_description(text, "new")
+    assert 'description: "new" # what this is for\n' in out
+    assert yaml.safe_load(out)["description"] == "new"
+
+
+def test_it_stays_where_it_is():
+    text = "name: Sales\ncharts: {}\ndescription: old\nlayout: []\n"
+    assert set_description(text, "new").split("\n")[2] == 'description: "new"'
+
+
+def test_a_comment_line_under_it_is_not_taken_for_its_value():
+    text = "name: Sales\ndescription: old\n  # a note\ncharts: {}\nlayout: []\n"
+    assert "  # a note" in set_description(text, "new")

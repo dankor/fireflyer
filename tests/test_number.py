@@ -20,7 +20,7 @@ def test_number_count_is_non_null(orders_parquet):
         dataset=orders_parquet, title="t", calc={"agg": "count", "formula": "id"}
     )
     html = chart.to_html()
-    assert '<div class="fireflyer-number-value" title="7">7</div>' in html
+    assert '<div class="fireflyer-number-value" style="--ff-chars: 1" title="7">7</div>' in html
 
 
 def test_number_sum_thousands_separated(orders_parquet):
@@ -29,7 +29,7 @@ def test_number_sum_thousands_separated(orders_parquet):
         dataset=orders_parquet, title="t", calc={"agg": "sum", "formula": "amount"}
     )
     html = chart.to_html()
-    assert '<div class="fireflyer-number-value" title="333">333</div>' in html
+    assert '<div class="fireflyer-number-value" style="--ff-chars: 3" title="333">333</div>' in html
     # No caption text is rendered anymore.
     assert "fireflyer-number-caption" not in html
 
@@ -42,7 +42,7 @@ def test_number_dcount_distinct_values(orders_parquet):
         calc={"agg": "dcount", "formula": "status"},
     )
     html = chart.to_html()
-    assert '<div class="fireflyer-number-value" title="3">3</div>' in html
+    assert '<div class="fireflyer-number-value" style="--ff-chars: 1" title="3">3</div>' in html
 
 
 def test_number_max_and_min(orders_parquet):
@@ -53,8 +53,8 @@ def test_number_max_and_min(orders_parquet):
     lo = ff.chart.number(
         dataset=orders_parquet, title="t", calc={"agg": "min", "formula": "amount"}
     )
-    assert '<div class="fireflyer-number-value" title="99">99</div>' in hi.to_html()
-    assert '<div class="fireflyer-number-value" title="12">12</div>' in lo.to_html()
+    assert '<div class="fireflyer-number-value" style="--ff-chars: 2" title="99">99</div>' in hi.to_html()
+    assert '<div class="fireflyer-number-value" style="--ff-chars: 2" title="12">12</div>' in lo.to_html()
 
 
 def test_number_format_token_applies(orders_parquet):
@@ -76,7 +76,7 @@ def test_number_filter_applies_before_aggregating(orders_parquet):
         filters=[{"column": "status", "op": "in", "values": ["paid"]}],
     )
     # Paid amounts: 42 + 99 + 75 + 60 = 276.
-    assert '<div class="fireflyer-number-value" title="276">276</div>' in chart.to_html()
+    assert '<div class="fireflyer-number-value" style="--ff-chars: 3" title="276">276</div>' in chart.to_html()
 
 
 def test_number_derived_calc_ratio(orders_parquet):
@@ -143,7 +143,7 @@ layout:
     dashboard = ff.Dashboard.from_yaml(yaml, datasets=lambda n: (orders_parquet, None))
     html = dashboard.to_html()
     assert 'class="fireflyer-chart fireflyer-number"' in html
-    assert '<div class="fireflyer-number-value" title="333">333</div>' in html
+    assert '<div class="fireflyer-number-value" style="--ff-chars: 3" title="333">333</div>' in html
 
 
 def test_number_dashboard_rejects_bad_calc_ref(orders_parquet):
@@ -236,3 +236,13 @@ def test_number_tooltip_uses_the_shared_card_layout(orders_parquet):
     # The value is pushed to the right of its row, as in the other charts.
     start = html.index(".fireflyer-number-tip-value {")
     assert "margin-left: auto" in html[start:html.index("}", start)]
+
+
+def test_a_long_figure_gets_a_width_for_its_length(orders_parquet):
+    """The size follows the figure's length — "$92,537.10" was cut off in a
+    narrow card when the width allowance assumed a short figure."""
+    chart = ff.chart.number(dataset=orders_parquet, title="t",
+                            calc={"agg": "sum", "formula": "amount", "format": "$0,0.00"})
+    html = chart.to_html()
+    value = re.search(r'class="fireflyer-number-value" style="--ff-chars: (\d+)"[^>]*>([^<]*)<', html)
+    assert int(value.group(1)) == len(value.group(2)) == len("$333.00")

@@ -323,6 +323,30 @@ pre.error { color: var(--error); white-space: pre-wrap; font-size: 12px; }
 .ff-type-select > button {
   flex: 1 1 auto; padding: 0; border: 0; background: none; color: inherit; font: inherit;
 }
+/* The dataset field's search (`params.DatasetParam`): a list under the input,
+   narrowed as you type — each name with its description, muted. */
+.ff-combo { position: relative; }
+.ff-combo > .ff-input { width: 100%; box-sizing: border-box; }
+.ff-combo-list {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
+  display: flex; flex-direction: column; max-height: 220px; overflow: auto; padding: 4px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.ff-combo-list[hidden] { display: none; }
+.ff-combo-item {
+  display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border: 0; border-radius: 3px;
+  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.ff-combo-item[hidden] { display: none; }
+.ff-combo-item:hover, .ff-combo-item.is-active { background: var(--bg); }
+.ff-combo-name { flex: none; }
+.ff-combo-about { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 12px; }
+/* The picked type as the closed field shows it: the same icon + name row as
+   the options — `selectedcontent` is its own box inside the button. */
+.ff-type-select selectedcontent { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ff-type-select selectedcontent svg { color: var(--muted); }
 .ff-modal-error {
   margin: 0 16px; padding: 8px 10px; background: rgba(224,67,85,0.12); color: var(--error);
   border-radius: 4px; font-size: 12px;

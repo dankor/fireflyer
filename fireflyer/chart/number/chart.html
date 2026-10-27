@@ -3,7 +3,7 @@
   <div class="fireflyer-title">{{ title }}</div>
   <div class="fireflyer-number-body">
     <div class="fireflyer-number-fit">
-      <div class="fireflyer-number-value"{% if not description %} title="{{ exact }}"{% endif %}>{{ value }}</div>
+      <div class="fireflyer-number-value" style="--ff-chars: {{ value|length }}"{% if not description %} title="{{ exact }}"{% endif %}>{{ value }}</div>
     </div>
     {%- if description %}
     <div class="fireflyer-number-tip" role="tooltip">

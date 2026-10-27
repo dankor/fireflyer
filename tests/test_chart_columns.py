@@ -84,3 +84,18 @@ layout:
     raw = yaml.replace("  o: {type: number,", "  t: {type: table, dataset: orders, title: T}\n  o: {type: number,") \
         .replace('"p", "b", "o"', '"p", "b", "t", "o"')
     assert ff.Dashboard.columns_used(raw, "orders") is None        # a raw table reads them all
+
+
+def test_a_chart_reading_no_column_still_counts_the_rows(orders_parquet):
+    """A bare count reads no column — and a frame of no columns has no rows, so
+    a number chart of `count` showed 0."""
+    import polars as pl
+
+    from fireflyer import calcs as calcs_mod
+    from fireflyer.chart.number.chart import Number
+    from fireflyer.scan import scan_chart
+
+    chart = Number(dataset=orders_parquet, title="Orders", calc="n")
+    chart._resolve = None
+    chart._calcs = calcs_mod.parse_block({orders_parquet: {"n": {"agg": "count"}}})[orders_parquet]
+    assert scan_chart(chart).collect().height == pl.read_parquet(orders_parquet).height

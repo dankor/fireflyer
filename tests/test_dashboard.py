@@ -979,3 +979,13 @@ layout:
     )
     assert strips(0) == ["0", "after:0"]       # above a; below a, still in One
     assert strips(1) == ["1", "end"]           # above b (top of Two); the very end
+
+
+def test_an_empty_dashboard_offers_one_big_plus_in_the_editor():
+    from fireflyer.dashboard import Dashboard
+
+    empty = Dashboard.from_yaml("name: Fresh\ncharts: {}\nlayout: []\n")
+    assert 'class="fireflyer-add-first"' in empty.render_skeleton(editing=True)
+    assert 'class="fireflyer-add-first"' not in empty.render_skeleton(editing=False)
+    one = Dashboard.from_yaml('name: One\ncharts:\n  t: {type: table, dataset: x, title: T}\nlayout:\n  - ["@20", "t"]\n')
+    assert 'class="fireflyer-add-first"' not in one.render_skeleton(editing=True)

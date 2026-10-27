@@ -1,54 +1,27 @@
 <p align="center">
-  <img src=".github/social-preview.png" alt="Fireflyer preview">
+  <a href="https://github.com/dankor/fireflyer/actions/workflows/ci.yml"><img src="https://github.com/dankor/fireflyer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+">
+  <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20Commons%20Clause-lightgrey" alt="License: Apache-2.0 + Commons Clause"></a>
+</p>
+
+<p align="center">
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="docs/use-cases.md">Use cases</a> ·
+  <a href="architecture.md">Spec</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+<p align="center">
+  <img src=".github/social-preview.png" alt="Fireflyer — BI for everyone">
 </p>
 
 # Fireflyer
 
-> _Fire, walk with me._
+Turn a CSV into an interactive dashboard: build it by clicking, write it as YAML, or ask the AI. It runs on your machine with one command, and every dashboard is a single file you can commit.
 
-Fireflyer is a new generation BI tool built for engineers, AI agents and regular users. It's **low-code**, **modular**, and **local-first**. 
-
-> ⚠️ **Status:** early MVP, under heavy development, not production-ready. The goal is to make BI easy for everyone.
-
-Today it turns a CSV into charts (tables, pie, bar, and more), YAML dashboards, and crossfiltering, with a browser editor for live resize and an AI assistant. Deliberately out of scope for now: auth, multi-user, SQL/warehouses, joins, and large-dataset optimization.
-
----
-
-## Three ways to build a dashboard
-
-One engine, three ways in. Pick whichever fits you — and switch anytime. Whatever you build, it's the same dashboard underneath, saved as clean YAML you can commit.
-
-### 🛠️ Write it in code
-
-For engineers. Describe a whole dashboard in a single YAML file.
-
-**Why it's good:** your dashboards live in your editor and in git — you review them like any other code, drop them into a Jupyter notebook, and script them for reports that run themselves. No clicking through menus, no BI server to babysit.
-
-[yaml-edit.webm](https://github.com/user-attachments/assets/772943e5-f59d-4cf5-b74d-8dc1c220f5be)
-
-### 🖱️ Build it in the UI
-
-For everyone. Open the browser editor and build by pointing and clicking: add charts from a menu, fill in a short form, drag rows and columns to resize, click a pie slice to filter the rest.
-
-**Why it's good:** there's nothing to memorize and you see every change instantly. People who don't write code get a real dashboard on their own — and each edit is written back as clean YAML, so the visual and code views never fall out of sync.
-
-[ui-edit.webm](https://github.com/user-attachments/assets/5e0ebd86-2a30-4eed-907c-bde191415a4a)
-
-### 🤖 Ask the AI
-
-For anyone in a hurry. The built-in chat rewrites your dashboard from plain-English requests — *"add a table of orders,"* *"move the pie chart next to the table,"* *"make the top row taller."*
-
-**Why it's good:** you describe what you want instead of building it. The assistant checks every change before applying it, and since it writes the same YAML, you can keep editing in code or the UI afterward.
-
-[ai-edit.webm](https://github.com/user-attachments/assets/c3360915-7e6c-4c61-8554-e4240c98a830)
-
----
+![Uploading a CSV and letting the AI build the dashboard](media/e2e-upload-and-build.webp)
 
 ## Quickstart
-
-### Run with Docker (recommended)
-
-The fastest way to get the editor running — no Python setup needed:
 
 ```bash
 git clone https://github.com/dankor/fireflyer.git
@@ -56,58 +29,66 @@ cd fireflyer
 docker compose up --build
 ```
 
-Open <http://127.0.0.1:8000>. You land on a **gallery** — the compose file turns on [local paths](#local-paths-many-dashboards-gitops) and maps `./paths` from your host as the place your dashboards live, plus a **demo** path mapped straight to the repo's `demo/` folder. The demo dashboard carries its own data in an inline `datasets:` block, so there is nothing to upload before it renders. Open one and the dashboard fills the window. A mode switch in the topbar picks what you are doing — **view**, **edit** (the same full-width dashboard, plus drag-to-resize, chart toolbars and add buttons — nothing covers what you are rearranging), or **code** (raw YAML), **chat**, **docs** and **calcs**, each of which opens beside the dashboard.
+Open <http://127.0.0.1:8000>. A demo dashboard is waiting, with its sample data in the file, so there's nothing to upload first.
 
-Source is mounted with `--reload`, so your edits hot-reload live. Your dashboards are written to `./paths/<path>/dashboards/*.yaml` on the host — commit them like any other code. Stop with `Ctrl-C` (or `docker compose down`).
+**Optional — the AI assistant.** It runs on Claude. Put your key in `.env` and restart:
 
-### Run locally with Python
+```bash
+cp .env.example .env    # then set ANTHROPIC_API_KEY=sk-ant-...
+```
 
-Requires **Python ≥ 3.11**.
+Without a key everything else works; the chat just shows how to turn it on. The key stays on the server and never reaches the browser.
+
+<details>
+<summary>Run without Docker (Python 3.11+)</summary>
 
 ```bash
 git clone https://github.com/dankor/fireflyer.git
 cd fireflyer
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[test]"
+pip install -e .
 python -m fireflyer.web        # editor at http://127.0.0.1:8000
 ```
 
-Polars does the data work under the hood — you never touch it directly.
+</details>
 
----
+## Three ways to build a dashboard
 
-## Charts
+One engine, three ways in, and you can switch at any time. They all edit the same YAML file.
 
-A handful of chart types — tables, pie, bar, and more. Every chart takes a `dataset` and a `title`; the rest is a couple of chart-specific fields.
+### 🎨 Build it in the UI
 
-```yaml
-charts:
-  orders:
-    type: table
-    dataset: orders
-    title: "Orders"
+For everyone. Add charts from a menu, fill in a short form, drag rows and columns to resize. Nothing to memorize, and every click is written back as clean YAML.
 
-  by_status:
-    type: pie
-    dataset: orders
-    title: "Orders by Status"
-    column: status
+![Creating a dashboard from the UI](media/create-ui.webp)
 
-  by_day:
-    type: bar
-    dataset: orders
-    title: "Orders by Day"
-    x: day
-    y: status
-```
+### </> Write it in code
 
-Each chart's full options live in its spec: [`fireflyer/chart/<name>/spec.md`](fireflyer/chart).
+For engineers. A whole dashboard is one YAML file in your editor and in git, with completion and linting in the browser too. Review it as a diff, script it, ship it like any other code.
 
----
+![Creating a dashboard from code](media/create-code.webp)
 
-## Dashboards
+### 🤖 Ask the AI
 
-A dashboard is **one YAML file** that declares its name, its charts, and how they lay out on a page. Charts reference datasets **by name**, never by file path — either a dataset you uploaded (see [Local paths](#local-paths-many-dashboards-gitops)) or one written straight into the file, below:
+For anyone in a hurry. *"Add a table of orders."* *"Put the pie next to it."* *"Make the top row taller."* The assistant writes the same YAML and checks every change before applying it.
+
+![Creating a dashboard by asking the AI assistant](media/create-ai.webp)
+
+## What's inside
+
+- **Five chart types** — table, pie, bar, map (a hex heatmap over OpenStreetMap) and number.
+- **Calcs** — sums, counts, averages and ratios, defined once and shared by every chart. [How →](docs/use-cases.md#create-a-dashboard-with-code)
+- **Filters** — fixed per chart, [click-to-filter across charts](docs/use-cases.md#filter-with-a-cross-filter), [global](docs/use-cases.md#filter-with-a-global-filter), and [per role](docs/use-cases.md#filter-with-a-role).
+- **Datasets** — [upload a CSV](docs/use-cases.md#upload-a-dataset), shape its columns with formulas, keep every version and [compare them](docs/use-cases.md#compare-dataset-versions).
+- **Access** — roles, [per-dataset permissions](docs/use-cases.md#set-dataset-permissions) with row filters, and a "view as" picker to preview what a role sees.
+- **History** — every save is a version; [compare any two](docs/use-cases.md#compare-versions) side by side.
+- **Private by design** — the AI sees your column names and types, never your data.
+- **Prototype on fake data** — ask the AI for sample data and it [writes it into the dashboard](docs/use-cases.md#prototype-a-dashboard-with-ai-and-sample-data).
+- **No build, no CDN** — the editor's scripts ship in the repo and work offline; only the map's tiles come from OpenStreetMap.
+
+Every feature, step by step with a recording: **[use cases](docs/use-cases.md)**.
+
+## A dashboard is one YAML file
 
 ```yaml
 name: Orders overview
@@ -115,13 +96,13 @@ name: Orders overview
 charts:
   orders_table:
     type: table
-    dataset: orders          # references a dataset by name
+    dataset: orders          # a dataset, by name
     title: Orders
 
   status_pie:
     type: pie
     dataset: orders
-    title: Orders by Status
+    title: Orders by status
     column: status
 
   total_orders:
@@ -131,71 +112,53 @@ charts:
 
 layout:
   - Overview                                    # a header
-  - ["@40", "orders_table:60", "status_pie:40"] # a row: @height, then chart:width (proportion)
+  - ["@40", "orders_table:60", "status_pie:40"] # a row: @height, then chart:width
   - "-"                                         # a separator
   - ["@30", "total_orders:100"]
 
-datasets:                    # optional: CSV carried in the file itself
+datasets:                    # optional: sample data carried in the file
   orders: |
     id,status,amount
     1,paid,42
     2,pending,15
 ```
 
-Rows read as `["@<height>", "<chart>:<width>", ...]`, where widths are simple proportions — `1:1:1` is equal thirds. Paste it into the web editor and it renders.
+Paste it into the editor's code mode and it renders. Widths are proportions, so `1:1:1` is three equal columns. Charts name their dataset, never a file path: either one you uploaded, or one written into the file like the `datasets:` block above, which is handy for prototyping. Each chart's options are in its spec, [`fireflyer/chart/<type>/spec.md`](fireflyer/chart), and the full layout and filter rules are in [`architecture.md`](architecture.md).
 
-That `datasets:` block is optional and made for prototyping: invent a table, chart it, iterate, without leaving the editor — and the dashboard stays one file you can hand to someone. Ask the assistant for sample data and it writes one. For real data, upload it instead and drop the block.
+## Dashboards as code
 
-**Crossfiltering** comes for free: click a pie slice and every other chart narrows to match — no page reload. You can also declare fixed `filters` on any chart.
-
-The full layout DSL, filter model, and editor behavior are specified in **[`architecture.md`](architecture.md)**.
-
----
-
-## Local paths (many dashboards, GitOps)
-
-Fireflyer can manage many dashboards as plain files instead of the single editor. In Docker you **map any host folder into the container's base dir** (`/paths`); each mapped folder becomes a switchable **path** in the gallery, where you browse and edit its dashboards live — no database, no login:
+Because a dashboard holds no data, it's just code: keep it in git and review changes in pull requests. With Docker, each host folder you mount under `/paths` becomes a **path** you can switch between in the gallery, each with its own dashboards and datasets. No database, no login:
 
 ```yaml
-# docker-compose.yml — each mount under /paths is a path you can switch between
+# docker-compose.yml
 volumes:
-  - ./paths:/paths                  # default; holds the seeded `demo` path
-  - /Users/me/team-a:/paths/team-a  # map any host folder as its own path
-  - /Users/me/personal:/paths/personal
+  - ./paths:/paths                      # your own paths (gitignored)
+  - ./demo:/paths/demo                  # the demo path: the repo's demo/ folder
+  - /Users/me/team-a:/paths/team-a      # any folder can be a path
 ```
 
-Add, remove, or repoint a path by editing these mappings and restarting (`docker compose up`) — there's no in-app path management by design. A path's dashboards live in `<path>/dashboards/*.yaml` (files you own and commit); its datasets are uploaded through the web and stored separately, isolated per path. The **`demo` path is the repo's `demo/` folder** (`./demo:/paths/demo`), so you land on a working example with nothing copied or seeded — the dashboard you open is the file in git, and it carries its own data inline.
+A path's dashboards are `<path>/dashboards/*.yaml`, files you own and commit. Datasets you upload are stored separately for each path, and dashboards refer to them by name, so the same YAML works anywhere that data exists.
 
-**Why files?** Because a dashboard is just YAML with no data in it, it's **code you can put in git**. Author a path locally, review changes as diffs and pull requests, and — with the command-line tool and API (coming soon) — **deploy dashboards to a running instance on merge**: a GitOps workflow of your own design. Datasets aren't part of that push; they live on the target environment and dashboards reference them by name, so the same YAML deploys anywhere the data already exists.
-
----
-
-## AI assistant
-
-The editor's built-in chat edits the dashboard for you — ask in plain language and it rewrites the YAML, updates the preview, and explains what changed. It runs on Claude; add a key to turn it on:
-
-```bash
-cp .env.example .env
-# edit .env and set ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Without a key the editor still works fully — the chat panel just shows a setup notice. The key stays server-side and is never sent to the browser.
-
----
+**Next up:** a command-line tool and API to deploy dashboards to a running instance when a pull request merges.
 
 ## Development
 
 ```bash
 pip install -e ".[test]"
-pytest                       # run the snapshot suite
+pytest                       # the snapshot suite
 UPDATE_SNAPSHOTS=1 pytest    # regenerate snapshots after an intentional change
 
-# or in the container, no local Python needed:
-docker compose run --rm fireflyer pytest
+docker compose run --rm fireflyer pytest   # or in the container
 ```
 
-Tests are **snapshot-based**: each pairs an input CSV + chart/dashboard definition with the exact expected HTML in `tests/snapshots/`. If you change rendering on purpose, regenerate and review the diff.
+Tests compare the **exact** HTML each chart and dashboard renders against `tests/snapshots/`; after an intentional change, regenerate them and review the diff. With Docker the source is mounted with hot reload, so edits show up live.
 
-Contributions welcome. Keep the code approachable: small functions, clear names, comments that explain *why*. See [`CLAUDE.md`](CLAUDE.md) for the conventions this repo follows (they apply to humans and agents alike).
+Contributions are welcome. Keep the code approachable: small functions, clear names, comments that explain *why*. [`CLAUDE.md`](CLAUDE.md) has the conventions, for humans and agents alike.
 
-Release notes live in [`CHANGELOG.md`](CHANGELOG.md).
+## License
+
+Source-available under [Apache-2.0 with the Commons Clause](LICENSE): use it, change it, run it for your own work, but don't sell it or offer it as a paid hosted service. For a commercial license, see the [LICENSE](LICENSE) file.
+
+---
+
+<p align="center"><sub><i>Fire, walk with me.</i></sub></p>

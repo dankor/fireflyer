@@ -56,13 +56,20 @@ def test_text_param_render_and_parse():
     assert p.parse(FakeForm({"title": "  Sales "})) == "Sales"
 
 
-def test_dataset_param_is_text_field_with_current_value():
-    # Dataset is a name now (text field); a dropdown of stored datasets is
-    # wired when the portal dataset gallery lands.
+def test_dataset_param_offers_the_datasets_as_you_type():
+    # A searchable field over the names there are (a native datalist), each
+    # with its description; the current value stays, listed or not.
     p = DatasetParam("dataset", "Dataset")
-    html = p.render("orders", CTX)
-    assert 'type="text"' in html and 'name="dataset"' in html
-    assert 'value="orders"' in html
+    html = p.render("orders", ParamContext(datasets={"orders": "All orders", "events": ""}))
+    assert 'name="dataset"' in html and 'value="orders"' in html
+    assert 'role="combobox"' in html
+    assert html.index('data-value="events"') < html.index('data-value="orders"')
+    assert '<span class="ff-combo-about">All orders</span>' in html
+
+
+def test_dataset_param_without_a_list_is_a_text_field():
+    html = DatasetParam("dataset", "Dataset").render("orders", ParamContext())
+    assert 'type="text"' in html and 'value="orders"' in html and "ff-combo" not in html
 
 
 def test_column_param_options_from_context():

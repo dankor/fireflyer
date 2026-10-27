@@ -41,14 +41,15 @@ Display category distribution as a donut.
   are already on the slices (percent) and in the hover tooltips, and dropping
   them keeps the row short enough to fit more entries per page.
 - **The legend is one row above the donut and pages** — `◀ n/m ▶` — rather than
-  a column beside it. The donut is a fixed 220px square, so width spent on a
+  a column beside it. The donut is a square of at most 220px — smaller when the
+  row is short, so it never runs past the card's bottom edge — so width spent on a
   legend column is width the chart can't use, while a row costs one line of
   height. The **donut always shows every slice**, so paging only ever hides
   legend rows, never data.
   `LEGEND_PAGE_SIZE` is fixed, which is the honest limit of doing this on the
   server: how many entries *actually* fit depends on label lengths and the
-  cell's pixel width, neither knowable at render time (Superset measures them in
-  the browser).
+  cell's pixel width, neither knowable at render time (only the browser can
+  measure them).
   The pager posts to `/dashboard/cell` like the bar's grain controls, so only
   that chart re-renders. The page is **ephemeral** — it rides the request rather
   than the page-level hidden inputs, so a full re-render (a crossfilter click,
@@ -63,6 +64,8 @@ Display category distribution as a donut.
   level. It's shown in the calc's own `format` when it has one (as the slices'
   values are), else as a short/compact figure (`1.4k`, `3m`), with the exact
   number as the hover title, and reflects the current filters/crossfilter.
+  It's 24px, smaller for a figure too long to fit the hole at that size
+  (`$20,549.80`), so it never runs over the slices.
   `total: false` hides it. When the calc has a `description`, hovering the
   centre shows a rich tooltip — the calc name, its description, and the exact
   total — anchored to the centre and, via CSS anchor positioning, kept outside

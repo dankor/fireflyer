@@ -38,6 +38,9 @@ CX, CY = 110, 110
 # sit within the band; R_LABEL centres a label radially in that band.
 R_OUT, R_IN = 90, 44
 R_LABEL = (R_OUT + R_IN) / 2
+# The centre total: 24px, smaller for a long figure so it stays inside the hole.
+# A bold digit is ~0.6em wide; the 10 units spare keep it off the ring.
+TOTAL_FONT_MAX, TOTAL_EM_PER_CHAR = 24, 0.6
 # Percent-label text metrics (px in the 220 viewBox) for the fit test below:
 # ~char width at the label font size, and the label box height.
 PCT_CHAR_W = 6.8
@@ -62,8 +65,8 @@ def _label_fits(mid: float, span: float, width: float) -> bool:
 # Legend entries shown at once. The legend is a single row above the donut, so
 # it pages rather than wrapping or scrolling. A fixed size is the honest limit
 # of doing this server-side: how many *actually* fit depends on label lengths
-# and the cell's pixel width, neither of which is knowable here (Superset
-# measures them in the browser). Six fits a narrow cell now that an entry is
+# and the cell's pixel width, neither of which is knowable here (only the
+# browser can measure them). Six fits a narrow cell now that an entry is
 # just a swatch and a label, and a page that still overflows scrolls sideways
 # rather than clipping.
 LEGEND_PAGE_SIZE = 6
@@ -125,6 +128,13 @@ def _compact(value) -> str:
         if abs(n) >= step:
             return f"{n / step:.1f}".rstrip("0").rstrip(".") + suffix
     return f"{int(n):,}" if n.is_integer() else f"{n:g}"
+
+
+def _total_font(text: str) -> float:
+    """The centre total's font size: a figure too long for the hole at full size
+    (`$20,549.80`) shrinks to fit it, rather than running over the slices."""
+    fits = (2 * R_IN - 10) / (TOTAL_EM_PER_CHAR * max(len(text), 1))
+    return round(min(TOTAL_FONT_MAX, fits), 1)
 
 
 def _build_segments(
@@ -331,6 +341,9 @@ class Pie:
         else:
             legend = segments
 
+        # The calc's own `format` when it has one, as the slices use; the
+        # compact short form only when it says nothing.
+        total_display = calcs.fmt(key, grand_total or 0) if calc.format else _compact(grand_total or 0)
         return _TEMPLATE.render(
             css=_CSS,
             title=self.title,
@@ -345,9 +358,8 @@ class Pie:
             has_selection=bool(active),
             crossfilter=crossfilter,
             show_total=self.total,
-            # The calc's own `format` when it has one, as the slices use; the
-            # compact short form only when it says nothing.
-            total_display=calcs.fmt(key, grand_total or 0) if calc.format else _compact(grand_total or 0),
+            total_display=total_display,
+            total_font=_total_font(total_display),
             total_raw=calcs_mod.exact_value(grand_total),
             calc_name=calc_name,
             calc_desc=calc.description,

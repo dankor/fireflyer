@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-27
+
+### Added
+
+- An empty dashboard shows one big **+** in the editor that adds its first
+  chart (switching to edit mode when needed).
+- A chart's **dataset** field is a search: the uploaded and inline datasets,
+  each with its description, narrowed as you type; picking one fills the
+  form's calcs and columns, adding or editing.
+- `docs/use-cases.md`: one short use case per feature — creating a dashboard
+  (UI, code and the AI assistant), arranging the layout (likewise), filtering
+  (built-in, cross-filter, global, role), comparing versions; a dataset's
+  upload, column edits (form and YAML), versions and permissions — then two
+  end-to-end walkthroughs (prototyping on the AI's sample data; a CSV of your
+  own turned into a dashboard by the AI), each with a recording in `media/`.
+
+### Changed
+
+- Adding a chart: once its dataset is typed, the form fills in that dataset's
+  calcs and columns (a new pie's calc list was empty).
+- The README, rewritten for a first visit: a one-line pitch over the
+  upload-and-build recording, the quickstart next (the AI key optional, the
+  Python install folded away), the three ways to build with the new
+  recordings (`media/create-*.webp`; the old `.webm` clips are gone), a
+  feature list linking the use cases, one YAML example instead of two, and
+  the license stated.
+
+### Fixed
+
+- A new dashboard couldn't take its first chart or header from the editor
+  ("no `charts:` section"): its `charts: {}` / `layout: []` weren't
+  recognised.
+- A number chart cut off a long figure (`$92,537.10` in a narrow card): its
+  size now follows the figure's length.
+- The AI assistant didn't know `to_number()`, so a sum over an uploaded
+  (text) column failed; its prompt now teaches it.
+- Waiting on the AI assistant froze the whole server — every other page and
+  chart — until it answered; the request now waits off the event loop.
+- The AI assistant charted a trend on a text `month` column, so the bars ran
+  by size, not by time; its prompt now points it to a `str2dt()` date column.
+- The AI assistant didn't know about tabs — asked for some, it made headers;
+  its prompt now teaches the tab mapping, as the spec has it.
+- The editor no longer drops comments on lines it keeps: a chart's form, the
+  calcs manager, layout edits (moving, resizing, renaming a header or tab) and
+  the title card's description all keep them. A comment after a section key
+  (`layout:  # …`) no longer breaks layout edits.
+- Editing a chart: a setting the YAML leaves out showed as off rather than
+  its default — saving a pie's form switched its centre total off.
+- Adding a chart: the title followed a type change only once typed; a mere
+  default ("Table") now follows the type.
+- The chart-type picker's chosen type: its icon sat high, against the name.
+- A map of an uploaded dataset was empty: its `lat`/`lng` arrive as text, and
+  the map now reads them as numbers.
+- A pie in a short row was cut off at the bottom: the donut was a fixed 220px
+  square under the title and legend; it now shrinks to fit the card.
+- A pie's long centre total (`$20,549.80`) ran over the slices; it shrinks to
+  fit the hole.
+- A bar chart with many bars in a short row lost its tallest bars and the
+  grain picker under the title; the plot now shrinks to fit the row.
+- A number chart of a bare `count` showed 0: a chart that reads no column
+  scanned a frame with no columns, and so no rows.
+
 ## [0.20.0] - 2026-10-25
 
 ### Added
@@ -1170,7 +1232,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/dankor/fireflyer/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/dankor/fireflyer/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/dankor/fireflyer/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/dankor/fireflyer/compare/v0.17.0...v0.18.0

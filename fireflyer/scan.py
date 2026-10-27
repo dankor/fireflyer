@@ -37,4 +37,7 @@ def scan_chart(chart) -> pl.LazyFrame:
     used = columns_read(chart.PARAMS, values, chart._calcs)
     if used is None:
         return lf
-    return lf.select([c for c in lf.collect_schema().names() if c in used])
+    kept = [c for c in lf.collect_schema().names() if c in used]
+    # A chart that reads no column — a bare count — still needs the rows: a
+    # frame of no columns has none. One column keeps them, the cheapest kept.
+    return lf.select(kept) if kept else lf.select(pl.first())

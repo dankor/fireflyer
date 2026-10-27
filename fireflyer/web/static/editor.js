@@ -212,15 +212,32 @@ const aboutName = document.getElementById('ff-dash-name-input');
 const aboutText = document.getElementById('ff-dash-about-text');
 let before = null;                               // {name, desc} while the card is open
 
-// Drops the key — with the indented lines under it, should it be a `|` / `>`
-// block — and, unless `desc` is empty, writes it back right after `name:`.
-// JSON.stringify gives a double-quoted YAML string, newlines escaped.
+// Rewrites `description:` where it is — with the indented lines under it,
+// should it be a `|` / `>` block — keeping a comment after it; an empty `desc`
+// drops the key (and its comment with it). With no key yet, it's written right
+// after `name:`. JSON.stringify gives a double-quoted YAML string, newlines
+// escaped. Self-contained: the tests run it on its own.
 function setYamlDescription(text, desc) {
-  const without = text.replace(/^description:.*(?:\r?\n[ \t]+.*)*(?:\r?\n)?/m, '');
-  if (!desc) return without;
+  const entry = /^description:([^\n]*)((?:\n(?![ \t]*#)[ \t]+[^\n]*)*)(\n)?/m;
+  const found = text.match(entry);
+  if (found) {
+    if (!desc) return text.replace(entry, '');
+    // A comment: a `#` after whitespace, outside quotes.
+    const raw = found[1];
+    let quote = '', at = -1;
+    for (let i = 0; i < raw.length && at < 0; i++) {
+      const ch = raw[i];
+      if (quote) { if (ch === quote) quote = ''; }
+      else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '#' && (i === 0 || /\s/.test(raw[i - 1]))) at = i;
+    }
+    const comment = at < 0 ? '' : ' ' + raw.slice(at).trim();
+    return text.replace(entry, (m, r, more, nl) => 'description: ' + JSON.stringify(desc) + comment + (nl || ''));
+  }
+  if (!desc) return text;
   const line = 'description: ' + JSON.stringify(desc);
-  if (!/^name:.*$/m.test(without)) return line + '\n' + without;
-  return without.replace(/^name:.*$/m, m => m + '\n' + line);
+  if (!/^name:.*$/m.test(text)) return line + '\n' + text;
+  return text.replace(/^name:.*$/m, m => m + '\n' + line);
 }
 
 const readOnlyTitle = () => currentMode === 'view';
@@ -940,6 +957,12 @@ outEl.addEventListener('click', e => {
   // gets the click first, so this only fires when not moving.
   const tabSwitchNav = e.target.closest('.fireflyer-tab-switch');
   if (tabSwitchNav) { switchTab(parseInt(tabSwitchNav.dataset.tabIndex, 10)); return; }
+  // An empty dashboard's big +: whatever the mode, on to adding its first chart.
+  if (e.target.closest('.fireflyer-add-first')) {
+    if (currentMode !== 'edit') setMode('edit');
+    openAddChart('row', 'end');
+    return;
+  }
   if (editingDisabled()) return;
   // Charts carry data-cid; headers/separators carry data-item-index; tabs carry
   // data-tab-index. The move, edit and delete buttons are shared markup, so
@@ -1545,24 +1568,96 @@ document.addEventListener('keydown', e => {
 
 // Swapping the chart type re-fetches the form so its fields match the new
 // type's params (overlapping values carry over from the saved config).
-modalBox.addEventListener('change', async e => {
-  const sel = e.target.closest('[data-type-select]');
-  if (!sel) return;
+// A new dataset does the same, adding or editing: the calc and column fields
+// then list that dataset's (the typed title carries over when adding). A pick
+// from the dataset field's list (a `<datalist>`) counts at once; a typed name
+// once the field is left.
+async function refetchChartForm(form, type) {
   const fd = new FormData();
   fd.append('yaml_text', codeEl.value);
+  const dataset = form.elements.dataset ? form.elements.dataset.value : '';
   let endpoint;
   if (editingCid === null) {           // add mode: rebuild the create form
-    fd.append('add_type', sel.value);
+    fd.append('add_type', type);
     fd.append('add_mode', addTarget.mode);
     fd.append('add_index', addTarget.index);
+    fd.append('dataset', dataset);
+    fd.append('title', form.elements.title ? form.elements.title.value : '');
     endpoint = '/chart/config/add-form';
-  } else {                            // edit mode: rebuild for the new type
+  } else {                            // edit mode: rebuild for the new type / dataset
     fd.append('cid', editingCid);
-    fd.append('type_override', sel.value);
+    fd.append('type_override', type);
+    fd.append('dataset', dataset);
     endpoint = '/chart/config/form';
   }
+  form.dataset.loadedFor = dataset;
   const res = await fetch(endpoint, { method: 'POST', body: fd });
   modalBox.innerHTML = await res.text();
+  const fresh = modalBox.querySelector('form');
+  if (fresh) fresh.dataset.loadedFor = dataset;
+}
+modalBox.addEventListener('change', e => {
+  const form = e.target.closest('form');
+  if (!form || !form.elements.type) return;
+  if (e.target.closest('[data-type-select]')) refetchChartForm(form, e.target.value);
+  else if (e.target.name === 'dataset' && e.target.value !== (form.dataset.loadedFor || '')) {
+    refetchChartForm(form, form.elements.type.value);
+  }
+});
+// The dataset field's search (`params.DatasetParam`): typing narrows the list
+// under it; a click, or ↑ ↓ and Enter, picks one — which rebuilds the form for
+// that dataset at once. Esc or a click elsewhere closes it.
+function comboOf(el) { return el && el.closest('.ff-combo'); }
+function comboShow(combo, open) {
+  combo.querySelector('.ff-combo-list').hidden = !open;
+  combo.querySelector('input').setAttribute('aria-expanded', String(open));
+}
+function comboFilter(combo) {
+  const q = combo.querySelector('input').value.trim().toLowerCase();
+  let first = null;
+  for (const item of combo.querySelectorAll('.ff-combo-item')) {
+    const hit = !q || item.textContent.toLowerCase().includes(q);
+    item.hidden = !hit;
+    item.classList.remove('is-active');
+    if (hit && !first) first = item;
+  }
+  if (first && q) first.classList.add('is-active');
+  comboShow(combo, !!first);
+}
+function comboPick(combo, item) {
+  const input = combo.querySelector('input');
+  input.value = item.dataset.value;
+  comboShow(combo, false);
+  const form = combo.closest('form');
+  if (form && input.value !== (form.dataset.loadedFor || '')) refetchChartForm(form, form.elements.type.value);
+}
+modalBox.addEventListener('focusin', e => { const c = comboOf(e.target); if (c) comboFilter(c); });
+modalBox.addEventListener('input', e => { const c = comboOf(e.target); if (c) comboFilter(c); });
+modalBox.addEventListener('mousedown', e => {
+  const item = e.target.closest('.ff-combo-item');
+  if (item) { e.preventDefault(); comboPick(comboOf(item), item); }   // before the input blurs
+});
+modalBox.addEventListener('keydown', e => {
+  const combo = comboOf(e.target);
+  if (!combo || combo.querySelector('.ff-combo-list').hidden) return;
+  const items = [...combo.querySelectorAll('.ff-combo-item:not([hidden])')];
+  const at = items.findIndex(i => i.classList.contains('is-active'));
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const next = items[(at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length];
+    items.forEach(i => i.classList.toggle('is-active', i === next));
+    next.scrollIntoView({block: 'nearest'});
+  } else if (e.key === 'Enter' && at >= 0) {
+    e.preventDefault();
+    comboPick(combo, items[at]);
+  } else if (e.key === 'Escape') {
+    e.stopPropagation();                       // close the list, not the modal
+    comboShow(combo, false);
+  }
+});
+modalBox.addEventListener('focusout', e => {
+  const c = comboOf(e.target);
+  if (c && !c.contains(e.relatedTarget)) comboShow(c, false);
 });
 
 // The filter builder's rows (chart modal, calcs manager) are filter-builder.js,

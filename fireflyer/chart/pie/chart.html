@@ -28,7 +28,7 @@
         {%- if calc_desc %}
         <circle cx="{{ cx }}" cy="{{ cy }}" r="{{ r_in }}" class="fireflyer-pie-total-hit" />
         {%- endif %}
-        <text x="{{ cx }}" y="{{ cy }}" class="fireflyer-pie-total" text-anchor="middle" dominant-baseline="central">{% if not calc_desc %}<title>Total: {{ total_raw }}</title>{% endif %}{{ total_display }}</text>
+        <text x="{{ cx }}" y="{{ cy }}" class="fireflyer-pie-total" style="font-size: {{ total_font }}px" text-anchor="middle" dominant-baseline="central">{% if not calc_desc %}<title>Total: {{ total_raw }}</title>{% endif %}{{ total_display }}</text>
         {%- endif %}
         {#- Anchor markers. An `anchor-name` on a <path>/<circle> is ignored — SVG
             shapes aren't CSS boxes — and a failed anchor silently drops the card
