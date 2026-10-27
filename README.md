@@ -1,8 +1,4 @@
 <p align="center">
-  <img src=".github/social-preview.png" alt="Fireflyer — BI for everyone">
-</p>
-
-<p align="center">
   <a href="https://github.com/dankor/fireflyer/actions/workflows/ci.yml"><img src="https://github.com/dankor/fireflyer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+">
   <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20Commons%20Clause-lightgrey" alt="License: Apache-2.0 + Commons Clause"></a>
@@ -13,6 +9,10 @@
   <a href="docs/use-cases.md">Use cases</a> ·
   <a href="architecture.md">Spec</a> ·
   <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+<p align="center">
+  <img src=".github/social-preview.png" alt="Fireflyer — BI for everyone">
 </p>
 
 # Fireflyer
