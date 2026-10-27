@@ -26,7 +26,7 @@ For everyone. Open the browser editor and build by pointing and clicking: add ch
 
 ![Creating a dashboard from the UI](media/create-ui.webp)
 
-### 💻 Write it in code
+### </> Write it in code
 
 For engineers. Describe a whole dashboard in a single YAML file.
 
