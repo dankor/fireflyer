@@ -27,9 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adding a chart: once its dataset is typed, the form fills in that dataset's
   calcs and columns (a new pie's calc list was empty).
-- The README's three ways to build a dashboard show the new recordings
-  (`media/create-*.webp`; the old `.webm` clips are gone) and link the use
-  cases.
+- The README, rewritten for a first visit: a one-line pitch over the
+  upload-and-build recording, the quickstart next (the AI key optional, the
+  Python install folded away), the three ways to build with the new
+  recordings (`media/create-*.webp`; the old `.webm` clips are gone), a
+  feature list linking the use cases, one YAML example instead of two, and
+  the license stated.
 
 ### Fixed
 
