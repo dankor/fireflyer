@@ -18,14 +18,6 @@ Today it turns a CSV into charts (tables, pie, bar, and more), YAML dashboards, 
 
 One engine, three ways in. Pick whichever fits you — and switch anytime. Whatever you build, it's the same dashboard underneath, saved as clean YAML you can commit.
 
-### 🛠️ Write it in code
-
-For engineers. Describe a whole dashboard in a single YAML file.
-
-**Why it's good:** your dashboards live in your editor and in git — you review them like any other code, drop them into a Jupyter notebook, and script them for reports that run themselves. No clicking through menus, no BI server to babysit.
-
-![Creating a dashboard from code](media/create-code.webp)
-
 ### 🖱️ Build it in the UI
 
 For everyone. Open the browser editor and build by pointing and clicking: add charts from a menu, fill in a short form, drag rows and columns to resize, click a pie slice to filter the rest.
@@ -33,6 +25,14 @@ For everyone. Open the browser editor and build by pointing and clicking: add ch
 **Why it's good:** there's nothing to memorize and you see every change instantly. People who don't write code get a real dashboard on their own — and each edit is written back as clean YAML, so the visual and code views never fall out of sync.
 
 ![Creating a dashboard from the UI](media/create-ui.webp)
+
+### 🛠️ Write it in code
+
+For engineers. Describe a whole dashboard in a single YAML file.
+
+**Why it's good:** your dashboards live in your editor and in git — you review them like any other code, drop them into a Jupyter notebook, and script them for reports that run themselves. No clicking through menus, no BI server to babysit.
+
+![Creating a dashboard from code](media/create-code.webp)
 
 ### 🤖 Ask the AI
 
