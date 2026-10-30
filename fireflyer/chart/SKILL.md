@@ -9,8 +9,8 @@ Every chart is a self-contained folder under `fireflyer/chart/<name>/`. Adding o
 changing one touches a fixed, small set of files — do all of them in one change or
 something breaks (dashboards won't resolve the `type:`, snapshots go stale, the AI
 assistant's DSL drifts). Read `architecture.md` and the target chart's `spec.md`
-before changing rendering or aggregation behavior. **Ask before editing
-`architecture.md`** — it's a controlled spec doc.
+before changing rendering or aggregation behavior. A chart change doesn't touch
+`architecture.md`.
 
 Hard rules (from `CLAUDE.md` / `architecture.md`, non-negotiable):
 - Server-rendered HTML + inline SVG + CSS + htmx only. **No hand-written JS** in

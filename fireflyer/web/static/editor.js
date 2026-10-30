@@ -52,9 +52,10 @@ async function run() {
     // /dashboard route as you filter), so every render — first load, a shared
     // link, a YAML edit — starts from them instead of dropping them.
     const state = new URLSearchParams(location.search).get('f') || '';
-    const role = currentMode === 'view' ? viewRole : '';
+    const asView = currentMode === 'view';
     const res = await fetch('/execute?active_tab=' + activeTab + '&f=' + encodeURIComponent(state)
-      + '&role=' + encodeURIComponent(role), {
+      + '&role=' + encodeURIComponent(asView ? viewRole : '')
+      + '&user=' + encodeURIComponent(asView ? viewUser : ''), {
       method: 'POST',
       headers: {'Content-Type': 'application/yaml'},
       body: codeEl.value,
@@ -487,38 +488,93 @@ const layoutEl = document.getElementById('layout');
 // diff-view.js shows its own full-width view while the mode is on.
 // --- view as a role ------------------------------------------------------------
 // View mode's role picker (`portal.role_picker`): the dashboard rendered as a
-// role sees it — its datasets narrowed by the role's filters, the rest locked.
-// The pick rides in the URL (`?role=<id>`), so a reload or a link keeps it, and
+// role sees it — its datasets narrowed by the role's filters, the rest locked —
+// or as a user does, through their roles. The pick rides in the URL
+// (`?role=<name>` or `?user=<name>`), so a reload or a link keeps it, and
 // it holds only in view mode: every other mode is for building the dashboard,
-// which wants all of it. `var`: run() reads it before this line runs.
+// which wants all of it. `var`: run() reads them before this line runs.
 var viewRole = '';
+var viewUser = '';
 const rolePick = document.getElementById('ff-role');
+
+function picked(b) {
+  return b.dataset.user !== undefined
+    ? !!viewUser && b.dataset.user === viewUser
+    : !!viewRole && b.dataset.role === viewRole;
+}
+
+// Roles | users (`ff-role-kinds`, with users only): one list at a time, which
+// the search narrows. Enter picks its first match; Esc closes.
+function showKind(kind) {
+  for (const b of rolePick.querySelectorAll('.ff-role-kinds button')) b.classList.toggle('active', b.dataset.kind === kind);
+  for (const l of rolePick.querySelectorAll('.ff-role-list')) l.hidden = l.dataset.kind !== kind;
+  narrowRoles();
+}
+
+function roleMatches() {
+  const list = rolePick.querySelector('.ff-role-list:not([hidden])');
+  return list ? [...list.querySelectorAll('button')].filter(b => !b.hidden) : [];
+}
+
+function narrowRoles() {
+  const q = rolePick.querySelector('.ff-role-search').value.trim().toLowerCase();
+  const list = rolePick.querySelector('.ff-role-list:not([hidden])');
+  for (const b of list.querySelectorAll('button')) b.hidden = !!q && !b.textContent.toLowerCase().includes(q);
+  rolePick.querySelector('.ff-role-none').hidden = roleMatches().length > 0;
+}
 
 function paintRole() {
   if (!rolePick) return;
   let name = '';
-  for (const b of rolePick.querySelectorAll('button[data-role]')) {
-    const on = b.dataset.role === viewRole;
+  for (const b of rolePick.querySelectorAll('button[data-role], button[data-user]')) {
+    const on = picked(b);
     b.classList.toggle('active', on);
-    if (on && viewRole) name = b.textContent;
+    if (on) name = b.textContent;
   }
-  if (viewRole && !name) viewRole = '';              // a role since removed
+  if (!name) viewRole = viewUser = '';                // one since removed
   document.getElementById('ff-role-name').textContent = name;
-  rolePick.classList.toggle('is-on', !!viewRole);
-  rolePick.querySelector('summary').title = name ? 'Viewing as ' + name + ' (pick again to stop)' : 'View as role';
+  rolePick.classList.toggle('is-on', !!name);
+  rolePick.dataset.as = viewUser ? 'user' : viewRole ? 'role' : '';
+  rolePick.querySelector('summary').title = name ? 'Viewing as ' + name + ' (pick again to stop)' : 'View as';
 }
 
 if (rolePick) {
-  viewRole = new URLSearchParams(location.search).get('role') || '';
+  const params = new URLSearchParams(location.search);
+  viewUser = params.get('user') || '';
+  viewRole = viewUser ? '' : (params.get('role') || '');
+  // Opened on the kind being viewed as, the search empty and ready to type in.
+  const search = rolePick.querySelector('.ff-role-search');
+  rolePick.addEventListener('toggle', () => {
+    if (!rolePick.open) return;
+    search.value = '';
+    showKind(viewUser ? 'user' : 'role');
+    search.focus();
+  });
+  search.addEventListener('input', narrowRoles);
+  search.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const first = roleMatches()[0];
+      if (first) first.click();
+    } else if (e.key === 'Escape') {
+      rolePick.open = false;
+    }
+  });
   rolePick.addEventListener('click', e => {
-    const b = e.target.closest('button[data-role]');
+    const kind = e.target.closest('.ff-role-kinds button');
+    if (kind) { showKind(kind.dataset.kind); search.focus(); return; }
+    const b = e.target.closest('button[data-role], button[data-user]');
     if (!b) return;
     rolePick.open = false;
-    // The active role again: back to all of it.
-    viewRole = b.dataset.role === viewRole ? '' : b.dataset.role;
+    // The active one again: back to all of it.
+    const again = picked(b);
+    viewRole = !again && b.dataset.role !== undefined ? b.dataset.role : '';
+    viewUser = !again && b.dataset.user !== undefined ? b.dataset.user : '';
     const url = new URL(location.href);
+    url.searchParams.delete('role');
+    url.searchParams.delete('user');
     if (viewRole) url.searchParams.set('role', viewRole);
-    else url.searchParams.delete('role');
+    if (viewUser) url.searchParams.set('user', viewUser);
     window.history.replaceState(null, '', url);
     paintRole();
     run();
@@ -539,7 +595,7 @@ function setMode(mode) {
   // A role only holds in view mode: crossing in or out of it re-renders.
   if (rolePick) {
     rolePick.hidden = mode !== 'view';
-    if (viewRole && wasView !== (mode === 'view')) run();
+    if ((viewRole || viewUser) && wasView !== (mode === 'view')) run();
   }
   // The server always renders the editor chrome; the mode class decides whether
   // it is shown, so switching costs no re-render.

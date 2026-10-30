@@ -59,9 +59,9 @@ def test_roles_persist_in_a_sqlite_file(tmp_path):
     assert [r.name for r in RoleStore(db).roles()] == ["admin"]
 
 
-def test_the_routes_create_rename_and_delete(monkeypatch):
+def test_the_routes_create_rename_and_delete(app_state):
     store = RoleStore(":memory:")
-    monkeypatch.setattr(app_mod.app.state, "roles", store)
+    app_state("roles", store)
     client = TestClient(app_mod.app)
 
     assert client.post("/access/new", data={"name": "admin"}).status_code == 200
@@ -73,8 +73,8 @@ def test_the_routes_create_rename_and_delete(monkeypatch):
     assert store.roles() == []
 
 
-def test_access_is_on_every_list_page_even_without_a_dashboard_store(monkeypatch):
-    monkeypatch.setattr(app_mod.app.state, "roles", RoleStore(":memory:"))
+def test_access_is_on_every_list_page_even_without_a_dashboard_store(monkeypatch, app_state):
+    app_state("roles", RoleStore(":memory:"))
     monkeypatch.setattr(app_mod, "_dash_store", lambda request: None)
     client = TestClient(app_mod.app)
     assert client.get("/access").status_code == 200
@@ -119,9 +119,9 @@ def test_a_roles_table_from_before_descriptions_gets_the_column(tmp_path):
     assert [(r.name, r.description) for r in RoleStore(db).roles()] == [("viewer", "")]
 
 
-def test_the_routes_take_a_description(monkeypatch):
+def test_the_routes_take_a_description(app_state):
     store = RoleStore(":memory:")
-    monkeypatch.setattr(app_mod.app.state, "roles", store)
+    app_state("roles", store)
     client = TestClient(app_mod.app)
     client.post("/access/new", data={"name": "viewer", "description": "Reads"})
     rid = store.roles()[0].id

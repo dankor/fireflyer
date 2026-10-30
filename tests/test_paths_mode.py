@@ -27,14 +27,14 @@ class _Req:
 
 
 @pytest.fixture
-def paths_mode(tmp_path, monkeypatch):
+def paths_mode(tmp_path, monkeypatch, app_state):
     """Turn on paths mode against tmp dirs: a paths base + an isolated data base,
     with the portal store off so `_paths_mode()` is active."""
     base = tmp_path / "paths"
     base.mkdir()
     monkeypatch.setattr(app_mod, "PATHS_BASE", str(base))
     monkeypatch.setattr(app_mod, "_DATA_BASE", str(tmp_path / "data"))
-    monkeypatch.setattr(app_mod.app.state, "store", None)
+    app_state("store", None)
     return base
 
 

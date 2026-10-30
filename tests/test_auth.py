@@ -40,8 +40,11 @@ def test_session_cookie_roundtrips():
 
 def test_tampered_cookie_is_rejected():
     token = auth._sign("admin")
-    forged = token.replace("admin", "root", 1)  # swap identity, keep old mac
+    mac = token.rpartition(":")[2]
+    root = auth._sign("root").rpartition(":")[0]
+    forged = f"{root}:{mac}"                       # swap identity, keep old mac
     assert auth.current_user(_request(forged)) is None
+    assert auth.current_user(_request(token)) == "admin"
 
 
 def test_no_cookie_is_anonymous():
@@ -70,3 +73,8 @@ def test_user_menu_has_logout_and_escapes_identity():
     assert 'action="/logout"' in html
     assert "<b>admin</b>" not in html
     assert "&lt;b&gt;admin&lt;/b&gt;" in html
+
+
+def test_a_non_ascii_password_is_refused_not_an_error():
+    a = auth.PasswordAuthenticator("admin", "admin")
+    assert a.verify("admin", "пароль") is None and a.verify("адмін", "admin") is None
