@@ -188,3 +188,14 @@ def test_each_dataset_links_the_dashboards_reading_it():
     assert 'href="/d/id1"' in html and ">Ops</a>" in html
     # Plain local mode has no dashboards to look at: no column.
     assert ">Dashboards</th>" not in render_datasets([_ds()])
+
+
+def test_every_list_puts_its_add_button_at_the_head_of_the_actions_column():
+    from fireflyer.web.portal import list_table, render_access, render_datasets, render_users
+
+    for html, title in [(render_gallery([]), "New dashboard"), (render_datasets([]), "New dataset"),
+                        (render_access([]), "New role"), (render_users([], []), "New user")]:
+        assert f'<th class="actions"><button class="act" type="button" title="{title}"' in html
+        assert 'class="topbar-right"><button class="act"' not in html     # not in the topbar
+    empty = list_table(["Name", "Roles"], [], "No users yet", "+")
+    assert '<td class="empty-row" colspan="3">No users yet</td>' in empty

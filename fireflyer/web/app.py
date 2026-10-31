@@ -1,3 +1,4 @@
+import hmac
 import json
 import os
 import pathlib
@@ -63,8 +64,21 @@ app.state.store = (
 )
 # Portal mode is gated behind a login. `authenticator` is the swappable
 # credential check (default: admin/admin); None disables auth entirely (local
-# mode). Tests set both `store` and `authenticator` directly.
-app.state.authenticator = auth_mod.default_authenticator() if PORTAL_ENABLED else None
+# mode). Tests set both `store` and `authenticator` directly. In portal mode the
+# users with a password (Users tab) sign in too, after the env login.
+
+
+class _PortalUsers:
+    """The Users tab's people as an Authenticator: their name and password,
+    checked against the stored hash (`RoleStore.verify`)."""
+
+    def verify(self, username: str, password: str) -> str | None:
+        return _role_store().verify(username, password)
+
+
+app.state.authenticator = (
+    auth_mod.AnyOf(auth_mod.default_authenticator(), _PortalUsers()) if PORTAL_ENABLED else None
+)
 
 # Datasets are named entities (unique name -> Parquet in object storage),
 # referenced by name from dashboard YAML in both modes. With FIREFLYER_S3_ENDPOINT
@@ -97,16 +111,50 @@ app.state.datasets = DatasetStore(
 async def _require_login(request: Request, call_next):
     """When auth is on, every route except the login page requires a session;
     unauthenticated requests are redirected to /login. Static assets are open
-    too — the login page needs its stylesheet and icon, and they hold no data."""
+    too — the login page needs its stylesheet and icon, and they hold no data —
+    and so is `/auth/`: where another system's sign-in routes go (an SSO
+    provider's redirect and callback), which run before there's a session and
+    end in `sign_in`."""
     auth = app.state.authenticator
     if (
         auth is not None
         and request.url.path != "/login"
-        and not request.url.path.startswith("/static/")
-        and auth_mod.current_user(request) is None
+        and not request.url.path.startswith(("/static/", "/auth/"))
+        and not _session_valid(auth_mod.session(request))
     ):
-        return RedirectResponse("/login", status_code=303)
+        resp = RedirectResponse("/login", status_code=303)
+        auth_mod.clear_session(resp)
+        return resp
     return await call_next(request)
+
+
+@app.middleware("http")
+async def _hsts(request: Request, call_next):
+    """With a team's own certificate (`fireflyer.portal` sets FIREFLYER_HSTS),
+    browsers are told to use HTTPS only, for a year. Never for the local
+    self-signed one — HSTS on localhost would follow the browser to every other
+    local app."""
+    response = await call_next(request)
+    if os.environ.get("FIREFLYER_HSTS") == "1" and request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
+
+
+def _session_valid(signed: tuple[str, str] | None) -> bool:
+    """A signed session still holds. A stored user's — local or from another
+    system — carries their current key: setting or removing a password rotates
+    it and deleting the user drops it, so their old sessions stop working.
+    Only the env login's has no key."""
+    if signed is None:
+        return False
+    identity, key = signed
+    if not _users_on():
+        return not key
+    current = _role_store().session_key(identity)
+    if current is not None:
+        return bool(key) and hmac.compare_digest(key.encode(), current.encode())
+    return not key and identity == auth_mod.admin_name()
+
 
 # The starter dashboard is an ordinary dashboard file, not a string in here:
 # 400+ lines of YAML that a reader edits like any other. docker-compose maps the
@@ -353,7 +401,7 @@ def render_editor_page(
         .replace("__FF_NAV__", nav)
         .replace("__FF_MODES__", _mode_switch())
         .replace("__FF_DASH_NAME__", dash_name)
-        .replace("__FF_ROLES__", portal_mod.role_picker(_role_store().roles()))
+        .replace("__FF_ROLES__", portal_mod.role_picker(_role_store().roles(), _users()))
         .replace("__FF_PATHDD__", path_dropdown)
         .replace("__FF_SAVE__", save)
         .replace("__FF_THEME__", theme)
@@ -463,13 +511,35 @@ def login_form():
 
 
 @app.post("/login")
-async def login_submit(username: str = Form(""), password: str = Form("")):
-    identity = app.state.authenticator.verify(username, password)
-    if not identity:
+async def login_submit(request: Request, username: str = Form(""), password: str = Form("")):
+    found = auth_mod.identify(app.state.authenticator, username, password)
+    if not found:
         return auth_mod.login_page("Invalid username or password.", PORTAL_TITLE)
     resp = RedirectResponse("/", status_code=303)
-    auth_mod.set_session(resp, identity)
+    try:
+        sign_in(request, resp, *found)
+    except portal_mod.RoleError:
+        return auth_mod.login_page("Invalid username or password.", PORTAL_TITLE)
     return resp
+
+
+def sign_in(request: Request, response, identity: str, source: str = portal_mod.LOCAL, **profile: str) -> None:
+    """Start `identity`'s session on `response` — the one way in. The login
+    form calls it; so does any other system that proves who someone is: an
+    SSO/OAuth callback after the provider's check, or an authenticator with
+    its own `source` (LDAP…). An outside identity is made a user the first
+    time, with that source and no roles (`RoleStore.provision`; `profile`:
+    first_name, last_name, email, refreshed each time). RoleError when the name
+    belongs to a local user, the admin, or another provider."""
+    if identity == auth_mod.admin_name() and source == portal_mod.LOCAL:
+        key = ""                                      # the env login: no stored user
+    elif source == portal_mod.LOCAL:
+        key = _role_store().session_key(identity) or ""
+    else:
+        key = _role_store().provision(identity, source, **profile)
+    # Secure over HTTPS — served so (`fireflyer.portal`), or behind a proxy that
+    # says so (X-Forwarded-Proto, which uvicorn turns into the request's scheme).
+    auth_mod.set_session(response, identity, key, secure=request.url.scheme == "https")
 
 
 @app.post("/logout")
@@ -486,7 +556,7 @@ def index(request: Request) -> str:
     if app.state.store is not None:
         return portal_mod.render_gallery(
             app.state.store.list(), PORTAL_TITLE, _user_menu(request),
-            datasets=_dataset_names(request), uses=_datasets_of(request),
+            datasets=_dataset_names(request), uses=_datasets_of(request), users=_users_tab(request),
         )
     if _paths_mode():
         store = _dash_store(request)
@@ -685,7 +755,7 @@ def _dataset_users(request: Request) -> dict[str, list[tuple[str, str]]] | None:
 def datasets_gallery(request: Request) -> str:
     return portal_mod.render_datasets(
         _dataset_store(request).list(), _page_title(), _user_menu(request),
-        used_by=_dataset_users(request), **_gallery_kwargs(request),
+        used_by=_dataset_users(request), users=_users_tab(request), **_gallery_kwargs(request),
     )
 
 
@@ -700,7 +770,8 @@ def _role_store():
     if app.state.roles is None:
         local = f"{_DATA_BASE}/fireflyer.db"
         dsn = (os.environ.get("DATABASE_URL") or "portal.db") if PORTAL_ENABLED else local
-        app.state.roles = portal_mod.RoleStore(dsn)
+        # Portal mode has people: the login is the built-in admin user.
+        app.state.roles = portal_mod.RoleStore(dsn, admin=auth_mod.admin_name() if PORTAL_ENABLED else "")
     return app.state.roles
 
 
@@ -719,7 +790,7 @@ def access_gallery(request: Request) -> str:
     return portal_mod.render_access(
         _role_store().roles(), _page_title(), _user_menu(request),
         paths=kwargs.get("paths"), active_path=kwargs.get("active_path"),
-        datasets=_datasets_by_role(request),
+        datasets=_datasets_by_role(request), users=_users_tab(request),
     )
 
 
@@ -738,8 +809,22 @@ def _datasets_by_role(request: Request) -> dict[str, list[str]]:
     return out
 
 
+def _with_admin(perms: dict) -> dict:
+    """A dataset's permissions as they hold: with the built-in admin role
+    (portal mode) reading all of it, though no dataset names it."""
+    return {**perms, portal_mod.ADMIN: []} if _users_on() else perms
+
+
+def _assignable(roles: list) -> list:
+    """The roles a dataset's permissions may name: not the built-in admin,
+    which reads every dataset anyway."""
+    return [r for r in roles if not r.builtin]
+
+
 @app.post("/access/new")
 async def access_new(request: Request, name: str = Form(""), description: str = Form("")):
+    if _users_on() and not _is_admin(request):
+        return HTMLResponse("Only an admin manages roles", status_code=403)
     try:
         _role_store().create_role(name, description)
     except portal_mod.RoleError as exc:
@@ -754,6 +839,8 @@ def _role_named(role_id: str) -> str | None:
 @app.post("/access/{role_id}/rename")
 async def access_rename(role_id: str, request: Request, name: str = Form(""),
                         description: str | None = Form(None)):
+    if _users_on() and not _is_admin(request):
+        return HTMLResponse("Only an admin manages roles", status_code=403)
     old = _role_named(role_id)
     try:
         _role_store().rename_role(role_id, name, description)
@@ -768,13 +855,177 @@ async def access_rename(role_id: str, request: Request, name: str = Form(""),
 
 
 @app.post("/access/{role_id}/delete")
-async def access_delete(role_id: str, request: Request) -> RedirectResponse:
+async def access_delete(role_id: str, request: Request):
+    if _users_on() and not _is_admin(request):
+        return HTMLResponse("Only an admin manages roles", status_code=403)
     name = _role_named(role_id)
-    _role_store().delete_role(role_id)
+    try:
+        _role_store().delete_role(role_id)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
     if name:
         for datasets in _every_dataset_store():
             datasets.drop_role(name, author=_current_author(request))
     return RedirectResponse("/access", status_code=303)
+
+
+# --- users ------------------------------------------------------------------------
+# Portal mode only — there's a login, so there are people. Kept beside the roles
+# (`RoleStore`), each holding at most one role per dataset: what a user sees of
+# a dataset is then one role's filters, never two to choose between.
+
+
+def _users_on() -> bool:
+    return app.state.authenticator is not None
+
+
+def _users() -> list:
+    return _role_store().users() if _users_on() else []
+
+
+def _every_permission() -> dict[str, dict]:
+    """Dataset -> its role -> filters, over every dataset store (roles and
+    users are shared by every path) — what a user's roles are checked against."""
+    out: dict[str, dict] = {}
+    for store in _every_dataset_store():
+        for ds in store.list():
+            try:
+                out[ds.name] = _with_admin(store.permissions(ds.name))
+            except DatasetError:
+                continue
+    return out
+
+
+def _role_reads() -> dict[str, list[str]]:
+    """Role name -> the datasets it may read: the user dialog's clash hints."""
+    out: dict[str, list[str]] = {}
+    for dataset, perms in _every_permission().items():
+        for role in perms:
+            out.setdefault(role, []).append(dataset)
+    return out
+
+
+def _check_roles(user: str, role_ids: list[str]) -> None:
+    """RoleError when the roles `role_ids` name would read a dataset twice."""
+    names = [r.name for r in _role_store().roles() if r.id in role_ids]
+    clashes = portal_mod.role_clashes(names, _every_permission())
+    if clashes:
+        raise portal_mod.clash_error(user.strip(), clashes)
+
+
+def _check_permissions(dataset: str, mapping: str) -> None:
+    """RoleError when `mapping`'s permissions would give a user two roles on
+    `dataset` — the other side of `_check_roles`."""
+    if not _users_on():
+        return
+    perms = {dataset: _with_admin(column_map.permissions(mapping))}
+    for user in _role_store().users():
+        clashes = portal_mod.role_clashes(user.roles, perms)
+        if clashes:
+            raise portal_mod.clash_error(user.name, clashes)
+
+
+def _is_admin(request: Request) -> bool:
+    """Whether the signed-in user may manage users and roles: the env login,
+    or a user holding the built-in `admin` role."""
+    identity = auth_mod.current_user(request) or ""
+    if identity == auth_mod.admin_name():
+        return True
+    held = _role_store().user(identity)
+    return bool(held) and portal_mod.ADMIN in held.roles
+
+
+def _users_tab(request: Request) -> bool:
+    """The list pages' Users segment: portal mode, and only for an admin."""
+    return _users_on() and _is_admin(request)
+
+
+def _admins_only(request: Request) -> HTMLResponse | None:
+    """The refusal for a Users route — 404 outside portal mode, 403 for anyone
+    but an admin (they'd set others' passwords) — or None to go on."""
+    if not _users_on():
+        return HTMLResponse("Users need portal mode", status_code=404)
+    if not _is_admin(request):
+        return HTMLResponse("Only an admin manages users", status_code=403)
+    return None
+
+
+def _password_change(password: str, clear: str) -> str | None:
+    """What a user form asks of the password: a new one (checked against the
+    policy now, before anything is saved), "" to remove it, None to keep it."""
+    if clear:
+        return ""
+    if not password:
+        return None
+    try:
+        return auth_mod.check_policy(password)
+    except auth_mod.PasswordError as exc:
+        raise portal_mod.RoleError(str(exc)) from exc
+
+
+def _apply_password(user_id: str, change: str | None) -> None:
+    if change is None:
+        return
+    if change:
+        _role_store().set_password(user_id, change)
+    else:
+        _role_store().clear_password(user_id)
+
+
+@app.get("/users", response_class=HTMLResponse)
+def users_gallery(request: Request):
+    if refused := _admins_only(request):
+        return refused
+    store = _role_store()
+    return portal_mod.render_users(
+        store.users(), store.roles(), _page_title(), _user_menu(request), reads=_role_reads(),
+    )
+
+
+# The forms post the password as typed (over the same origin, never echoed
+# back or kept anywhere but as its hash).
+@app.post("/users/new")
+async def users_new(request: Request, name: str = Form(""), role: list[str] = Form(default=[]),
+                    first_name: str = Form(""), last_name: str = Form(""), email: str = Form(""),
+                    password: str = Form("")):
+    if refused := _admins_only(request):
+        return refused
+    try:
+        change = _password_change(password, "")
+        _check_roles(name, role)
+        user_id = _role_store().create_user(name, role, first_name, last_name, email)
+        _apply_password(user_id, change)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
+    return RedirectResponse("/users", status_code=303)
+
+
+@app.post("/users/{user_id}/edit")
+async def users_edit(user_id: str, request: Request, name: str = Form(""),
+                     role: list[str] = Form(default=[]), first_name: str = Form(""),
+                     last_name: str = Form(""), email: str = Form(""),
+                     password: str = Form(""), clear_password: str = Form("")):
+    if refused := _admins_only(request):
+        return refused
+    try:
+        change = _password_change(password, clear_password)
+        _check_roles(name, role)
+        _role_store().edit_user(user_id, name, role, first_name, last_name, email)
+        _apply_password(user_id, change)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
+    return RedirectResponse("/users", status_code=303)
+
+
+@app.post("/users/{user_id}/delete")
+async def users_delete(user_id: str, request: Request):
+    if refused := _admins_only(request):
+        return refused
+    try:
+        _role_store().delete_user(user_id)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
+    return RedirectResponse("/users", status_code=303)
 
 
 # --- dataset builds --------------------------------------------------------------
@@ -891,10 +1142,11 @@ async def dataset_mapping(
 ) -> JSONResponse:
     """A new column mapping (the YAML) — the next minor, built in the background."""
     try:
+        _check_permissions(name, mapping)
         ds = _dataset_store(request).remap(
             name, mapping, author=_current_author(request), build=False
         )
-    except DatasetError as exc:
+    except (DatasetError, column_map.MappingError, portal_mod.RoleError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     _build_later(background, request, name)
     return JSONResponse({"building": ds.building})
@@ -1016,7 +1268,7 @@ async def dataset_access(name: str, request: Request, mapping: str = Form("")):
         except DatasetError:
             counts[role] = None
     return portal_mod.render_access_form(
-        _role_store().roles(), access,
+        _assignable(_role_store().roles()), access,
         lambda f: portal_mod.access_filter_row(f, context.column_types), draft, counts,
     )
 
@@ -1033,17 +1285,19 @@ async def dataset_access_rows(name: str, request: Request) -> JSONResponse:
 
 
 @app.post("/datasets/{name}/access/yaml")
-async def dataset_access_yaml(request: Request) -> JSONResponse:
+async def dataset_access_yaml(name: str, request: Request) -> JSONResponse:
     """The permissions form, written into the posted mapping's `permissions:` —
-    the YAML Save then keeps as the next version. Only roles that exist."""
+    the YAML Save then keeps as the next version. Only roles that exist, and
+    never two that one user holds."""
     form = await request.form()
-    known = {r.name for r in _role_store().roles()}
+    known = {r.name for r in _assignable(_role_store().roles())}
     try:
         grants = portal_mod.parse_access_form(form)
         mapping = column_map.with_permissions(
             form.get("mapping", ""), {r: fs for r, fs in grants.items() if r in known},
         )
-    except (filters_mod.FilterError, column_map.MappingError) as exc:
+        _check_permissions(name, mapping)
+    except (filters_mod.FilterError, column_map.MappingError, portal_mod.RoleError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"mapping": mapping})
 
@@ -1075,13 +1329,14 @@ async def dataset_delete(name: str, request: Request):
 
 
 @app.post("/execute")
-async def execute(request: Request, active_tab: int = 0, f: str = "", role: str = "") -> dict:
+async def execute(request: Request, active_tab: int = 0, f: str = "", role: str = "",
+                  user: str = "") -> dict:
     """`f` is the page URL's filter state (see `filters.encode_state`): the
     editor passes it on every render, so a reload, a shared link, or a YAML edit
     all keep the filters in play."""
     body = (await request.body()).decode("utf-8")
     try:
-        dashboard = _as_role(request, Dashboard.from_yaml(body, datasets=_dataset_store(request)), role)
+        dashboard = _as_role(request, Dashboard.from_yaml(body, datasets=_dataset_store(request)), role, user)
         # The response is a skeleton — each cell fetches itself via htmx so
         # charts render in parallel and slow charts don't block fast ones.
         # editing=True adds the editor-only row resize handles. `active_tab`
@@ -1093,6 +1348,7 @@ async def execute(request: Request, active_tab: int = 0, f: str = "", role: str 
                 editing=True,
                 active_tab=active_tab,
                 role=role,
+                user=user,
             ),
             # For the toolbar's ⓘ, which follows the YAML like the name does.
             "description": dashboard.description,
@@ -1106,13 +1362,30 @@ async def execute(request: Request, active_tab: int = 0, f: str = "", role: str 
         }
 
 
-def _as_role(request: Request, dashboard: Dashboard, role: str) -> Dashboard:
+def _as_role(request: Request, dashboard: Dashboard, role: str, user: str = "") -> Dashboard:
     """`dashboard` as `role` (a name) sees it — the editor's view-as picker —
     from the `permissions:` of this path's datasets. A role no dataset names
-    sees no managed dataset at all."""
+    sees no managed dataset at all. Or as `user` sees it: each dataset through
+    the one role of theirs that may read it (`role_clashes` keeps it one); a
+    user with no such role — or one since removed — sees none of it."""
+    datasets = _dataset_store(request)
+    if user:
+        held = _role_store().user(user) if _users_on() else None
+        grants = {}
+        for name in (held.roles if held else []):
+            grants.update(_grants(datasets, name))
+        return dashboard.as_role(user, grants)
     if not role:
         return dashboard
-    return dashboard.as_role(role, _dataset_store(request).grants(role))
+    return dashboard.as_role(role, _grants(datasets, role))
+
+
+def _grants(datasets: DatasetStore, role: str) -> dict[str, list]:
+    """Dataset -> `role`'s filters on it — every dataset, in full, for the
+    built-in admin role."""
+    if _users_on() and role == portal_mod.ADMIN:
+        return {ds.name: [] for ds in datasets.list()}
+    return datasets.grants(role)
 
 
 class ChatRequest(BaseModel):
@@ -1246,6 +1519,7 @@ async def dashboard_render(
     active_tab: int = Form(0),
     open_filter: str = Form(""),
     role: str = Form(""),
+    user: str = Form(""),
 ) -> str:
     """Re-render the dashboard with an updated crossfilter set.
 
@@ -1305,6 +1579,7 @@ async def dashboard_render(
         grain_tokens=grains,
         open_filter=open_filter,
         role=role,
+        user=user,
     )
 
 
@@ -1324,6 +1599,7 @@ async def dashboard_cell(
     editing: str = Form(""),
     open_filter: str = Form(""),
     role: str = Form(""),
+    user: str = Form(""),
 ) -> str:
     """Render a single dashboard cell. Triggered by the skeleton's per-cell
     hx-post; the response replaces the placeholder via outerHTML swap.
@@ -1338,7 +1614,7 @@ async def dashboard_cell(
     out-of-band swap, since a cell response doesn't otherwise touch it."""
     grains = set_grain_token(list(grain), set_grain) if set_grain else list(grain)
     try:
-        dashboard = _as_role(request, Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request)), role)
+        dashboard = _as_role(request, Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request)), role, user)
         html = dashboard.render_cell(
             cid,
             cf_tokens=list(cf),

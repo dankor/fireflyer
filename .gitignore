@@ -24,3 +24,6 @@ __pycache__/
 # their own git repo, not this one. (The `demo` path is the tracked demo/
 # folder, mapped in by compose; it is deliberately NOT ignored.)
 /paths/
+
+# TLS certificates and keys for portal mode (portal.yaml → tls): never committed.
+/certs/

@@ -1,6 +1,6 @@
 [project]
 name = "fireflyer"
-version = "0.21.0"
+version = "0.22.0"
 description = "Turn CSVs into HTML visualizations."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,11 +21,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0"]
+# `cryptography`: the portal's HTTPS certificate tests (tests/test_portal_tls.py).
+test = ["pytest>=8.0", "cryptography>=42"]
 # Portal mode only: the Postgres driver + the S3 client for Garage/S3 dataset
-# storage. Kept out of the core install and the test suite (stdlib sqlite + a
-# local-folder object store), so neither needs a database or object-store driver.
-portal = ["psycopg[binary]>=3.1", "boto3>=1.34"]
+# storage, and `cryptography` to make the local HTTPS certificate. Kept out of
+# the core install and the test suite (stdlib sqlite + a local-folder object
+# store), so neither needs a database or object-store driver.
+portal = ["psycopg[binary]>=3.1", "boto3>=1.34", "cryptography>=42"]
 
 [build-system]
 requires = ["hatchling"]

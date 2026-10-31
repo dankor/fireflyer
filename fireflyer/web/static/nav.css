@@ -36,9 +36,25 @@
 .ff-pathdd-menu button:hover { background:var(--bg); }
 .ff-pathdd-menu button.active { color:var(--accent); font-weight:600; }
 .ff-pathdd-menu button[hidden] { display:none; }
-.ff-role summary > svg:first-child { width:15px; height:15px; opacity:1; }
+.ff-role .ff-role-icon { display:none; }
+.ff-role .ff-role-icon svg { width:15px; height:15px; display:block; opacity:1; }
+.ff-role[data-as=""] .ff-role-icon[data-as=""], .ff-role[data-as="role"] .ff-role-icon[data-as="role"],
+.ff-role[data-as="user"] .ff-role-icon[data-as="user"] { display:block; }
 .ff-role-name:empty { display:none; }
 .ff-role.is-on summary { color:var(--accent); border-color:var(--accent); }
+.ff-role .ff-pathdd-menu button.is-builtin { color:var(--accent); }
+/* Roles | users, at the menu's head: the theme switch's segments, full width. */
+.topbar .ff-role .ff-role-kinds { display:flex; margin:0 0 4px; }
+.topbar .ff-role .ff-role-kinds button { flex:1; display:flex; justify-content:center; width:auto;
+  padding:6px 0; border-radius:0; }
+.topbar .ff-role .ff-role-kinds button svg { width:15px; height:15px; }
+.ff-role .ff-role-list[hidden] { display:none; }
+.ff-role .ff-role-search { display:block; box-sizing:border-box; width:100%; margin:0 0 4px; padding:6px 8px;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text);
+  font:inherit; font-size:13px; outline:0; }
+.ff-role .ff-role-search:focus { border-color:var(--accent); }
+.ff-role .ff-role-none { display:block; padding:8px 10px; color:var(--muted); font-size:13px; }
+.ff-role .ff-role-none[hidden] { display:none; }
 
 /* A segmented icon control — the theme switch (Auto / Light / Dark) on every
    page, and the editor's mode switch. */

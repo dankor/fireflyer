@@ -20,7 +20,7 @@ import json
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -34,6 +34,7 @@ from fireflyer.dashboard import Dashboard
 from fireflyer.datasets import Dataset, Version
 from fireflyer.params import COLUMN_TYPES, column_type, type_icon_svg
 from fireflyer.web import assets
+from fireflyer.web import auth
 
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS dashboards ("
@@ -217,8 +218,45 @@ _ROLES_SCHEMA = (
 )
 
 
+# The Users tab's people (portal mode): a name each, and the roles they hold —
+# by role id, so a renamed role stays held.
+_USERS_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS users ("
+    " id TEXT PRIMARY KEY,"
+    " name TEXT NOT NULL UNIQUE,"
+    " first_name TEXT NOT NULL DEFAULT '',"
+    " last_name TEXT NOT NULL DEFAULT '',"
+    " email TEXT NOT NULL DEFAULT '',"
+    # A salted scrypt hash (auth.hash_password) or "" — never the password; and
+    # the key a sign-in session carries, rotated with the password.
+    " password_hash TEXT NOT NULL DEFAULT '',"
+    # Who proves who they are: `local` (the password above), or the name of the
+    # identity provider that does (sso, ldap, …) — see `RoleStore.provision`.
+    " source TEXT NOT NULL DEFAULT 'local',"
+    " session_key TEXT NOT NULL DEFAULT '',"
+    " created_at TEXT NOT NULL,"
+    " updated_at TEXT NOT NULL)"
+)
+_USER_ROLES_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS user_roles ("
+    " user_id TEXT NOT NULL,"
+    " role_id TEXT NOT NULL,"
+    " PRIMARY KEY (user_id, role_id))"
+)
+
+
 class RoleError(ValueError):
-    """A role name that's empty or already taken."""
+    """A role (or user) name that's empty or already taken, or roles a user
+    can't hold together."""
+
+
+# Portal mode's built-ins: the role `admin` — every dataset, in full, so no
+# dataset's permissions name it — and the user who logs in (`FIREFLYER_USER`),
+# who holds it. Neither can be renamed, edited or removed.
+ADMIN = "admin"
+LOCAL = "local"           # a user who signs in with a password kept here
+_ADMIN_ABOUT = "Built-in"
+_ADMIN_USER_ID = "admin"
 
 
 @dataclass
@@ -228,25 +266,83 @@ class Role:
     created_at: str        # ISO UTC, as the dashboards' timestamps
     updated_at: str
     description: str = ""  # what the role is for — under its name, and in tooltips
+    builtin: bool = False  # the admin role: shown locked
 
 
-def _role_name(name: str, roles: list[Role], keep: str = "") -> str:
+@dataclass
+class User:
+    id: str
+    name: str
+    created_at: str
+    updated_at: str
+    roles: list[str] = field(default_factory=list)  # the role names held, sorted
+    first_name: str = ""                            # these three optional
+    last_name: str = ""
+    email: str = ""
+    builtin: bool = False                           # the admin login: shown locked
+    has_password: bool = False                      # whether they can sign in — never the hash
+    source: str = LOCAL                             # who proves who they are: here, or a provider
+
+    @property
+    def external(self) -> bool:
+        """Signs in through another system (SSO, LDAP, …), which owns the name
+        and the credentials; only the roles are managed here."""
+        return self.source != LOCAL
+
+    @property
+    def about(self) -> str:
+        """Full name · email — the small line under the user's name, as a
+        role's description is under its."""
+        full = " ".join(p for p in (self.first_name, self.last_name) if p)
+        return " · ".join(p for p in (full, self.email) if p)
+
+
+def _person(first_name: str, last_name: str, email: str) -> tuple[str, str, str]:
+    """A user's optional details, trimmed; an email, if given, needs an @."""
+    email = email.strip()
+    if email and "@" not in email:
+        raise RoleError(f"{email!r} isn't an email")
+    return first_name.strip(), last_name.strip(), email
+
+
+def _role_name(name: str, roles: list, keep: str = "", kind: str = "role") -> str:
     """`name` trimmed, checked: not empty, and no other role (than `keep`, the
-    one being renamed) has it."""
+    one being renamed) has it. Users' names too (`kind`)."""
     name = name.strip()
     if not name:
-        raise RoleError("a role needs a name")
+        raise RoleError(f"a {kind} needs a name")
     if any(r.name == name and r.id != keep for r in roles):
-        raise RoleError(f"there is already a role named {name!r}")
+        raise RoleError(f"there is already a {kind} named {name!r}")
     return name
+
+
+def role_clashes(roles: list[str], permissions: dict[str, dict]) -> list[tuple[str, list[str]]]:
+    """(dataset, the roles) for each dataset that more than one of `roles` may
+    read — `permissions`: dataset -> its role -> filters. A user holds at most
+    one role per dataset, so what they see of it is never ambiguous."""
+    clashes = []
+    for dataset, perms in sorted(permissions.items()):
+        both = sorted(r for r in roles if r in perms)
+        if len(both) > 1:
+            clashes.append((dataset, both))
+    return clashes
+
+
+def clash_error(user: str, clashes: list[tuple[str, list[str]]]) -> RoleError:
+    dataset, roles = clashes[0]
+    return RoleError(f"{user} can't hold {' and '.join(roles)}: both may read {dataset}")
 
 
 class RoleStore:
     """The roles, in a database — the portal's (sqlite, or Postgres with a
     `postgresql://` DSN; `psycopg` imported only then), or a local sqlite file
-    when there's no portal. Its own connection, like the dataset catalog's."""
+    when there's no portal. Its own connection, like the dataset catalog's.
 
-    def __init__(self, dsn: str):
+    `admin`: the login's user name, in portal mode — the store then always has
+    the built-in `admin` role and lists that user first, holding it; both
+    locked. "" (local mode, tests) has neither."""
+
+    def __init__(self, dsn: str, admin: str = ""):
         self._pg = dsn.startswith(("postgres://", "postgresql://"))
         if self._pg:
             import psycopg
@@ -257,7 +353,12 @@ class RoleStore:
                 Path(dsn).parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(dsn, check_same_thread=False)
         self._run(_ROLES_SCHEMA)
+        self._run(_USERS_SCHEMA)
+        self._run(_USER_ROLES_SCHEMA)
         self._add_description()
+        self._admin = admin
+        if admin and not any(r.name == ADMIN for r in self.roles()):
+            self.create_role(ADMIN, _ADMIN_ABOUT)
 
     def _run(self, sql: str, params: tuple = ()) -> list[tuple]:
         if self._pg:
@@ -277,7 +378,13 @@ class RoleStore:
 
     def roles(self) -> list[Role]:
         rows = self._run("SELECT id, name, created_at, updated_at, description FROM roles ORDER BY name")
-        return [Role(str(i), n, str(c), str(u), d or "") for i, n, c, u, d in rows]
+        builtin = lambda n: bool(self._admin) and n == ADMIN
+        return [Role(str(i), n, str(c), str(u), _ADMIN_ABOUT if builtin(n) else d or "", builtin(n))
+                for i, n, c, u, d in rows]
+
+    def _unlocked(self, roles_or_users: list, id: str, kind: str) -> None:
+        if any(x.id == id and x.builtin for x in roles_or_users):
+            raise RoleError(f"the {kind} is built in")
 
     def create_role(self, name: str, description: str = "") -> str:
         name = _role_name(name, self.roles())
@@ -290,6 +397,7 @@ class RoleStore:
 
     def rename_role(self, id: str, name: str, description: str | None = None) -> None:
         """A new name — and description, unless None (kept as it is)."""
+        self._unlocked(self.roles(), id, "admin role")
         name = _role_name(name, self.roles(), keep=id)
         if description is None:
             self._run("UPDATE roles SET name = ?, updated_at = ? WHERE id = ?", (name, _now(), id))
@@ -298,7 +406,146 @@ class RoleStore:
                       (name, description.strip(), _now(), id))
 
     def delete_role(self, id: str) -> None:
+        self._unlocked(self.roles(), id, "admin role")
+        self._run("DELETE FROM user_roles WHERE role_id = ?", (id,))
         self._run("DELETE FROM roles WHERE id = ?", (id,))
+
+    # --- users ---
+
+    def users(self) -> list[User]:
+        held: dict[str, list[str]] = {}
+        for user_id, role in self._run(
+            "SELECT ur.user_id, r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id ORDER BY r.name"
+        ):
+            held.setdefault(str(user_id), []).append(role)
+        rows = self._run(
+            "SELECT id, name, created_at, updated_at, first_name, last_name, email,"
+            " password_hash <> '', source FROM users ORDER BY name"
+        )
+        stored = [User(str(i), n, str(c), str(u), held.get(str(i), []), f or "", l or "", e or "",
+                       has_password=bool(pw), source=src or LOCAL)
+                  for i, n, c, u, f, l, e, pw, src in rows]
+        if not self._admin:
+            return stored
+        # Not a row: the login, first — its name is taken for any other user.
+        # Its password is the environment's, not managed here.
+        return [User(_ADMIN_USER_ID, self._admin, "", "", [ADMIN], builtin=True, has_password=True)] + stored
+
+    def user(self, name: str) -> User | None:
+        return next((u for u in self.users() if u.name == name), None)
+
+    def create_user(self, name: str, role_ids: list[str] = (),
+                    first_name: str = "", last_name: str = "", email: str = "") -> str:
+        name = _role_name(name, self.users(), kind="user")
+        person = _person(first_name, last_name, email)
+        new_id, now = str(uuid.uuid4()), _now()
+        self._run(
+            "INSERT INTO users (id, name, first_name, last_name, email, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (new_id, name, *person, now, now),
+        )
+        self._hold(new_id, role_ids)
+        return new_id
+
+    def edit_user(self, id: str, name: str, role_ids: list[str] = (),
+                  first_name: str = "", last_name: str = "", email: str = "") -> None:
+        self._unlocked(self.users(), id, "admin user")
+        held = self._by_id(id)
+        if held and held.external and name.strip() != held.name:
+            raise RoleError(f"{held.name}'s name comes from {held.source}")
+        name = _role_name(name, self.users(), keep=id, kind="user")
+        person = _person(first_name, last_name, email)
+        self._run(
+            "UPDATE users SET name = ?, first_name = ?, last_name = ?, email = ?, updated_at = ? WHERE id = ?",
+            (name, *person, _now(), id),
+        )
+        self._run("DELETE FROM user_roles WHERE user_id = ?", (id,))
+        self._hold(id, role_ids)
+
+    def _by_id(self, id: str) -> User | None:
+        return next((u for u in self.users() if u.id == id), None)
+
+    def provision(self, name: str, source: str, first_name: str = "", last_name: str = "",
+                  email: str = "") -> str:
+        """A user another system (`source`: sso, ldap, …) has just signed in:
+        made here the first time — no roles yet, no password — and their
+        profile refreshed from the provider after. Returns the key their
+        session carries. Refused for a name a local user or the admin holds,
+        or another provider's: one system can't sign in as another's user."""
+        if source == LOCAL:
+            raise RoleError("a local user signs in with their password")
+        held = self.user(name)
+        if held and (held.builtin or held.source != source):
+            raise RoleError(f"{name} doesn't sign in through {source}")
+        person = _person(first_name, last_name, email)
+        if held is None:
+            user_id, now = str(uuid.uuid4()), _now()
+            self._run(
+                "INSERT INTO users (id, name, first_name, last_name, email, source, session_key,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, _role_name(name, self.users(), kind="user"), *person, source,
+                 auth.new_session_key(), now, now),
+            )
+        elif any(person):
+            fields = dict(zip(("first_name", "last_name", "email"), person))
+            given = {k: v for k, v in fields.items() if v}
+            sets = ", ".join(f"{k} = ?" for k in given)
+            self._run(f"UPDATE users SET {sets}, updated_at = ? WHERE id = ?", (*given.values(), _now(), held.id))
+        return self.session_key(name)
+
+    def _hold(self, user_id: str, role_ids) -> None:
+        known = {r.id for r in self.roles()}
+        for role_id in dict.fromkeys(role_ids):
+            if role_id in known:
+                self._run("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", (user_id, role_id))
+
+    # --- passwords: only ever the hash, and it never leaves the store ---
+
+    def set_password(self, id: str, password: str) -> None:
+        """A new password for user `id` (the policy checked first) — which
+        also rotates their session key, signing them out everywhere."""
+        self._unlocked(self.users(), id, "admin user")
+        self._local(id)
+        try:
+            hashed = auth.hash_password(auth.check_policy(password))
+        except auth.PasswordError as exc:
+            raise RoleError(str(exc)) from exc
+        self._run("UPDATE users SET password_hash = ?, session_key = ?, updated_at = ? WHERE id = ?",
+                  (hashed, auth.new_session_key(), _now(), id))
+
+    def clear_password(self, id: str) -> None:
+        """No password: the user can't sign in, and is signed out."""
+        self._unlocked(self.users(), id, "admin user")
+        self._local(id)
+        self._run("UPDATE users SET password_hash = '', session_key = ?, updated_at = ? WHERE id = ?",
+                  (auth.new_session_key(), _now(), id))
+
+    def _local(self, id: str) -> None:
+        held = self._by_id(id)
+        if held and held.external:
+            raise RoleError(f"{held.name} signs in through {held.source}: no password here")
+
+    def verify(self, name: str, password: str) -> str | None:
+        """`name` when `password` is theirs (an Authenticator) — else None,
+        taking as long for an unknown name, a user with no password, or one
+        who signs in elsewhere."""
+        rows = self._run("SELECT password_hash FROM users WHERE name = ? AND source = ?", (name, LOCAL))
+        stored = rows[0][0] if rows else ""
+        return name if auth.password_matches(password, stored) else None
+
+    def session_key(self, name: str) -> str | None:
+        """The key `name`'s sessions must carry, or None: no such user, or a
+        local one with no password — a session that can't be valid."""
+        rows = self._run(
+            "SELECT session_key FROM users WHERE name = ? AND (source <> ? OR password_hash <> '')",
+            (name, LOCAL),
+        )
+        return rows[0][0] if rows else None
+
+    def delete_user(self, id: str) -> None:
+        self._unlocked(self.users(), id, "admin user")
+        self._run("DELETE FROM user_roles WHERE user_id = ?", (id,))
+        self._run("DELETE FROM users WHERE id = ?", (id,))
 
 
 def _name_of(yaml_text: str) -> str:
@@ -455,6 +702,10 @@ _ICONS = {
     "trash": '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'
              '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
     "eye": '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    # An arrow out of a box: a user who signs in through another system.
+    "external": '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+    # A key: a user who can sign in — they have a password.
+    "key": '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M19 4l2 2"/>',
     "upload": '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>'
               '<path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>',
     "back": '<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>',
@@ -470,6 +721,13 @@ _ICONS = {
     # Every row: a table with nothing struck out — a role's full access.
     "full": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 10v10"/>',
     # A person with a shield: a role — who may see what.
+    # A padlock: built in, so it can't be changed.
+    "lock": '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    # People: a role — the many who hold it (the view-as switch's roles).
+    "users": '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>'
+             '<path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    # A person: a user.
+    "user": '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7.5 8-7.5s8 3.1 8 7.5"/>',
     "role": '<circle cx="9" cy="7" r="3.5"/><path d="M2.5 20c0-3.8 2.9-6.5 6.5-6.5 1.4 0 2.7.4 3.7 1.1"/>'
             '<path d="M18 12.5l3.5 1.4v2.8c0 2.1-1.5 3.7-3.5 4.3-2-.6-3.5-2.2-3.5-4.3v-2.8z"/>',
     "save": '<path d="M5 3h11l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 3v5h7V3"/><rect x="7" y="13" width="10" height="7" rx="1"/>',
@@ -536,15 +794,18 @@ def _author_cell(author: str, authors: bool) -> str:
     return f"<td>{escape(author) if author else '—'}</td>"
 
 
-def _ref_links(links: list[tuple[str, str]], missing: set[str] = frozenset()) -> str:
+def _ref_links(links: list[tuple[str, str]], missing: set[str] = frozenset(),
+               builtin: set[str] = frozenset()) -> str:
     """What a list row is tied to — the datasets a dashboard reads, the
     dashboards a dataset feeds — as small links. A name in `missing` (a dataset
-    a dashboard names that isn't uploaded) is shown, unlinked, so it stands out."""
+    a dashboard names that isn't uploaded) is shown, unlinked, so it stands out;
+    one in `builtin` (the admin role) in the built-ins' colour."""
     if not links:
         return '<span class="muted">—</span>'
     chips = "".join(
         f'<span class="ref is-missing" title="Not uploaded">{escape(label)}</span>' if label in missing
-        else f'<a class="ref" href="{href}" title="{escape(label, quote=True)}">{escape(label)}</a>'
+        else f'<a class="ref{" is-builtin" if label in builtin else ""}" href="{href}"'
+             f' title="{escape(label, quote=True)}">{escape(label)}</a>'
         for href, label in links
     )
     return f'<span class="refs">{chips}</span>'
@@ -557,6 +818,20 @@ def _dashboard_datasets(row: DashboardRow, known: set[str] | None,
     names = sorted(uses.get(row.id, []) if uses is not None else Dashboard.dataset_names(row.yaml))
     missing = set(names) - known if known is not None else set()
     return _ref_links([(f"/datasets/{quote(n)}", n) for n in names], missing)
+
+
+def list_table(heads: list[str], rows: list[str], empty: str, add: str) -> str:
+    """A list page's table: `heads` (the column names), one `<tr>` per row,
+    and — at the head of the row actions' column — `add`, the page's + (so it
+    sits over the actions it goes with). With no rows the head stays, the +
+    in it, over `empty`."""
+    head = "".join(f"<th>{h}</th>" for h in heads) + f'<th class="actions">{add}</th>'
+    body = "".join(rows) or f'<tr><td class="empty-row" colspan="{len(heads) + 1}">{empty}</td></tr>'
+    return f'<table class="dash-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+
+
+def _add_button(title: str, onclick: str) -> str:
+    return f'<button class="act" type="button" title="{title}" onclick="{onclick}">{_icon("plus")}</button>'
 
 
 def _row(row: DashboardRow, authors: bool = True, known: set[str] | None = None,
@@ -617,10 +892,10 @@ def back_button(href: str, title: str) -> str:
     return f'<a class="ff-back" href="{href}" title="{t}" aria-label="{t}">{_icon("back")}</a>'
 
 
-def nav_switch(active: str) -> str:
+def nav_switch(active: str, users: bool = False) -> str:
     """The list pages' left-nav control: a segmented Dashboards | Datasets |
-    Access switch (`active` marks the current list). Not shown on selected-item
-    pages."""
+    Access switch (`active` marks the current list) — and Users, with `users`
+    (portal mode, where there are people). Not shown on selected-item pages."""
     def seg(href, label, key):
         cls = " active" if key == active else ""
         return f'<a class="ff-switch-seg{cls}" href="{href}">{label}</a>'
@@ -629,6 +904,7 @@ def nav_switch(active: str) -> str:
         + seg("/", "Dashboards", "dashboards")
         + seg("/datasets", "Datasets", "datasets")
         + seg("/access", "Access", "access")
+        + (seg("/users", "Users", "users") if users else "")
         + "</nav>"
     )
 
@@ -656,22 +932,58 @@ def _tip(text: str) -> str:
     return f' title="{escape(text, quote=True)}"' if text else ""
 
 
-def role_picker(roles: list[Role]) -> str:
+# The view-as menu's search: narrows the list showing (editor.js). One pick —
+# not a multi-select.
+_ROLE_SEARCH = (
+    '<input class="ff-role-search" type="search" placeholder="Search" aria-label="Search"'
+    ' autocomplete="off" spellcheck="false">'
+    '<span class="ff-role-none" hidden>No matches</span>'
+)
+
+
+def role_picker(roles: list[Role], users: list[User] = ()) -> str:
     """The editor's view-as dropdown (view mode): every role, by name (what
-    datasets' `permissions:` name). Picking one renders the dashboard as that
-    role sees it (`Dashboard.as_role`); picking it again goes back to all of
-    it. The summary shows the role's name, or just the icon. Empty with no
-    roles — there's nothing to view as. editor.js does the rest."""
+    datasets' `permissions:` name), and — behind a roles | users switch at the
+    menu's head, one list at a time — every user. Picking one
+    renders the dashboard as that role, or that user (through their roles),
+    sees it (`Dashboard.as_role`); picking it again goes back to all of it. The
+    summary shows the name, or just the icon. Empty with no roles — there's
+    nothing to view as. editor.js does the rest."""
     if not roles:
         return ""
     items = "".join(
-        f'<button type="button" data-role="{escape(r.name, quote=True)}"{_tip(r.description)}>{escape(r.name)}</button>'
+        f'<button type="button"{_BUILTIN_ROW if r.builtin else ""} data-role="{escape(r.name, quote=True)}"'
+        f'{_tip(r.description)}>{escape(r.name)}</button>'
         for r in roles
     )
+    if users:
+        people = "".join(
+            f'<button type="button"{_BUILTIN_ROW if u.builtin else ""} data-user="{escape(u.name, quote=True)}"'
+            f'{_tip(u.about)}>{escape(u.name)}</button>'
+            for u in users
+        )
+        kinds = "".join(
+            f'<button type="button" data-kind="{kind}" title="{label}" aria-label="{label}"'
+            f'{" class=\"active\"" if kind == "role" else ""}>{_icon(icon)}</button>'
+            for kind, icon, label in (("role", "users", "Roles"), ("user", "user", "Users"))
+        )
+        items = (
+            f'<div class="ff-theme ff-role-kinds" role="group" aria-label="View as">{kinds}</div>'
+            + _ROLE_SEARCH
+            + f'<div class="ff-role-list" data-kind="role">{items}</div>'
+            f'<div class="ff-role-list" data-kind="user" hidden>{people}</div>'
+        )
+    else:
+        items = _ROLE_SEARCH + f'<div class="ff-role-list" data-kind="role">{items}</div>'
     return (
-        '<details class="ff-pathdd ff-role" id="ff-role">'
-        '<summary title="View as role" aria-label="View as role">'
-        f'{_icon("role")}<span class="ff-role-name" id="ff-role-name"></span>{_CHEVRON}</summary>'
+        '<details class="ff-pathdd ff-role" id="ff-role" data-as="">'
+        '<summary title="View as" aria-label="View as">'
+        # The icon says what's picked: people for a role, a person for a user —
+        # and the view-as glyph with nothing picked (editor.js sets `data-as`).
+        f'<span class="ff-role-icon" data-as="">{_icon("role")}</span>'
+        f'<span class="ff-role-icon" data-as="role">{_icon("users")}</span>'
+        f'<span class="ff-role-icon" data-as="user">{_icon("user")}</span>'
+        f'<span class="ff-role-name" id="ff-role-name"></span>{_CHEVRON}</summary>'
         f'<div class="ff-pathdd-menu">{items}</div></details>'
     )
 
@@ -688,13 +1000,14 @@ def _shell(
     active_path: str | None = None,
     detail: bool = False,
     head: str = "",
+    users: bool = False,
 ) -> str:
     """The gallery page frame. Overview pages (dashboards/datasets lists) lead
     with a Dashboards | Datasets switch on the left; in local paths mode the path
     dropdown sits on the **right**. Detail pages (a selected dataset) lead with a
     back button (+ switch, local) in `topbar_left`. Then optional `topbar_right`,
     then `body`. No second nav bar."""
-    nav = "" if detail else nav_switch(active)
+    nav = "" if detail else nav_switch(active, users)
     right = path_dropdown(paths, active_path) + topbar_right + theme_switch() + user_menu
     right_html = f'<span class="topbar-right">{right}</span>' if right else ""
     return f"""<!DOCTYPE html>
@@ -719,29 +1032,23 @@ def render_gallery(
     rows: list[DashboardRow], title: str = "Fireflyer Portal", user_menu: str = "",
     paths: list[str] | None = None, active_path: str | None = None, authors: bool = True,
     datasets: set[str] | None = None, uses: dict[str, list[str]] | None = None,
+    users: bool = False,
 ) -> str:
     """`datasets`: the names uploaded, so a dashboard naming one that isn't can
     say so; None links every name. `uses`: dashboard id -> the datasets it
     reads, from the store's index; None works it out from each YAML."""
-    if rows:
-        body_table = (
-            '<table class="dash-table"><thead><tr>'
-            f"<th>Name</th>{'<th>Author</th>' if authors else ''}<th>Last updated</th><th>Datasets</th><th></th>"
-            "</tr></thead><tbody>"
-            + "".join(_row(r, authors, datasets, uses) for r in rows)
-            + "</tbody></table>"
-        )
-    else:
-        body_table = '<div class="empty">No dashboards yet. Use + to create one.</div>'
+    body_table = list_table(
+        ["Name", *(["Author"] if authors else []), "Last updated", "Datasets"],
+        [_row(r, authors, datasets, uses) for r in rows],
+        "No dashboards yet", _add_button("New dashboard", "openAdd()"),
+    )
     add_dialog = _dialog("add-dialog", "add-form", "/new", "New dashboard", "Create", description=True)
     clone_dialog = _dialog("clone-dialog", "clone-form", "", "Clone dashboard", "Clone")
     clone_dialog = clone_dialog.replace('id="clone-form-name"', 'id="clone-name"')
     return _shell(
         title, user_menu, "dashboards", body_table,
         extra=add_dialog + clone_dialog,
-        topbar_right=f'<button class="act" type="button" title="New dashboard"'
-                     f' onclick="openAdd()">{_icon("plus")}</button>',
-        paths=paths, active_path=active_path,
+        paths=paths, active_path=active_path, users=users,
     )
 
 
@@ -826,30 +1133,23 @@ def render_datasets(
     datasets: list[Dataset], title: str = "Fireflyer Portal", user_menu: str = "",
     paths: list[str] | None = None, active_path: str | None = None, authors: bool = True,
     used_by: dict[str, list[tuple[str, str]]] | None = None,
+    users: bool = False,
 ) -> str:
     """`used_by`: dataset name -> the (id, name) of each dashboard reading it;
     None (no dashboards to look at, plain local mode) leaves the column out."""
-    if datasets:
-        table = (
-            '<table class="dash-table"><thead><tr>'
-            "<th>Name</th><th>Version</th><th>Columns</th><th>Rows</th><th>Updated</th>"
-            f"{'<th>Author</th>' if authors else ''}"
-            f"{'<th>Dashboards</th>' if used_by is not None else ''}<th></th>"
-            "</tr></thead><tbody>"
-            + "".join(_dataset_row(d, authors, used_by) for d in datasets)
-            + "</tbody></table>"
-        )
-    else:
-        table = '<div class="empty">No datasets yet. Use + to upload a CSV.</div>'
+    table = list_table(
+        ["Name", "Version", "Columns", "Rows", "Updated", *(["Author"] if authors else []),
+         *(["Dashboards"] if used_by is not None else [])],
+        [_dataset_row(d, authors, used_by) for d in datasets],
+        "No datasets yet", _add_button("New dataset", "openUpload()"),
+    )
     extra = (
         _upload_dialog("/datasets/new", "New dataset", "Upload", "upload-dialog", True)
     )
     return _shell(
         title, user_menu, "datasets", table,
         extra=extra,
-        topbar_right=f'<button class="act" type="button" title="New dataset"'
-                     f' onclick="openUpload()">{_icon("plus")}</button>',
-        paths=paths, active_path=active_path,
+        paths=paths, active_path=active_path, users=users,
     )
 
 
@@ -1019,22 +1319,37 @@ def parse_access_form(form) -> dict[str, list[dict]]:
 def _role_row(role: Role, datasets: list[str] | None = None) -> str:
     """`datasets`: the ones whose permissions name the role, linked as the
     dashboards list links a dashboard's; None leaves the column out."""
+    # The admin role reads every dataset: "All", rather than each one.
     used = "" if datasets is None else (
-        "<td>" + _ref_links([(f"/datasets/{quote(n)}", n) for n in datasets]) + "</td>"
+        '<td class="muted">All</td>' if role.builtin
+        else "<td>" + _ref_links([(f"/datasets/{quote(n)}", n) for n in datasets]) + "</td>"
     )
     return (
-        "<tr>"
+        f'<tr{_BUILTIN_ROW if role.builtin else ""}>'
         f'<td><span class="name">{escape(role.name)}</span>{_sub(role.description)}</td>'
         f'<td class="muted">{_stamp(role.updated_at)}</td>'
         f"{used}"
-        '<td class="actions">'
+        f'<td class="actions">{_locked() if role.builtin else _role_actions(role)}</td></tr>'
+    )
+
+
+# A built-in's row: in the accent colour, so it reads as the service one.
+_BUILTIN_ROW = ' class="is-builtin"'
+
+
+def _locked() -> str:
+    """In place of a built-in's edit and remove: a padlock, saying why."""
+    return f'<span class="act act-locked" title="Built in — can\'t be changed">{_icon("lock")}</span>'
+
+
+def _role_actions(role: Role) -> str:
+    return (
         f'<button class="act" type="button" title="Edit" data-id="{role.id}"'
         f' data-name="{escape(role.name, quote=True)}" data-description="{escape(role.description, quote=True)}"'
         f' onclick="openRename(this)">{_icon("pencil")}</button>'
         f'<form method="post" action="/access/{role.id}/delete"'
         " onsubmit=\"return confirm('Remove this role?')\">"
         f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
-        "</td></tr>"
     )
 
 
@@ -1042,19 +1357,15 @@ def render_access(
     roles: list[Role], title: str = "Fireflyer Portal", user_menu: str = "",
     paths: list[str] | None = None, active_path: str | None = None,
     datasets: dict[str, list[str]] | None = None,
+    users: bool = False,
 ) -> str:
     """The Access list: every role, by name, with when it last changed and —
     `datasets`, role name -> the datasets naming it — where it's used."""
-    if roles:
-        table = (
-            '<table class="dash-table"><thead><tr>'
-            f"<th>Name</th><th>Updated</th>{'<th>Datasets</th>' if datasets is not None else ''}<th></th>"
-            "</tr></thead><tbody>"
-            + "".join(_role_row(r, None if datasets is None else datasets.get(r.name, [])) for r in roles)
-            + "</tbody></table>"
-        )
-    else:
-        table = '<div class="empty">No roles yet. Use + to add one.</div>'
+    table = list_table(
+        ["Name", "Updated", *(["Datasets"] if datasets is not None else [])],
+        [_role_row(r, None if datasets is None else datasets.get(r.name, [])) for r in roles],
+        "No roles yet", _add_button("New role", "openAdd()"),
+    )
     add_dialog = _dialog("add-dialog", "add-form", "/access/new", "New role", "Create",
                          description=True, placeholder="Role name")
     rename_dialog = _dialog("rename-dialog", "rename-form", "", "Edit role", "Save",
@@ -1062,9 +1373,157 @@ def render_access(
     return _shell(
         title, user_menu, "access", table,
         extra=add_dialog + rename_dialog,
-        topbar_right=f'<button class="act" type="button" title="New role"'
-                     f' onclick="openAdd()">{_icon("plus")}</button>',
-        paths=paths, active_path=active_path,
+        paths=paths, active_path=active_path, users=users,
+    )
+
+
+# --- users gallery ------------------------------------------------------------
+# Portal mode's people, each holding some roles — at most one per dataset
+# (`role_clashes`), so what a user sees of a dataset is one role's filters.
+
+
+def _user_row(user: User) -> str:
+    roles = _ref_links([("/access", r) for r in user.roles], builtin={ADMIN})
+    return (
+        f'<tr{_BUILTIN_ROW if user.builtin else ""}>'
+        f'<td><span class="name">{escape(user.name)}</span>{_key(user)}{_sub(user.about)}</td>'
+        f"<td>{roles}</td>"
+        f'<td class="muted">{_stamp(user.updated_at)}</td>'
+        f'<td class="actions">{_locked() if user.builtin else _user_actions(user)}</td></tr>'
+    )
+
+
+def _key(user: User) -> str:
+    """Beside the name, how a user signs in: through another system (its
+    name in the tooltip), with a password (a key), or not at all (nothing)."""
+    if user.external:
+        tip = escape(f"Signs in through {user.source}", quote=True)
+        return f'<span class="ff-key ff-source" title="{tip}">{_icon("external")}</span>'
+    return f'<span class="ff-key" title="Can sign in">{_icon("key")}</span>' if user.has_password else ""
+
+
+def _user_actions(user: User) -> str:
+    return (
+        f'<button class="act" type="button" title="Edit" data-id="{user.id}"'
+        f'{" data-has-password" if user.has_password else ""}'
+        + (f' data-source="{escape(user.source, quote=True)}"' if user.external else "")
+        + "".join(f' data-{k}="{escape(getattr(user, k.replace("-", "_")), quote=True)}"'
+                  for k in ("name", "first-name", "last-name", "email"))
+        + f' data-roles="{escape(json.dumps(user.roles), quote=True)}"'
+        f' onclick="openUser(this)">{_icon("pencil")}</button>'
+        f'<form method="post" action="/users/{user.id}/delete"'
+        " onsubmit=\"return confirm('Remove this user?')\">"
+        f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
+    )
+
+
+@dataclass
+class Option:
+    """One of a `multi_select`'s choices. `about`: a muted line beside the
+    label (and its tooltip); `data`: extra `data-*` on its checkbox, for a
+    page's own script."""
+    value: str
+    label: str
+    about: str = ""
+    data: dict[str, str] = field(default_factory=dict)
+    checked: bool = False
+
+
+def multi_select(name: str, options: list[Option], placeholder: str) -> str:
+    """A multi-select dropdown with search: the picked options as chips, a
+    search box after them, and a checkbox per option in the list under it —
+    the boxes submit as `name` (repeated), so the form reads like a checkbox
+    group. Driven by static/multi-select.js + multi-select.css, which the page
+    links."""
+    items = "".join(
+        f'<label class="ff-multi-item"{_tip(o.about)}>'
+        f'<input type="checkbox" name="{escape(name, quote=True)}" value="{escape(o.value, quote=True)}"'
+        f' data-label="{escape(o.label, quote=True)}"'
+        + "".join(f' data-{k}="{escape(v, quote=True)}"' for k, v in o.data.items())
+        + f'{" checked" if o.checked else ""}><span>{escape(o.label)}</span>'
+        + (f'<span class="ff-multi-about">{escape(o.about)}</span>' if o.about else "")
+        + "</label>"
+        for o in options
+    )
+    ph = escape(placeholder, quote=True)
+    return (
+        f'<div class="ff-multi" data-placeholder="{ph}">'
+        '<div class="ff-multi-box">'
+        # `form` names none, so the search's text is never submitted.
+        f'<input class="ff-multi-search" type="text" form="ff-none" placeholder="{ph}" aria-label="{ph}"'
+        ' autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false">'
+        "</div>"
+        f'<div class="ff-multi-list" role="listbox" aria-multiselectable="true" hidden>{items}'
+        f'<span class="ff-multi-none"{" hidden" if options else ""}>{"No matches" if options else "None yet"}</span>'
+        "</div></div>"
+    )
+
+
+# The user dialog's password: set by the admin, never shown back — the field is
+# always empty (`new-password`, so a browser offers to make one rather than
+# fill in the admin's own). On an edit, empty keeps the current one and the
+# trash removes it (gallery.js). The policy is checked again on the server.
+_PASSWORD_FIELD = (
+    '<div class="ff-password">'
+    '<input name="password" id="user-form-password" type="password" autocomplete="new-password"'
+    f' minlength="{auth.MIN_PASSWORD}" maxlength="{auth.MAX_PASSWORD}" spellcheck="false"'
+    ' placeholder="Password (optional)" aria-label="Password">'
+    f'<button type="button" class="ff-password-show" title="Show password" aria-label="Show password">{_icon("eye")}</button>'
+    f'<button type="button" class="ff-password-clear" title="Remove password" aria-label="Remove password" hidden>{_icon("trash")}</button>'
+    '<input type="hidden" name="clear_password" value="">'
+    "</div>"
+    # In its place for a user from another system, which owns the credentials.
+    f'<div class="ff-external" hidden>{_icon("external")}<span></span></div>'
+)
+
+
+def _user_dialog(roles: list[Role], reads: dict[str, list[str]]) -> str:
+    """One dialog for a new user and an edited one (gallery.js `openUser` fills
+    it from the row). The roles are a `multi_select`, each option carrying the
+    datasets it may read (`reads`: role name -> them), so picking one turns off
+    the roles that would read a dataset twice — the server checks again
+    (`role_clashes`)."""
+    boxes = multi_select("role", [
+        Option(r.id, r.name, r.description,
+               {"name": r.name, "reads": json.dumps(reads.get(r.name, [])),
+                **({"builtin": "1"} if r.builtin else {})})
+        for r in roles
+    ], "Roles")
+    return f"""
+<dialog id="user-dialog">
+  <form id="user-form" method="post" action="/users/new">
+    <h3>User</h3>
+    <input name="name" id="user-form-name" placeholder="User name" autocomplete="off" required>
+    <input name="first_name" placeholder="First name (optional)" autocomplete="off">
+    <input name="last_name" placeholder="Surname (optional)" autocomplete="off">
+    <input name="email" type="email" placeholder="Email (optional)" autocomplete="off">
+    {_PASSWORD_FIELD}
+    {boxes}
+    <div class="dialog-actions">
+      <button type="button" class="cancel"
+              onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="ok">Save</button>
+    </div>
+  </form>
+</dialog>"""
+
+
+def render_users(
+    users: list[User], roles: list[Role], title: str = "Fireflyer Portal", user_menu: str = "",
+    paths: list[str] | None = None, active_path: str | None = None,
+    reads: dict[str, list[str]] | None = None,
+) -> str:
+    """The Users list: every user, by name, with the roles they hold.
+    `reads`: role name -> the datasets it may read, for the dialog."""
+    table = list_table(
+        ["Name", "Roles", "Updated"], [_user_row(u) for u in users],
+        "No users yet", _add_button("New user", "openUser()"),
+    )
+    return _shell(
+        title, user_menu, "users", table,
+        head=assets.stylesheets("multi-select.css") + "\n" + assets.script("multi-select.js"),
+        extra=_user_dialog(roles, reads or {}),
+        paths=paths, active_path=active_path, users=True,
     )
 
 

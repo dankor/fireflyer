@@ -25,15 +25,33 @@ def _portable(text: str) -> str:
     return _CHART_ID_RE.sub(r"\1<ID>", text)
 
 
+@pytest.fixture
+def app_state():
+    """`app_state(name, value)`: set `app.state.<name>` for one test, put back
+    after it. Not `monkeypatch.setattr`: since pytest 9.2 it takes the old value
+    from the instance `__dict__`, and Starlette keeps `app.state` in a dict of
+    its own — so the undo deleted the attribute instead of restoring it."""
+    from fireflyer.web import app as app_mod
+
+    saved = {}
+
+    def put(name, value):
+        saved.setdefault(name, getattr(app_mod.app.state, name))
+        setattr(app_mod.app.state, name, value)
+
+    yield put
+    for name, value in saved.items():
+        setattr(app_mod.app.state, name, value)
+
+
 @pytest.fixture(autouse=True)
-def _roles_in_memory(monkeypatch):
+def _roles_in_memory(app_state):
     """Roles live in a database the app opens on first use — a file under
     FIREFLYER_DATA. Each test gets a fresh in-memory one instead, so the suite
     writes no file and no test sees another's roles."""
-    from fireflyer.web import app as app_mod
     from fireflyer.web.portal import RoleStore
 
-    monkeypatch.setattr(app_mod.app.state, "roles", RoleStore(":memory:"))
+    app_state("roles", RoleStore(":memory:"))
 
 
 @pytest.fixture

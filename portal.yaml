@@ -7,3 +7,24 @@ title: Fireflyer Portal
 # Postgres connection string. Leave unset to fall back to a local sqlite file
 # (portal.db) so you can try portal mode without standing up a database.
 # database_url: postgresql://fireflyer:fireflyer@localhost:5432/fireflyer
+
+# HTTPS. The portal serves it by default; the environment overrides each key
+# (FIREFLYER_TLS, FIREFLYER_TLS_CERT, FIREFLYER_TLS_KEY, FIREFLYER_TLS_HOSTS,
+# FIREFLYER_TLS_DIR).
+tls:
+  # auto: with no cert below, a self-signed certificate for `hosts` is made on
+  #       first start and kept in `dir` — HTTPS for local development (the
+  #       browser asks once; for no warning, make one with mkcert and set it
+  #       below: `mkcert -install && mkcert -cert-file certs/local.pem
+  #       -key-file certs/local-key.pem localhost 127.0.0.1`).
+  # off:  plain HTTP — behind a proxy that does TLS itself (Caddy, nginx, a
+  #       load balancer); allow its address in FIREFLYER_FORWARDED_ALLOW_IPS so
+  #       its X-Forwarded-Proto counts and the session cookie stays Secure.
+  mode: auto
+  # Your own certificate, for your domain (PEM: the full chain, and its key).
+  # Set both and they're used whatever `mode` says; HSTS is then turned on.
+  # cert: /certs/fullchain.pem
+  # key: /certs/privkey.pem
+  # The names the auto certificate covers.
+  hosts: [localhost, 127.0.0.1, "::1"]
+  dir: data/tls

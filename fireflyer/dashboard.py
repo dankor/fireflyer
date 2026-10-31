@@ -426,6 +426,7 @@ class Dashboard:
         grain_tokens: list[str] | None = None,
         open_filter: str = "",
         role: str = "",
+        user: str = "",
     ) -> str:
         """Layout-only render: cells are placeholders that hx-trigger on load.
 
@@ -449,8 +450,9 @@ class Dashboard:
         to come back with its panel open. Only in this response — it isn't kept
         as state, so the next click elsewhere doesn't reopen it.
 
-        `role` (an id) rides in a hidden input so each cell is rendered as that
-        role (`as_role`, applied by the route) — the editor's view-as picker.
+        `role` (a name) — or `user`, viewed through their roles — rides in a
+        hidden input so each cell is rendered as that role sees it (`as_role`,
+        applied by the route) — the editor's view-as picker.
         """
         cf_tokens = list(cf_tokens or [])
         grain_tokens = list(grain_tokens or [])
@@ -502,6 +504,7 @@ class Dashboard:
             editing=editing,
             open_filter=open_filter,
             role=role,
+            user=user,
             ff_theme=_normalize_theme(theme),
         )
 

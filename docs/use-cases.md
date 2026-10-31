@@ -32,6 +32,8 @@ status, amount and day.
   - [Edit columns with code](#edit-columns-with-code)
   - [Compare dataset versions](#compare-dataset-versions)
   - [Set dataset permissions](#set-dataset-permissions)
+- [Access](#access)
+  - [Add users and their roles](#add-users-and-their-roles)
 - [End-to-end](#end-to-end)
   - [Prototype a dashboard with AI and sample data](#prototype-a-dashboard-with-ai-and-sample-data)
   - [Let the AI discover your dataset and build the dashboard](#let-the-ai-discover-your-dataset-and-build-the-dashboard)
@@ -140,9 +142,11 @@ Edit or remove it from the same row.
 
 ### Filter with a role
 
-Previewing the dashboard as a role (the role picker in view mode) adds that
+Previewing the dashboard as a role (the view-as picker in view mode) adds that
 role's filters from each dataset's permissions to every chart; they lead the
-badge's list and can't be removed. Pick the role again to see everything.
+badge's list and can't be removed. Pick the role again to see everything. In
+portal mode, switch the picker to users to preview what a user sees through
+their roles; its search narrows either list.
 
 ![Viewing a dashboard as a role](../media/filter-role.webp)
 
@@ -197,6 +201,18 @@ In **permissions**, list the roles that may read the dataset: all of it
 many each role will see.
 
 ![Giving a role filtered access to a dataset](../media/dataset-permissions.webp)
+
+## Access
+
+### Add users and their roles
+
+In portal mode, **Users** lists the people: a user name, optionally a first
+name, surname and email, a password to sign in with, and the roles they hold —
+picked from a searchable dropdown. A user holds at most one role per dataset, so a role that would read
+a dataset another of theirs reads is struck out. The admin user (your login)
+and the `admin` role, which reads everything, are built in and locked.
+
+![Adding a user and their roles, then viewing the dashboard as them](../media/users-roles.webp)
 
 ## End-to-end
 

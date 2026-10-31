@@ -80,7 +80,7 @@ For anyone in a hurry. *"Add a table of orders."* *"Put the pie next to it."* *"
 - **Calcs** — sums, counts, averages and ratios, defined once and shared by every chart. [How →](docs/use-cases.md#create-a-dashboard-with-code)
 - **Filters** — fixed per chart, [click-to-filter across charts](docs/use-cases.md#filter-with-a-cross-filter), [global](docs/use-cases.md#filter-with-a-global-filter), and [per role](docs/use-cases.md#filter-with-a-role).
 - **Datasets** — [upload a CSV](docs/use-cases.md#upload-a-dataset), shape its columns with formulas, keep every version and [compare them](docs/use-cases.md#compare-dataset-versions).
-- **Access** — roles, [per-dataset permissions](docs/use-cases.md#set-dataset-permissions) with row filters, and a "view as" picker to preview what a role sees.
+- **Access** — roles, [users](docs/use-cases.md#add-users-and-their-roles) (portal), [per-dataset permissions](docs/use-cases.md#set-dataset-permissions) with row filters, and a "view as" picker to preview what a role or a user sees.
 - **History** — every save is a version; [compare any two](docs/use-cases.md#compare-versions) side by side.
 - **Private by design** — the AI sees your column names and types, never your data.
 - **Prototype on fake data** — ask the AI for sample data and it [writes it into the dashboard](docs/use-cases.md#prototype-a-dashboard-with-ai-and-sample-data).

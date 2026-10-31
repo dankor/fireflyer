@@ -77,6 +77,11 @@ table.dash-table { width:100%; border-collapse:separate; border-spacing:0; backg
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dash-table td.muted { color:var(--muted); }
 td.actions { text-align:right; white-space:nowrap; }
+/* The list's + heads the actions column: right-aligned over them, and trimmed
+   so the header row keeps its height. */
+.dash-table thead th.actions { text-align:right; padding-top:5px; padding-bottom:5px; }
+.dash-table td.empty-row { color:var(--muted); text-align:center; padding:36px 0; }
+.dash-table tbody tr:has(td.empty-row):hover { background:none; }
 td.actions form { display:inline; margin:0; }
 /* Actions are icon buttons — minimal text; meaning lives in the title tooltip. */
 .act { display:inline-flex; align-items:center; justify-content:center; gap:4px;
@@ -86,6 +91,28 @@ td.actions form { display:inline; margin:0; }
 .act svg { width:15px; height:15px; display:block; }
 .act:hover { border-color:var(--accent); color:var(--accent); }
 .act-danger:hover { border-color:var(--danger); color:var(--danger); }
+/* The user dialog's password, with its show and remove buttons inside the field. */
+dialog .ff-password { position:relative; margin-top:10px; }
+dialog .ff-password input[name=password] { padding-right:64px; }
+dialog .ff-password input[name=password]:disabled { opacity:.6; }
+dialog .ff-password button { position:absolute; top:50%; transform:translateY(-50%); display:flex;
+  padding:5px; border:0; border-radius:4px; background:none; color:var(--muted); cursor:pointer; }
+dialog .ff-password button svg { width:15px; height:15px; display:block; }
+dialog .ff-password button:hover, dialog .ff-password button.active { color:var(--accent); }
+dialog .ff-password .ff-password-clear.active { color:var(--danger); }
+dialog .ff-password .ff-password-show { right:6px; }
+dialog .ff-password .ff-password-clear { right:32px; }
+dialog .ff-password button[hidden] { display:none; }
+dialog .ff-password[hidden], dialog .ff-external[hidden] { display:none; }
+dialog .ff-external { display:flex; align-items:center; gap:8px; margin-top:10px; padding:8px 10px;
+  border:1px dashed var(--border); border-radius:4px; color:var(--muted); font-size:13px; }
+dialog .ff-external svg { width:15px; height:15px; flex:none; }
+dialog input[readonly] { color:var(--muted); }
+/* How a user signs in, beside the name: a key (a password), or another system. */
+.dash-table .ff-key { display:inline-flex; vertical-align:-2px; margin-left:6px; color:var(--muted); }
+.dash-table .ff-key svg { width:13px; height:13px; }
+/* A built-in's padlock: where its edit and remove would be, not a button. */
+.act-locked, .act-locked:hover { border-color:transparent; color:var(--muted); cursor:default; }
 .act .badge { font-weight:600; }
 .link-list { list-style:none; padding:0; margin:0; }
 .link-list li { border-bottom:1px solid var(--border); }
@@ -93,8 +120,6 @@ td.actions form { display:inline; margin:0; }
 .link-list a { display:block; padding:9px 4px; color:var(--text);
   text-decoration:none; font-size:14px; }
 .link-list a:hover { color:var(--accent); }
-.empty { color:var(--muted); text-align:center; padding:44px 0;
-  background:var(--panel); border:1px solid var(--border); border-radius:8px; }
 dialog { border:1px solid var(--border); border-radius:10px; padding:0;
   background:var(--panel); color:var(--text); width:340px; }
 dialog::backdrop { background:rgba(0,0,0,.4); }
@@ -224,6 +249,10 @@ table.ds-cols { border-collapse:collapse; width:100%; font-size:13px; }
   text-overflow:ellipsis; }
 a.ref:hover { border-color:var(--accent); color:var(--accent); }
 .ref.is-missing { color:var(--muted); border-style:dashed; }
+/* Built-ins (the admin role and user) in the accent colour: the service ones. */
+.ref.is-builtin { color:var(--accent); border-color:var(--accent); }
+.dash-table tr.is-builtin .name, .dash-table tr.is-builtin .act-locked { color:var(--accent); }
+.dash-table tr.is-builtin td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
 .ds-cols th { white-space:nowrap; }
 /* Edit mode: drop a column (✕), add one (＋). */
 .col-drop, .col-add { border:1px solid var(--border); border-radius:4px; background:none;
