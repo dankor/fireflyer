@@ -46,8 +46,9 @@ services:
       --host 0.0.0.0 --port 8000 --reload
 
   # Portal mode: `docker compose --profile portal up --build`. Brings up Postgres
-  # and serves the dashboard gallery on http://127.0.0.1:8001 (8001 so it can run
-  # alongside the default single-dashboard editor on 8000).
+  # and serves the dashboard gallery on https://127.0.0.1:8001 (8001 so it can run
+  # alongside the default single-dashboard editor on 8000) — HTTPS with a
+  # certificate made for localhost on first start (see portal.yaml → tls).
   postgres:
     image: postgres:16
     profiles: ["portal"]
@@ -97,6 +98,15 @@ services:
       # FIREFLYER_S3_ACCESS_KEY: <access key id>
       # FIREFLYER_S3_SECRET_KEY: <secret access key>
       # FIREFLYER_S3_REGION: garage
+      # HTTPS: the made-up localhost certificate lives on the volume, so it
+      # stays the same across restarts. For your domain, mount your certificate
+      # (the commented volume below) and point at it — or, behind a proxy that
+      # does TLS, set FIREFLYER_TLS: "off" and FIREFLYER_FORWARDED_ALLOW_IPS to
+      # its address ("*" on a private network).
+      FIREFLYER_TLS_DIR: /data/tls
+      # FIREFLYER_TLS_HOSTS: localhost,127.0.0.1,dashboards.example.com
+      # FIREFLYER_TLS_CERT: /certs/fullchain.pem
+      # FIREFLYER_TLS_KEY: /certs/privkey.pem
     ports:
       - "8001:8000"
     volumes:
@@ -106,6 +116,7 @@ services:
       # into the image, so editing it hot-reloads like source does.
       - ./demo:/app/demo
       - datasets:/data
+      # - ./certs:/certs:ro
     command: python -m fireflyer.portal
 
 volumes:

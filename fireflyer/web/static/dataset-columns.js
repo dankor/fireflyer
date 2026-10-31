@@ -569,7 +569,13 @@ function syncAccess() {
     fd.append('mapping', text);
     const res = await fetch(`${base}/access/yaml`, {method: 'POST', body: fd});
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) { toast(body.error || 'Could not apply'); return; }
+    if (!res.ok) {
+      // Refused (a user would hold two roles here, say): back to the YAML's.
+      toast(body.error || 'Could not apply');
+      accessForm = null;
+      if (mode === 'access') await showAccess();
+      return;
+    }
     text = accessFor = body.mapping;
     updateSave();
   });

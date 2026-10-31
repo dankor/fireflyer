@@ -43,6 +43,90 @@ function openRename(btn){
   if (about) about.value = btn.dataset.description || '';
   d.showModal(); input.select();
 }
+// The user dialog, new (no row) or for a row's user: its name, the optional
+// first name, surname and email, and its roles. A user holds at most one role per dataset, so a ticked role turns
+// off every role that would read one of the same datasets.
+function openUser(btn){
+  var d = document.getElementById('user-dialog');
+  var form = document.getElementById('user-form');
+  var held = btn ? JSON.parse(btn.dataset.roles || '[]') : [];
+  form.action = btn ? '/users/' + btn.dataset.id + '/edit' : '/users/new';
+  form.querySelector('h3').textContent = btn ? 'Edit user' : 'New user';
+  document.getElementById('user-form-name').value = btn ? btn.dataset.name : '';
+  form.elements.first_name.value = btn ? btn.dataset.firstName : '';
+  form.elements.last_name.value = btn ? btn.dataset.lastName : '';
+  form.elements.email.value = btn ? btn.dataset.email : '';
+  userPassword(form, btn ? 'hasPassword' in btn.dataset : false);
+  userSource(form, btn ? btn.dataset.source || '' : '');
+  form.querySelectorAll('input[name=role]').forEach(function (box) {
+    box.checked = held.indexOf(box.dataset.name) >= 0;
+  });
+  userClashes(form);
+  window.ffMulti.paint(form.querySelector('.ff-multi'));
+  d.showModal(); document.getElementById('user-form-name').select();
+}
+// The password: never filled in — there's nothing to show back, only a hash.
+// An edit of a user who has one says empty keeps it, and offers the trash to
+// remove it (pressed again, it's kept after all).
+function userPassword(form, has){
+  var input = form.elements.password;
+  input.value = '';
+  input.type = 'password';
+  input.disabled = false;
+  input.placeholder = has ? 'New password (empty keeps it)' : 'Password (optional)';
+  form.elements.clear_password.value = '';
+  var clear = form.querySelector('.ff-password-clear');
+  clear.hidden = !has;
+  clear.classList.remove('active');
+}
+document.addEventListener('click', function (e) {
+  var show = e.target.closest && e.target.closest('#user-form .ff-password-show');
+  var clear = e.target.closest && e.target.closest('#user-form .ff-password-clear');
+  if (!show && !clear) return;
+  var form = e.target.closest('form'), input = form.elements.password;
+  if (show) {
+    var hidden = input.type === 'password';
+    input.type = hidden ? 'text' : 'password';
+    show.title = show.ariaLabel = hidden ? 'Hide password' : 'Show password';
+    show.classList.toggle('active', hidden);
+  } else {
+    var removing = !form.elements.clear_password.value;
+    form.elements.clear_password.value = removing ? '1' : '';
+    input.value = '';
+    input.disabled = removing;
+    input.placeholder = removing ? 'No password — can\'t sign in' : 'New password (empty keeps it)';
+    clear.classList.toggle('active', removing);
+  }
+});
+// A user from another system (SSO, LDAP…): it owns the name and the
+// credentials, so the name is read-only and there's no password — only who
+// they sign in through. The roles are still managed here.
+function userSource(form, source){
+  form.elements.name.readOnly = !!source;
+  form.querySelector('.ff-password').hidden = !!source;
+  var external = form.querySelector('.ff-external');
+  external.hidden = !source;
+  external.querySelector('span').textContent = source ? 'Signs in through ' + source : '';
+}
+function userClashes(form){
+  var boxes = Array.prototype.slice.call(form.querySelectorAll('input[name=role]'));
+  var reads = function (box) { return JSON.parse(box.dataset.reads || '[]'); };
+  boxes.forEach(function (box) {
+    var clash = null, mine = reads(box);
+    boxes.forEach(function (other) {
+      if (clash || other === box || !other.checked) return;
+      var shared = reads(other).filter(function (ds) { return mine.indexOf(ds) >= 0; });
+      if (shared.length) clash = other.dataset.name + ' — both read ' + shared[0];
+    });
+    box.disabled = !box.checked && !!clash;
+    var item = box.closest('label');
+    if (!('about' in item.dataset)) item.dataset.about = item.title;   // the role's description
+    item.title = box.disabled ? 'Clashes with ' + clash : item.dataset.about;
+  });
+}
+document.addEventListener('change', function (e) {
+  if (e.target.matches && e.target.matches('#user-form input[name=role]')) userClashes(e.target.form);
+});
 function openUpload(){ document.getElementById('upload-dialog').showModal(); }
 
 // A dataset's name and description, as a dashboard's in the editor: the

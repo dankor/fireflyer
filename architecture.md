@@ -499,9 +499,15 @@ start with the role's on its dataset, listed first in the filter panel under a
 role icon and not removable; a chart on a dataset the role can't read, or whose
 role filter names a column the data lacks, shows a lock instead of data (never
 the unfiltered rows). Inline data is the dashboard's own and never restricted.
-The pick rides in the URL (`?role=<name>`), holds only in view mode, and picking
-it again turns it off. This is a **preview**: nothing yet ties a viewer to a
-role, so nothing is enforced.
+It can view as a **user** too (portal mode): the picker's menu leads with a
+roles | users switch (people for roles, a person for users), one list at a time,
+and a search that narrows it (Enter picks the first match). A user is viewed
+through their roles — each dataset by the one role of theirs that may read it,
+the built-in `admin` reading all of it in full; a user with no such role sees a
+lock. The button shows the pick's name and icon. The pick rides in the URL
+(`?role=<name>` or `?user=<name>`), holds only in view mode, and picking it
+again turns it off. This is a **preview**: nothing yet ties a viewer to a role
+or a user, so nothing is enforced.
 
 **Builds run in the background.** Saving a mapping or uploading a file only
 records the new version (`create` / `replace` / `remap` with `build=False`);
@@ -1137,8 +1143,38 @@ authentication, multiple *users*, or caching; those stay out of scope.
 Off by default: `python -m fireflyer.web` serves the usual single-dashboard
 editor at `/`. Portal mode is switched on by the `FIREFLYER_PORTAL` environment
 variable; the `python -m fireflyer.portal` entrypoint sets it, reads runtime
-config from `portal.yaml` (title, database url; the environment overrides the
-file), and binds `0.0.0.0` for containers. With it on, `/` becomes the gallery.
+config from `portal.yaml` (title, database url, tls; the environment overrides
+the file), and binds `0.0.0.0` for containers. With it on, `/` becomes the gallery.
+
+### HTTPS
+
+The portal serves **HTTPS by default** — it has logins and passwords — in one of
+three ways (`fireflyer.portal.tls_settings`, from `portal.yaml`'s `tls:` and
+`FIREFLYER_TLS*`, the environment winning):
+
+- **auto** (the default, for local development): with no certificate given, a
+  self-signed one is made on first start for `tls.hosts` (localhost, 127.0.0.1,
+  ::1 by default; `FIREFLYER_TLS_HOSTS`) and kept in `tls.dir`
+  (`FIREFLYER_TLS_DIR`, `data/tls`; on the compose volume) — an EC P-256 key
+  readable by its owner only, valid 397 days (browsers refuse longer), and
+  remade a month before it ends or when the hosts change. The browser asks once;
+  for no warning, make a locally trusted one with `mkcert` and give it as below.
+- **your certificate** — `tls.cert` + `tls.key` (`FIREFLYER_TLS_CERT` / `_KEY`,
+  PEM: the full chain and its key), a team's for its own domain; mounted into
+  the container (`./certs:/certs:ro` in compose). Then, and only then, **HSTS**
+  is sent (`Strict-Transport-Security: max-age=31536000`, `FIREFLYER_HSTS`) —
+  never with the local one, where it would follow the browser to every other
+  local app.
+- **off** (`FIREFLYER_TLS=off`): plain HTTP, for behind a proxy that does TLS
+  itself (Caddy, nginx, a load balancer). uvicorn trusts `X-Forwarded-Proto`
+  from `FIREFLYER_FORWARDED_ALLOW_IPS` (127.0.0.1 by default; the proxy's
+  address, or `*` on a private network), so the app still sees HTTPS.
+
+Whichever way, **the session cookie is `Secure` whenever the request is HTTPS**
+(served so, or forwarded so), besides `HttpOnly` and `SameSite=Lax`. Plain HTTP
+to an HTTPS port is refused rather than redirected (one port, one protocol).
+`FIREFLYER_PORT` sets the port (8000). The single-dashboard editor
+(`python -m fireflyer.web`) stays plain HTTP on 127.0.0.1 — no login there.
 
 ## It reuses the editor unchanged
 
@@ -1311,7 +1347,9 @@ its **description** (optional — the small line under the name, as a dashboard'
 is, and the role's tooltip wherever it's offered: the view-as picker and a
 dataset's permissions), when it last changed, and a **Datasets** column linking
 the datasets whose published permissions name it (see **Permissions**). It's the
-gallery's usual CRUD — **+** in the topbar adds one, a pencil edits its name and
+gallery's usual CRUD — **+** at the head of the table's actions column adds one
+(every list page puts its + there; an empty list keeps its header, the + in it,
+over a "No … yet" row), a pencil edits its name and
 description, the trash removes it (with a confirm) — in the same native
 `<dialog>` the dashboards list uses. Routes: `GET /access`, `POST /access/new`,
 `POST /access/{id}/rename`, `POST /access/{id}/delete`; a bad name (empty,
@@ -1328,6 +1366,69 @@ list page, in every mode. Datasets name roles **by name**, so renaming a role
 rewrites — and removing one drops it from — every dataset's permissions, in
 every path: a new mapping version each.
 
+In portal mode the roles table holds one **built-in** role, `admin` (created
+when missing): it reads **every dataset in full**, so no dataset's permissions
+name it — the permissions form neither lists nor writes it — and its Datasets
+cell reads **All**. It can't be renamed or removed: a padlock stands where its
+pencil and trash would be, and its row is in the accent colour, as the service
+one. Local mode has no built-ins.
+
+## Users tab
+
+Portal mode only — it has a login, so there are people. The fourth list page
+lists **users**: a name each (trimmed, unique, required), an optional **first
+name**, **surname** and **email** (shown as the small line under the name —
+"Bob Smith · bob@example.com" — as a role's description is; an email needs an
+`@`), and the **roles** they hold. **+** adds one, a pencil edits, the trash
+removes (with a confirm), in one native `<dialog>` whose roles field is a
+**multi-select dropdown with search** — the picked roles as chips, a checkbox
+per role in the list under them (`portal.multi_select`, with
+`static/multi-select.js`/`.css`: a shared control, for any other multi-pick).
+Routes: `GET /users`, `POST /users/new`, `POST /users/{id}/edit`,
+`POST /users/{id}/delete` — 404 outside portal mode; a bad name or email, or a
+clash, is a 400.
+
+Users live in the roles' database: a `users` table (`id`, `name` UNIQUE,
+`first_name`, `last_name`, `email`, `created_at`, `updated_at`) and
+`user_roles` (`user_id`, `role_id`) — roles held **by id**, so a renamed role
+stays held and a removed one is dropped.
+
+**A user holds at most one role per dataset**, so what they see of a dataset is
+one role's filters, never two to choose between. It's checked both ways, against
+every path's datasets: saving a user whose roles would both read a dataset is
+refused ("carol can't hold admin and viewer: both may read orders"), and so is a
+dataset permission change — in the form or the mapping YAML — that would give a
+user two roles there. The dialog disables a clashing role first (struck out, its
+title saying which role it clashes with, on which dataset). The built-in `admin`
+reads every dataset, so it clashes with any role that reads one.
+
+The **login is the built-in admin user** (`FIREFLYER_USER`, default `admin`):
+not a row, listed first, holding `admin`, its name reserved; it can't be edited
+or removed — a padlock, the accent colour, as the admin role.
+
+**Passwords.** An admin sets a user's password in the same dialog; a user with
+one can sign in (a key beside their name in the list), one without can't.
+- **Stored as a hash only** — salted **scrypt** (`hashlib`, OWASP's minimum:
+  n=2¹⁷, r=8, p=1; a fresh 16-byte salt each time), kept as
+  `scrypt$n$r$p$salt$hash` in `users.password_hash` so the cost can rise without
+  breaking stored ones. Never the password, never logged, and the hash never
+  leaves `RoleStore`: pages only learn `has_password`.
+- **Checked in constant time** (`hmac.compare_digest`), and an unknown name or a
+  user with no password is hashed against a stand-in, so a miss takes as long as
+  a wrong password. Policy: 8–256 characters (the cap keeps refusing cheap),
+  checked before anything is saved.
+- **Sessions end with the password.** Each user has a random `session_key`,
+  rotated when the password is set or removed; the session cookie carries it, and
+  the login guard turns away a cookie whose key isn't the user's current one — so
+  a new password, a removed one, or deleting the user signs them out everywhere.
+- **The form never shows a password back**: the field is always empty
+  (`type=password`, `autocomplete=new-password`), with a show/hide toggle; on an
+  edit, empty keeps the current one and the trash in the field removes it.
+- **Only admins manage users** — the env login, or a user holding `admin`. For
+  anyone else the Users tab is hidden and its routes, and the Access tab's
+  role changes, answer 403. Signing in as a user is not yet *enforced* on the
+  data: dashboards still show everything; view-as is how to preview a user.
+
 ## Authentication
 
 Portal mode is gated behind a login (`fireflyer/web/auth.py`). The default is a
@@ -1342,39 +1443,60 @@ whole point — it's what makes advanced schemes easy:
 
 1. **Who is allowed in** — the `Authenticator` protocol. Its one method,
    `verify(username, password) -> identity | None`, is the credential check.
-   The default `PasswordAuthenticator` compares against the configured user.
+   The default is `AnyOf(PasswordAuthenticator, <the portal's users>)`: the
+   configured env user first, then the Users tab's people by their stored
+   password hash (see **Users tab → Passwords**).
    Swap it for anything — an LDAP bind, a database user table, an API-key
    lookup — by implementing that single method and setting
    `app.state.authenticator`.
 2. **How the identity is remembered** — a session in an HMAC-signed cookie
    (`set_session` / `current_user` / `clear_session`), signed with
-   `FIREFLYER_SECRET`. This is completely independent of *how* the identity was
-   proven.
+   `FIREFLYER_SECRET`. It carries the identity and a stored user's session key
+   (empty for the env login or an SSO identity). This is completely independent
+   of *how* the identity was proven.
 
 A single middleware guard redirects any unauthenticated request to `/login`;
 `GET/POST /login` and `POST /logout` are the only auth routes. The topbar shows
 the signed-in username and a **Log out** button, in both the gallery and the
 editor.
 
-### Adding SSO / OAuth (not implemented — the recipe)
+### Users from other systems — SSO, LDAP, … (the seam; no provider is built in)
 
-Because "how you remember the identity" is separate from "how you proved it," an
-external-IdP flow (Google, Okta, SAML, OIDC…) slots in **without touching the
-portal routes or the guard**:
+A user has a **source**: `local` (a password kept here) or the name of the
+system that proves who they are — `sso`, `ldap`, `google`, whatever the
+integration calls itself. **Every session starts in one function,
+`app.sign_in(request, response, identity, source="local", **profile)`**: the login form
+calls it, and so does any other system once it trusts who someone is. For an
+outside source it **provisions** the user (`RoleStore.provision`) — made the
+first time with that source, no roles and no password; their `first_name` /
+`last_name` / `email` refreshed from `profile` on each sign-in — and hands back
+their session key, so they're signed out like anyone else when an admin deletes
+them (and come back with no roles if they sign in again). A name a local user,
+the admin, or another provider holds is refused: one system can't sign in as
+another's user.
 
-1. Add a provider route pair — e.g. `GET /login/oauth` that redirects to the
-   IdP, and `GET /auth/callback` that exchanges the code and verifies the token.
-2. In the callback, on success call `set_session(response, <identity>)` — the
-   same session layer the password flow already uses.
-3. Point the login page's button at your provider route instead of (or
-   alongside) the password form.
+Their name and credentials belong to the provider, so the Users tab shows the
+provider (an arrow-out-of-a-box beside the name, "Signs in through sso" on
+hover), makes the name read-only and offers no password; **roles stay managed
+here**, as for anyone. Two ways to plug one in:
 
-The guard, logout, `current_user`, and every portal route stay exactly as they
-are: they only ever ask "is there a valid session?", never "how did you log
-in?". Enterprise concerns beyond this seam — per-user ownership/sharing (extend
-the store's rows with the identity `current_user` returns), roles, token
-refresh — are deliberately out of scope for the MVP; the seams are here so they
-can be added without a rewrite.
+1. **A credential check** (LDAP bind, another user table): an `Authenticator`
+   with `source = "ldap"` and `verify(username, password) -> identity | None`,
+   added to the `AnyOf` in `app.state.authenticator`. The login form does the
+   rest — `auth.identify` reports which authenticator accepted, and `sign_in`
+   provisions its users as `ldap`.
+2. **A redirect flow** (OIDC / OAuth / SAML — Google, Okta, Entra…): a route pair
+   **under `/auth/`**, which the login guard leaves open because it runs before
+   there's a session — `GET /auth/<provider>` redirects to the IdP, and
+   `GET /auth/<provider>/callback` exchanges the code, verifies the token, then
+   calls `sign_in(request, response, <identity>, "<provider>", first_name=…, email=…)`.
+   Add a button for it to the login page.
+
+The guard, logout, `current_user`, the admin checks and every portal route stay
+as they are: they only ask "is there a valid session, and whose?", never "how
+did you log in?". Token refresh, group-to-role mapping (a provider's groups
+could pick the user's roles in `provision`), and a stable subject id beside the
+name are left for when an integration needs them.
 
 ## Local paths mode (no database)
 

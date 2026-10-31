@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-31
+
+### Fixed
+
+- The test suite under pytest 9.2: its `monkeypatch.setattr` now restores
+  from the instance `__dict__`, which Starlette's `app.state` doesn't use, so
+  the undo deleted state (`roles`, …) and every later test errored. Tests set
+  `app.state` through a small `app_state` fixture (`tests/conftest.py`) instead.
+
+### Changed
+
+- Every list page (Dashboards, Datasets, Access, Users) puts its **+** at the
+  head of the table's actions column instead of the topbar; an empty list keeps
+  its header (and the +) over a "No … yet" row.
+
+### Added
+
+- **Users** (portal mode): a fourth list tab beside Dashboards, Datasets and
+  Access — add, edit and remove users, each with a name, an optional first
+  name, surname and email (shown under the name, as a role's description is),
+  and the roles they hold. Kept in the roles database (`users` + `user_roles`, by role id, so a
+  renamed role stays held; a removed one is dropped).
+- The user dialog picks roles from a **multi-select dropdown with search**
+  (chips for the picked ones; ↑ ↓ Enter, Backspace drops the last) — a shared
+  control, `portal.multi_select` + `static/multi-select.js`/`.css`, for any
+  other multi-pick.
+- A user holds **at most one role per dataset**: the user dialog turns off a
+  role that would read a dataset another ticked role reads, and the server
+  refuses it — on a user's save, and on a dataset's permissions change (the
+  access form or the mapping YAML) that would give a user two roles there.
+- **Built-in admin** (portal mode): the `admin` role — every dataset in full,
+  so no dataset's permissions name it — and the admin user (the login,
+  `FIREFLYER_USER`) who holds it. Neither can be renamed, edited or removed:
+  a padlock where their actions would be, and the accent colour on their rows,
+  the admin chip and their entries in the view-as picker.
+- `docs/use-cases.md` → "Add users and their roles", with its recording;
+  `scripts/record.py` records a use case's clip (dev-only: Playwright + Pillow).
+- **Passwords** (portal mode): an admin sets a user's password in the user
+  dialog (never shown back; empty keeps it, the trash removes it) and the user
+  signs in with it. Stored only as a salted scrypt hash, checked in constant
+  time; setting or removing a password, or deleting the user, signs them out
+  everywhere. Only admins (the login, or a user holding `admin`) manage users
+  and roles.
+- **Users from other systems** (SSO, LDAP, …): a user's `source` says who
+  proves who they are. `app.sign_in` starts every session and provisions an
+  outside identity as a user the first time (no roles, no password; profile
+  refreshed after); an `Authenticator` can name its `source`, and routes under
+  `/auth/` are left open for a provider's redirect and callback. External users
+  show their provider, keep their name and have no password here.
+- **HTTPS for portal mode**: `python -m fireflyer.portal` serves HTTPS by
+  default — a self-signed certificate for localhost is made on first start
+  (kept in `data/tls`), so local development works out of the box; a team sets
+  its own certificate for its domain (`tls.cert` / `tls.key` in `portal.yaml`,
+  or `FIREFLYER_TLS_CERT` / `_KEY`; then HSTS too), or turns it off behind a
+  TLS proxy (`FIREFLYER_TLS=off`, forwarded headers trusted from
+  `FIREFLYER_FORWARDED_ALLOW_IPS`). The session cookie is `Secure` over HTTPS.
+  `cryptography` joins the `.[portal]` extra, and the `.[test]` one for its tests.
+- **View as a user**: the editor's view-as picker has a roles | users switch at
+  the head of its menu, one list at a time, and a search that narrows it
+  (Enter picks the first match); picking one renders the dashboard through that user's roles
+  (`?user=<name>` in the URL, as `?role=` for a role).
+
 ## [0.21.0] - 2026-10-27
 
 ### Added
@@ -1232,7 +1294,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/dankor/fireflyer/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/dankor/fireflyer/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/dankor/fireflyer/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/dankor/fireflyer/compare/v0.18.0...v0.19.0

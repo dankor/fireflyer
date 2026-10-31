@@ -1,0 +1,43 @@
+/* A multi-select dropdown with search (`portal.multi_select`, driven by
+   multi-select.js): the picked values as chips in a field-like box, the
+   search typed after them, and the list — a checkbox per option — under it.
+   Uses the page's palette (--bg, --panel, --border, --text, --muted,
+   --accent), which the gallery and the editor both define. Selectors carry
+   `.ff-multi` so a page's own `input` rules (a dialog's) don't reach in. */
+.ff-multi { position:relative; margin-top:10px; }
+.ff-multi .ff-multi-box { display:flex; flex-wrap:wrap; align-items:center; gap:4px;
+  min-height:36px; box-sizing:border-box; padding:4px 6px; cursor:text;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg); }
+.ff-multi .ff-multi-box:focus-within { border-color:var(--accent); }
+.ff-multi .ff-multi-chip { display:inline-flex; align-items:center; gap:2px; padding:2px 2px 2px 8px;
+  border:1px solid var(--border); border-radius:999px; background:var(--panel);
+  color:var(--text); font-size:12.5px; line-height:1.4; }
+.ff-multi .ff-multi-chip button { border:0; background:none; color:var(--muted); cursor:pointer;
+  padding:0 5px; font:inherit; font-size:14px; line-height:1; border-radius:999px; }
+.ff-multi .ff-multi-chip button:hover { color:var(--text); }
+.ff-multi input.ff-multi-search { display:block; flex:1 1 60px; width:auto; min-width:60px; margin:0;
+  padding:4px; border:0; background:none; color:var(--text); font:inherit; font-size:14px; outline:0; }
+.ff-multi .ff-multi-list { position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:20;
+  display:flex; flex-direction:column; max-height:200px; overflow:auto; padding:4px;
+  border:1px solid var(--border); border-radius:4px; background:var(--panel);
+  box-shadow:0 8px 24px rgba(0,0,0,.18); }
+.ff-multi .ff-multi-list[hidden] { display:none; }
+.ff-multi .ff-multi-item { display:flex; align-items:baseline; gap:8px; margin:0; padding:6px 8px;
+  border-radius:3px; color:var(--text); font-size:13px; cursor:pointer; }
+.ff-multi .ff-multi-item[hidden] { display:none; }
+.ff-multi .ff-multi-item:hover, .ff-multi .ff-multi-item.is-active { background:var(--bg); }
+.ff-multi .ff-multi-item input { display:inline; width:auto; margin:0; padding:0; flex:none;
+  align-self:center; accent-color:var(--accent); }
+.ff-multi .ff-multi-about { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--muted); font-size:12px; }
+/* A built-in option (`data-builtin` on its box) and its chip: accent. */
+.ff-multi .ff-multi-item:has(input[data-builtin]) > span:first-of-type,
+.ff-multi .ff-multi-chip.is-builtin { color:var(--accent); border-color:var(--accent); }
+/* An option that can't be picked now (its title says why). */
+.ff-multi .ff-multi-item:has(input:disabled) { color:var(--muted); cursor:not-allowed; }
+.ff-multi .ff-multi-item:has(input:disabled) > span:first-of-type { text-decoration:line-through; }
+.ff-multi .ff-multi-none { padding:6px 8px; color:var(--muted); font-size:12.5px; }
+.ff-multi .ff-multi-none[hidden] { display:none; }
+/* A dialog clips what overflows it (the UA's `overflow:auto`): the open list
+   would be cut at its bottom edge. */
+dialog:has(.ff-multi) { overflow:visible; }
