@@ -7,7 +7,7 @@ import os
 import pytest
 
 from fireflyer.web.paths import PathDashboardStore
-from fireflyer.web.portal import SqliteStore
+from fireflyer.web.portal import SqlStore
 
 PIE = """name: Sales
 calcs:
@@ -34,7 +34,7 @@ def _pairs(store):
 @pytest.fixture(params=["sql", "paths"])
 def store(request, tmp_path):
     if request.param == "sql":
-        return SqliteStore(":memory:")
+        return SqlStore(":memory:")
     return PathDashboardStore(str(tmp_path / "path"), index=str(tmp_path / "data" / "uses.json"))
 
 
@@ -57,7 +57,7 @@ def test_saving_and_deleting_keep_it_true(store):
 
 
 def test_a_dashboard_from_before_the_index_is_indexed_when_read():
-    store = SqliteStore(":memory:")
+    store = SqlStore(":memory:")
     store.create(PIE, "dana")
     store._run("DELETE FROM dashboard_uses", ())
     assert ("Sales", "orders", "status") in _pairs(store)

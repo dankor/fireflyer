@@ -17,6 +17,8 @@ from pathlib import Path
 import uvicorn
 import yaml
 
+from fireflyer.web.portal import database_url
+
 # The names a made-up local certificate covers, unless `tls.hosts` says more.
 LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1"]
 # Browsers refuse a certificate valid for more than 398 days; a local one is
@@ -130,6 +132,7 @@ def main() -> None:
         os.environ["FIREFLYER_PORTAL_TITLE"] = cfg["title"]
     if cfg.get("database_url") and "DATABASE_URL" not in os.environ:
         os.environ["DATABASE_URL"] = cfg["database_url"]
+    database_url()                    # Postgres, or stop here and say so
 
     tls = tls_settings(cfg, os.environ)
     # HSTS only with a team's own certificate: telling a browser to insist on

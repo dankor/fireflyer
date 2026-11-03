@@ -98,6 +98,7 @@ function updateSaveState() {
 if (discardBtn) {
   discardBtn.addEventListener('click', () => {
     if (!confirm('Discard your unsaved changes?')) return;
+    logActivity('discard');
     codeEl.value = savedYaml;
     run();
   });
@@ -108,8 +109,32 @@ if (discardBtn) {
 // localStorage per dashboard (a viewer's own working state, never shared) on
 // every change, dropped once saved or undone, and restored when the page opens.
 // Storage may be off (a private window); then nothing is kept, nothing breaks.
-const dashId = document.body.dataset.dashId || '';
-const DRAFT_KEY = 'ff-draft:' + (dashId || location.pathname);
+// `let`: a portal dashboard's name is its id, so a save that renames it moves
+// it (`moveTo`).
+let dashId = document.body.dataset.dashId || '';
+let DRAFT_KEY = 'ff-draft:' + (dashId || location.pathname);
+
+// The activity log (portal): the editor's routes take YAML, not an id, so each
+// request says which dashboard it's about — fetch and htmx alike. Encoded, as
+// a header is Latin-1 and a name needn't be.
+const DASH_HEADER = 'X-FF-Dashboard';
+const pageFetch = fetch;
+window.fetch = function(url, options) {
+  if (!dashId || new URL(url, location.href).origin !== location.origin) return pageFetch(url, options);
+  const headers = new Headers((options && options.headers) || {});
+  headers.set(DASH_HEADER, encodeURIComponent(dashId));
+  return pageFetch(url, Object.assign({}, options, {headers}));
+};
+document.addEventListener('htmx:configRequest', e => {
+  if (dashId) e.detail.headers[DASH_HEADER] = encodeURIComponent(dashId);
+});
+// What happens here with no request of its own (discard, a mode, view as).
+function logActivity(action, detail) {
+  try {
+    const body = new URLSearchParams(Object.assign({action, dashboard: dashId}, detail));
+    navigator.sendBeacon('/activity', body);
+  } catch (e) { /* no beacon here: not logged */ }
+}
 function keepDraft() {
   try {
     if (codeEl.value === savedYaml) localStorage.removeItem(DRAFT_KEY);
@@ -152,7 +177,7 @@ if (typeof MutationObserver !== 'undefined') {
 // For other modules (the compare view): the text, the last-saved text, which
 // dashboard, and a way to set the text — as an outside edit would, unsaved.
 window.ffEditor = {
-  dashId,
+  get dashId() { return dashId; },
   get yaml() { return codeEl.value; },
   get savedYaml() { return savedYaml; },
   setYaml(text) { codeEl.value = text; run(); },
@@ -356,7 +381,10 @@ async function doSave() {
     });
     const data = await res.json();
     saved = !!data.ok;
-    if (saved) { savedYaml = codeEl.value; keepDraft(); saveBtn.innerHTML = SAVED_ICON; }
+    if (saved) {
+      savedYaml = codeEl.value; keepDraft(); saveBtn.innerHTML = SAVED_ICON;
+      if (data.id && data.id !== dashId) moveTo(data.id);
+    }
     else flash('Save failed: ' + (data.error || 'unknown error'), 8000);
   } catch (e) { flash('Save failed: ' + e, 8000); }
   finally {
@@ -364,6 +392,23 @@ async function doSave() {
     if (discardBtn && saved) discardBtn.hidden = true;
     setTimeout(function() { saveBtn.innerHTML = icon; updateSaveState(); }, saved ? 1000 : 0);
   }
+}
+
+// A save renamed the dashboard: it lives at its new name now — the address,
+// the save URL, and the conversation kept under it follow (the draft was just
+// dropped by the save).
+function moveTo(id) {
+  const oldChat = CHAT_KEY;
+  dashId = id;
+  DRAFT_KEY = 'ff-draft:' + id;
+  CHAT_KEY = 'ff-chat:' + id;
+  try {
+    const kept = localStorage.getItem(oldChat);
+    if (kept !== null) { localStorage.setItem(CHAT_KEY, kept); localStorage.removeItem(oldChat); }
+  } catch (e) { /* storage off: nothing kept to move */ }
+  const path = '/d/' + encodeURIComponent(id);
+  saveBtn.dataset.saveUrl = path + '/save';
+  window.history.replaceState(window.history.state, '', path + location.search + location.hash);
 }
 
 if (saveBtn) {
@@ -576,6 +621,7 @@ if (rolePick) {
     if (viewRole) url.searchParams.set('role', viewRole);
     if (viewUser) url.searchParams.set('user', viewUser);
     window.history.replaceState(null, '', url);
+    logActivity('view_as', {role: viewRole, user: viewUser});
     paintRole();
     run();
   });
@@ -590,6 +636,7 @@ const modeHooks = [];
 
 function setMode(mode) {
   if (!(mode in MODES)) return;
+  if (mode !== currentMode) logActivity('mode', {mode, from: currentMode});
   const wasView = currentMode === 'view';
   currentMode = mode;
   // A role only holds in view mode: crossing in or out of it re-renders.
@@ -839,7 +886,7 @@ const chatHistory = [];  // plain {role, content} text turns sent each request
 // The conversation is kept in the browser per dashboard — like the unsaved
 // draft — with the time of its last message, for seven days: localStorage has
 // no expiry of its own, so an older one is dropped when the page opens.
-const CHAT_KEY = 'ff-chat:' + (dashId || location.pathname);
+let CHAT_KEY = 'ff-chat:' + (dashId || location.pathname);
 const CHAT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 function keepChat() {
   try {

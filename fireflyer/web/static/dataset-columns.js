@@ -272,7 +272,7 @@ function closeValue() {
 // The dashboards whose charts read the column, as links (the server works it
 // out from what each chart declares it reads).
 function usedIn(column) {
-  const links = (data.usedIn[column] || []).map(([id, name]) => el('a', {class: 'ref', href: `/d/${id}`, title: name}, name));
+  const links = (data.usedIn[column] || []).map(([id, name]) => el('a', {class: 'ref', href: `/d/${encodeURIComponent(id)}`, title: name}, name));
   return links.length ? el('span', {class: 'refs'}, ...links) : el('span', {class: 'muted'}, '—');
 }
 

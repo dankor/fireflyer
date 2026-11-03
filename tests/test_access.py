@@ -18,12 +18,13 @@ def test_roles_are_created_listed_by_name_renamed_and_deleted(store):
     store.create_role("admin")
     assert [r.name for r in store.roles()] == ["admin", "viewer"]
 
-    before = next(r for r in store.roles() if r.id == viewer)
-    store.rename_role(viewer, "reader")
-    after = next(r for r in store.roles() if r.id == viewer)
-    assert after.name == "reader" and after.created_at == before.created_at
+    assert viewer == "viewer"                                 # a role is its name
+    before = next(r for r in store.roles() if r.name == viewer)
+    assert store.rename_role(viewer, "reader") == "reader"
+    after = next(r for r in store.roles() if r.name == "reader")
+    assert after.created_at == before.created_at
 
-    store.delete_role(viewer)
+    store.delete_role("reader")
     assert [r.name for r in store.roles()] == ["admin"]
 
 
@@ -37,6 +38,8 @@ def test_a_role_name_is_required_and_unique(store):
     other = store.create_role("viewer")
     with pytest.raises(RoleError):
         store.rename_role(other, "admin")
+    with pytest.raises(RoleError, match="can't contain"):
+        store.create_role("a/b")
 
 
 def test_the_access_page_lists_roles_escaped_with_their_actions():
@@ -45,7 +48,7 @@ def test_the_access_page_lists_roles_escaped_with_their_actions():
     html = render_access(store.roles())
     assert '<a class="ff-switch-seg active" href="/access">Access</a>' in html
     assert "&lt;ops&gt;" in html and "<ops>" not in html
-    assert f'data-id="{rid}"' in html and f'action="/access/{rid}/delete"' in html
+    assert 'data-name="&lt;ops&gt;"' in html and 'action="/access/%3Cops%3E/delete"' in html
     assert "<time" in html
 
 
@@ -65,11 +68,11 @@ def test_the_routes_create_rename_and_delete(app_state):
     client = TestClient(app_mod.app)
 
     assert client.post("/access/new", data={"name": "admin"}).status_code == 200
-    rid = store.roles()[0].id
+    rid = store.roles()[0].name
     assert client.post("/access/new", data={"name": "admin"}).status_code == 400
     client.post(f"/access/{rid}/rename", data={"name": "owner"})
     assert "owner" in client.get("/access").text
-    client.post(f"/access/{rid}/delete")
+    client.post("/access/owner/delete")
     assert store.roles() == []
 
 
@@ -100,7 +103,7 @@ def test_a_role_has_a_description_shown_under_its_name(tmp_path):
     assert store.roles()[0].description == "Reads sales"
     store.rename_role(rid, "reader")                         # description kept
     assert store.roles()[0].description == "Reads sales"
-    store.rename_role(rid, "reader", "Reads everything")
+    store.rename_role("reader", "reader", "Reads everything")
     html = render_access(store.roles())
     assert '<span class="sub" title="Reads everything">Reads everything</span>' in html
     assert 'data-description="Reads everything"' in html and "Edit role" in html
@@ -124,6 +127,6 @@ def test_the_routes_take_a_description(app_state):
     app_state("roles", store)
     client = TestClient(app_mod.app)
     client.post("/access/new", data={"name": "viewer", "description": "Reads"})
-    rid = store.roles()[0].id
+    rid = store.roles()[0].name
     client.post(f"/access/{rid}/rename", data={"name": "viewer", "description": "Reads more"})
     assert store.roles()[0].description == "Reads more"

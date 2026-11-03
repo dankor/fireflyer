@@ -1184,7 +1184,7 @@ and returns new YAML — nothing is persisted server-side. Portal mode only wrap
 this with a persistence and listing layer, so **no existing edit logic changes**.
 
 New routes, all gated behind the portal flag and addressing dashboards by
-**UUID**:
+their **name** — unique, and the dashboard's key (URL-encoded in a path):
 
 * `GET /` — the gallery: a **table** of stored dashboards (name, author, last
   updated) with per-row **Clone / Remove** actions (the name opens it) and a **+ New
@@ -1196,7 +1196,10 @@ New routes, all gated behind the portal flag and addressing dashboards by
   the copy.
 * `GET /d/{id}` — the normal editor page, seeded with that dashboard's stored
   YAML and given a **Save** button (and a link back to the gallery).
-* `POST /d/{id}/save` — validate and persist the edited YAML.
+* `POST /d/{id}/save` — validate and persist the edited YAML; returns
+  `{ok, id}` — a changed `name:` renames the dashboard (history and all), and
+  the editor moves to `/d/<new name>` (`moveTo`: the address, the save URL, the
+  conversation kept in the browser). A name another dashboard has is refused.
 * `POST /d/{id}/delete` — remove it (and its version history).
 * `GET /d/{id}/versions` — the dashboard's saved versions, newest first
   (`version`, `created_at`, `author`; no YAML); `GET /d/{id}/versions/{n}` —
@@ -1211,10 +1214,14 @@ break the surgical, comment-preserving block edits `config_edit.py` relies on.
 On every write the backend validates the YAML with `Dashboard.from_yaml`; an
 invalid dashboard is rejected and nothing is stored.
 
-The dashboard's **name** is stored in its own column but is the source-of-truth
-top-level `name:` key (see **File shape**): the store re-derives the column from
-the YAML on every save, so renaming is just editing the `name:` key in the
-editor, and New/Clone write the modal-provided name into the YAML. **Author** is
+The dashboard's **name** is its key — **unique**, like a dataset's, and like
+it never holding `/` or `\` or starting with a dot, since it sits in the URL —
+and is the source-of-truth top-level `name:` key (see **File shape**): the store
+re-derives it from the YAML on every save, so renaming is just editing the
+`name:` key in the editor, and New/Clone write the modal-provided name into the
+YAML (a taken one is refused with 400; the defaults — "Untitled dashboard",
+"<name> (copy)" — take the next free "… 2"). There is no separate id: the log,
+a link and a person all say the same thing. **Author** is
 separate metadata (not in the YAML) — the logged-in user, set once at
 create/clone and left untouched by saves. Datasets are **not** in the YAML:
 charts reference them by name and they live in the dataset store (see the
@@ -1222,14 +1229,19 @@ charts reference them by name and they live in the dataset store (see the
 
 ## Two stores, one schema
 
-The store lives in `fireflyer/web/portal.py` behind two interchangeable
-backends over one small table (`id, name, author, yaml, created_at,
-updated_at`):
+The store is `SqlStore` in `fireflyer/web/portal.py`: one small table (`name`
+primary key, `author, yaml, created_at, updated_at`; `dashboard_versions` and
+`dashboard_uses` keyed by the `dashboard` name) in **Postgres** (`psycopg`).
+**Portal mode runs on Postgres only**: `portal.database_url()` reads
+`DATABASE_URL` (or `portal.yaml`'s `database_url`) and, without a
+`postgresql://` one, stops the portal before it serves anything, saying what to
+set. Its dashboards, roles and users, dataset catalog and activity log all live
+there. sqlite stays for local mode's roles file and the test suite (in-memory).
 
-* **sqlite** (stdlib) — powers local dev (a file) and the test suite
-  (in-memory). No service, no driver.
-* **Postgres** (`psycopg`) — the runtime backend for
-  `python -m fireflyer.portal`, selected when a `DATABASE_URL` is present.
+Dashboards were once keyed by a UUID and could share a name: on open, the store
+rebuilds such tables keyed by name (`_migrate_ids`), a repeated name made unique
+("Sales 2") in its row and YAML, versions carried over, the uses index rebuilt on
+first read.
 
 The Postgres driver is an optional `.[portal]` extra and is imported lazily, so
 the core install and `pip install -e ".[test]"` never require a database. Store
@@ -1250,8 +1262,7 @@ pair for the dataset itself, then one per column, or `(name, "*")` when a chart
 reads every column (a raw table). Inline datasets aren't listed: they're part of
 the dashboard, not something it depends on.
 
-* **Portal**: a `dashboard_uses (dashboard_id, dataset, column_name)` table in
-  both SQL stores. Each indexed dashboard also has a `('', '')` row, so a
+* **Portal**: a `dashboard_uses (dashboard, dataset, column_name)` table. Each indexed dashboard also has a `('', '')` row, so a
   dashboard that reads nothing is told apart from one not indexed yet; one from
   before the index is indexed the first time the index is read.
 * **Local paths mode**: `<FIREFLYER_DATA>/<path>/uses.json`. The dashboard files
@@ -1352,14 +1363,16 @@ gallery's usual CRUD — **+** at the head of the table's actions column adds on
 over a "No … yet" row), a pencil edits its name and
 description, the trash removes it (with a confirm) — in the same native
 `<dialog>` the dashboards list uses. Routes: `GET /access`, `POST /access/new`,
-`POST /access/{id}/rename`, `POST /access/{id}/delete`; a bad name (empty,
-taken) is a 400, not a redirect.
+`POST /access/{name}/rename`, `POST /access/{name}/delete` (the name
+URL-encoded); a bad name (empty, taken, holding `/` or `\` or starting with a
+dot — it sits in the URL) is a 400, not a redirect.
 
-Roles are kept **in a database** in every mode — a `roles` table (`id`, `name`
-UNIQUE, `description`, `created_at`, `updated_at`; an older table gets the
-`description` column when opened), through `RoleStore`, which opens its own
-connection as the dataset catalog does: the portal's database in portal mode
-(`DATABASE_URL`, else `portal.db`), and otherwise a local sqlite file,
+Roles are kept **in a database** in every mode — a `roles` table keyed by
+`name` (`description`, `created_at`, `updated_at`; no UUID — tables from when
+roles and users had one are rebuilt by name on open, `RoleStore._migrate_ids`,
+reading whichever columns an older table has), through `RoleStore`, which opens its own
+connection as the dataset catalog does: the portal's Postgres in portal mode,
+and otherwise a local sqlite file,
 `<FIREFLYER_DATA>/fireflyer.db`, shared by every path — roles are about who
 may see what, not about one folder of dashboards. So the Access tab is on every
 list page, in every mode. Datasets name roles **by name**, so renaming a role
@@ -1384,14 +1397,15 @@ removes (with a confirm), in one native `<dialog>` whose roles field is a
 **multi-select dropdown with search** — the picked roles as chips, a checkbox
 per role in the list under them (`portal.multi_select`, with
 `static/multi-select.js`/`.css`: a shared control, for any other multi-pick).
-Routes: `GET /users`, `POST /users/new`, `POST /users/{id}/edit`,
-`POST /users/{id}/delete` — 404 outside portal mode; a bad name or email, or a
+Routes: `GET /users`, `POST /users/new`, `POST /users/{name}/edit`,
+`POST /users/{name}/delete` — 404 outside portal mode; a bad name or email, or a
 clash, is a 400.
 
-Users live in the roles' database: a `users` table (`id`, `name` UNIQUE,
-`first_name`, `last_name`, `email`, `created_at`, `updated_at`) and
-`user_roles` (`user_id`, `role_id`) — roles held **by id**, so a renamed role
-stays held and a removed one is dropped.
+Users live in the roles' database: a `users` table keyed by `name`
+(`first_name`, `last_name`, `email`, the password hash, `source`,
+`session_key`, `created_at`, `updated_at`) and `user_roles` (`user_name`,
+`role_name`) — renaming a role or a user rewrites its holdings, so a renamed
+role stays held; a removed one is dropped.
 
 **A user holds at most one role per dataset**, so what they see of a dataset is
 one role's filters, never two to choose between. It's checked both ways, against
@@ -1497,6 +1511,77 @@ as they are: they only ask "is there a valid session, and whose?", never "how
 did you log in?". Token refresh, group-to-role mapping (a provider's groups
 could pick the user's roles in `provision`), and a stable subject id beside the
 name are left for when an integration needs them.
+
+## Activity log
+
+Portal mode keeps a row per action in its database — the **security audit
+trail**, and the data a usage dashboard will read later (no page shows it yet).
+`portal.ActivityLog`, an `activity` table beside the others in the portal's
+Postgres; local and paths modes log nothing (the class opens in-memory sqlite
+for the tests):
+
+| column | |
+|---|---|
+| `id` | ordering |
+| `at` | UTC, ISO text |
+| `actor` | the signed-in user; for a login, the name typed |
+| `action` | a verb: `login`, `open`, `save`, `move`, `filter`, … |
+| `object_type` | `dashboard` / `dataset` / `role` / `user` / `gallery` / empty |
+| `object_name` | its name (a dashboard's is its key) |
+| `status_code` | the HTTP status that came back — a refusal (400, 401, 403, 409) or a crash (500) is logged too |
+| `detail` | JSON: the action's own parameters |
+| `ip`, `user_agent` | unmasked |
+
+Indexed on `at`, `(actor, at)` and `(object_type, object_name, at)`. Rows older
+than `FIREFLYER_ACTIVITY_DAYS` (default **365**; 0 keeps all) are dropped when
+the log opens and then once a day.
+
+**How it's written.** A route says what it did — `app._log(request, action,
+object_type, object_name, **detail)` — and the `_activity` middleware writes it
+once the response is made, so `status_code` is real. A route that returns
+`{ok: false}` with 200 passes `status_code=400` (or 401 for a refused login, 502/503 for the
+assistant). A route that never calls `_log` writes nothing. A row that can't be
+written is lost, never the request. **`detail` never holds** a password (a user
+row says `password: set` / `cleared`), the session, or a dashboard's whole
+YAML — a save records its `version`, whose YAML is in the history; uploads
+record the file name and size.
+
+**What's logged.**
+
+* **Auth** — `login` (`source`; 401 when refused), `logout`.
+* **Pages** — `open` of a list (`gallery`: dashboards / datasets / access /
+  users), a dashboard (its URL's parameters: `role`, `user`, `line`, `compare`…)
+  and a dataset.
+* **Dashboards** — `create`, `clone` (`source`), `save` (`version`,
+  `renamed_from`), `delete`, `versions` / `version` (the compare view).
+* **Viewing** — `refresh`: every render (`/execute`: opening, ↻, an edit
+  applied, a role picked; `tab`, `filters`, `role`, `user`); `crossfilter`,
+  `filter` (the added filters, **with their values**), `unfilter`, `grain`,
+  `tab` (`/dashboard`); `page`, `search`, `grain` of one chart
+  (`/dashboard/cell` — a render's own per-chart cell loads are its one
+  `refresh`, not a row each).
+* **Editing** — every editor gesture, with its form: `add_chart`,
+  `edit_chart`, `delete_chart`, `move`, `merge`, `new_row`, `resize`,
+  `insert`, `move_item`, `delete_item`, `header`, `tab_add`, `tab_insert`,
+  `tab_rename`, `tab_move`, `tab_reorder`, `tab_delete`, `calc_save`,
+  `calc_delete` (`app._edited` runs and logs them all); `chat` (the `prompt`,
+  the `reply`, whether it `changed` the YAML).
+* **Browser-only** — `discard`, `mode` (`mode`, `from`), `view_as` (`role` /
+  `user`): `editor.js` posts these to `POST /activity` (a beacon; only these
+  three are accepted).
+* **Datasets** — `upload`, `replace`, `mapping`, `permissions`, `rename`,
+  `delete` (409 when a dashboard still uses it), `delete_version`, `versions`,
+  `version`, `restore`, and `build` — written when the background build ends,
+  as whoever asked for it (500 when it failed).
+* **Roles / users** — `create`, `rename` / `edit` (roles by name,
+  `renamed_from`), `delete`.
+
+**Which dashboard.** The editor's routes take YAML, not an id, so `editor.js`
+sends the open dashboard's name on every request it makes — fetch and htmx — as
+`X-FF-Dashboard` (URL-encoded: a header is Latin-1); without it, the posted
+YAML's `name:`. Not logged: static files, `/yaml/assist`, and requests that only
+build a form or a picker (`/chart/config/form`, `/filter/*`, `/calcs/form`, the
+access form's pieces, a dataset's build-status poll).
 
 ## Local paths mode (no database)
 

@@ -29,14 +29,14 @@
 function openAdd(){ document.getElementById('add-dialog').showModal(); }
 function openClone(btn){
   var d = document.getElementById('clone-dialog');
-  document.getElementById('clone-form').action = '/d/' + btn.dataset.id + '/clone';
+  document.getElementById('clone-form').action = '/d/' + encodeURIComponent(btn.dataset.id) + '/clone';
   var input = document.getElementById('clone-name');
   input.value = btn.dataset.name + ' (copy)';
   d.showModal(); input.select();
 }
 function openRename(btn){
   var d = document.getElementById('rename-dialog');
-  document.getElementById('rename-form').action = '/access/' + btn.dataset.id + '/rename';
+  document.getElementById('rename-form').action = '/access/' + encodeURIComponent(btn.dataset.name) + '/rename';
   var input = document.getElementById('rename-form-name');
   input.value = btn.dataset.name;
   var about = document.querySelector('#rename-form textarea[name=description]');
@@ -50,7 +50,7 @@ function openUser(btn){
   var d = document.getElementById('user-dialog');
   var form = document.getElementById('user-form');
   var held = btn ? JSON.parse(btn.dataset.roles || '[]') : [];
-  form.action = btn ? '/users/' + btn.dataset.id + '/edit' : '/users/new';
+  form.action = btn ? '/users/' + encodeURIComponent(btn.dataset.name) + '/edit' : '/users/new';
   form.querySelector('h3').textContent = btn ? 'Edit user' : 'New user';
   document.getElementById('user-form-name').value = btn ? btn.dataset.name : '';
   form.elements.first_name.value = btn ? btn.dataset.firstName : '';

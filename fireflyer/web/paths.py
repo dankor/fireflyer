@@ -9,7 +9,7 @@ datasets live in the container's object store isolated per path
 (`<FIREFLYER_DATA>/<path>/`), because they're Parquet you create via web upload
 — never written into your path folder.
 
-`PathDashboardStore` mirrors the portal `SqliteStore`/`PostgresStore` surface
+`PathDashboardStore` mirrors the portal `SqlStore` surface
 (list/get/create/save/delete over `DashboardRow`, versions/version over
 `DashboardVersion`), so the gallery + editor routes stay store-agnostic. The
 dashboard's **id is its filename stem**.
@@ -91,6 +91,11 @@ class PathDashboardStore:
         except DashboardError:
             return None
         return self._row(path) if path.exists() else None
+
+    def free_name(self, name: str) -> str:
+        """`name` as it is: a path's files are told apart by their stem, which
+        `create` suffixes until free."""
+        return name
 
     def create(self, yaml: str, author: str = "") -> str:
         name = Dashboard.from_yaml(yaml).name  # validates + reads name
