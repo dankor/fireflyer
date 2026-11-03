@@ -5,7 +5,7 @@ mode's files — behave the same."""
 import pytest
 
 from fireflyer.web.paths import PathDashboardStore
-from fireflyer.web.portal import SqliteStore
+from fireflyer.web.portal import SqlStore
 
 V1 = "name: Sales\ncharts: {}\nlayout: []\n"
 V2 = "name: Sales\ndescription: Weekly.\ncharts: {}\nlayout: []\n"
@@ -15,7 +15,7 @@ V3 = "name: Sales\ndescription: Monthly.\ncharts: {}\nlayout: []\n"
 @pytest.fixture(params=["sql", "paths"])
 def store(request, tmp_path):
     if request.param == "sql":
-        return SqliteStore(":memory:")
+        return SqlStore(":memory:")
     return PathDashboardStore(str(tmp_path / "path"), history=str(tmp_path / "data" / "history"))
 
 
@@ -55,7 +55,7 @@ def test_deleting_a_dashboard_drops_its_history(store):
 
 def test_a_dashboard_from_before_history_gets_its_state_as_version_1():
     """Its first save afterwards shouldn't leave nothing to compare against."""
-    store = SqliteStore(":memory:")
+    store = SqlStore(":memory:")
     id = store.create(V1, "dana")
     store._run("DELETE FROM dashboard_versions", ())       # as if created before history
     store.save(id, V2, author="sam")

@@ -584,11 +584,11 @@ def test_the_yaml_editor_asks_for_problems_and_completions_at_once(client):
 
 def test_the_versions_routes_list_and_fetch(client):
     from fireflyer.web import app as app_mod
-    from fireflyer.web.portal import SqliteStore
+    from fireflyer.web.portal import SqlStore
 
-    store = SqliteStore(":memory:")
+    store = SqlStore(":memory:")
     id = store.create("name: A\ncharts: {}\nlayout: []\n", "dana")
-    store.save(id, "name: B\ncharts: {}\nlayout: []\n", author="sam")
+    id = store.save(id, "name: B\ncharts: {}\nlayout: []\n", author="sam")
     app_mod.app.state.store, saved = store, app_mod.app.state.store
     try:
         listed = client.get(f"/d/{id}/versions").json()["versions"]
@@ -606,15 +606,16 @@ def test_the_versions_routes_list_and_fetch(client):
 
 def test_saving_records_who_saved(client, monkeypatch):
     from fireflyer.web import app as app_mod
-    from fireflyer.web.portal import SqliteStore
+    from fireflyer.web.portal import SqlStore
 
-    store = SqliteStore(":memory:")
+    store = SqlStore(":memory:")
     id = store.create("name: A\ncharts: {}\nlayout: []\n", "dana")
     monkeypatch.setattr(app_mod, "_current_author", lambda request: "sam")
     app_mod.app.state.store, saved = store, app_mod.app.state.store
     try:
-        assert client.post(f"/d/{id}/save", data={"yaml_text": "name: B\ncharts: {}\nlayout: []\n"}).json()["ok"]
-        assert store.versions(id)[0].author == "sam"
+        saved_as = client.post(f"/d/{id}/save", data={"yaml_text": "name: B\ncharts: {}\nlayout: []\n"}).json()
+        assert saved_as == {"ok": True, "id": "B"}     # renamed: the name is the id
+        assert store.versions("B")[0].author == "sam"
     finally:
         app_mod.app.state.store = saved
 
@@ -638,11 +639,11 @@ def versioned(client, tmp_path, monkeypatch):
     from fireflyer.datasets import DatasetStore
     from fireflyer.storage import make_object_store
     from fireflyer.web import app as app_mod
-    from fireflyer.web.portal import SqliteStore
+    from fireflyer.web.portal import SqlStore
 
     datasets = DatasetStore(make_object_store({"base": str(tmp_path)}))
     datasets.create("sales", b"id,status,amount\n1,paid,10\n2,open,5\n")
-    dashboards = SqliteStore(":memory:")
+    dashboards = SqlStore(":memory:")
     dash_id = dashboards.create(
         "name: S\ncharts:\n  p: {type: pie, dataset: sales, title: status, column: status}\n"
         'layout:\n  - ["@30", "p"]\n', "dana",

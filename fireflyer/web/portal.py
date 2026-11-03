@@ -6,20 +6,21 @@ small: dashboards are stored as an opaque YAML text blob (validated by the
 backend via `Dashboard.from_yaml`, never decomposed into tables), so every
 existing stateless editor route keeps working byte-for-byte.
 
-Two stores share one tiny schema. `SqliteStore` (stdlib, in-memory by default)
-powers local dev and the test suite — no service, no driver. `PostgresStore`
-powers `python -m fireflyer.portal` at runtime and imports `psycopg` lazily so
-the core install and `pip install -e ".[test]"` never need the `.[portal]`
-extra. Tests exercise this module directly (no web stack), matching how
+One store, `SqlStore`, over one tiny schema keyed by dashboard name, in
+Postgres — portal mode runs on nothing else (`database_url`) — importing
+`psycopg` lazily so the core install and `pip install -e ".[test]"` never need
+the `.[portal]` extra; the test suite uses in-memory sqlite. Beside it, the roles and users (`RoleStore`) and the
+activity log (`ActivityLog`). Tests exercise this module directly (no web stack), matching how
 params/config_edit logic is kept unit-testable.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 import time
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html import escape
@@ -30,16 +31,38 @@ import yaml
 
 from fireflyer import column_map
 from fireflyer import filters as filters_mod
-from fireflyer.dashboard import Dashboard
+from fireflyer.dashboard import Dashboard, DashboardError
 from fireflyer.datasets import Dataset, Version
 from fireflyer.params import COLUMN_TYPES, column_type, type_icon_svg
 from fireflyer.web import assets
 from fireflyer.web import auth
 
+# Portal mode runs on Postgres and nothing else; sqlite is local mode's (a
+# roles file) and the tests'.
+_POSTGRES = ("postgres://", "postgresql://")
+
+
+def is_postgres(dsn: str) -> bool:
+    return dsn.startswith(_POSTGRES)
+
+
+def database_url(env=os.environ) -> str:
+    """Portal mode's database, `DATABASE_URL` — a Postgres one, or portal mode
+    doesn't start (SystemExit, saying what to set)."""
+    dsn = env.get("DATABASE_URL", "")
+    if not is_postgres(dsn):
+        raise SystemExit(
+            "portal mode needs Postgres: set DATABASE_URL (or portal.yaml's database_url)"
+            " to postgresql://user:password@host:5432/db"
+        )
+    return dsn
+
+
+# A dashboard is keyed by its name — the YAML's `name:`, unique like a
+# dataset's — so the log, a link and a person all say the same thing.
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS dashboards ("
-    " id TEXT PRIMARY KEY,"
-    " name TEXT NOT NULL,"
+    " name TEXT PRIMARY KEY,"
     " author TEXT NOT NULL DEFAULT '',"
     " yaml TEXT NOT NULL,"
     " created_at TEXT NOT NULL,"
@@ -49,12 +72,12 @@ _SCHEMA = (
 # who saved it and when (Unix seconds). What the editor's compare view diffs.
 _VERSIONS_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS dashboard_versions ("
-    " dashboard_id TEXT NOT NULL,"
+    " dashboard TEXT NOT NULL,"
     " version INTEGER NOT NULL,"
     " yaml TEXT NOT NULL,"
     " author TEXT NOT NULL DEFAULT '',"
     " created_at BIGINT NOT NULL,"
-    " PRIMARY KEY (dashboard_id, version))"
+    " PRIMARY KEY (dashboard, version))"
 )
 
 
@@ -65,7 +88,7 @@ _VERSIONS_SCHEMA = (
 # told apart from "not indexed yet" (a dashboard from before the index).
 _USES_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS dashboard_uses ("
-    " dashboard_id TEXT NOT NULL,"
+    " dashboard TEXT NOT NULL,"
     " dataset TEXT NOT NULL,"
     " column_name TEXT NOT NULL)"
 )
@@ -141,7 +164,7 @@ class _SqlVersions:
 
     def _latest(self, id: str):
         return self._run(
-            "SELECT version, yaml FROM dashboard_versions WHERE dashboard_id = ?"
+            "SELECT version, yaml FROM dashboard_versions WHERE dashboard = ?"
             " ORDER BY version DESC LIMIT 1", (id,),
         ).fetchone()
 
@@ -151,7 +174,7 @@ class _SqlVersions:
             return latest[0]
         number = latest[0] + 1 if latest else 1
         self._run(
-            "INSERT INTO dashboard_versions (dashboard_id, version, yaml, author, created_at)"
+            "INSERT INTO dashboard_versions (dashboard, version, yaml, author, created_at)"
             " VALUES (?, ?, ?, ?, ?)",
             (id, number, yaml, author, at if at is not None else int(time.time())),
         )
@@ -168,14 +191,14 @@ class _SqlVersions:
         """Newest first, without their YAML."""
         rows = self._run(
             "SELECT version, created_at, author FROM dashboard_versions"
-            " WHERE dashboard_id = ? ORDER BY version DESC", (id,),
+            " WHERE dashboard = ? ORDER BY version DESC", (id,),
         ).fetchall()
         return [DashboardVersion(int(v), int(at), a) for v, at, a in rows]
 
     def version(self, id: str, number: int) -> DashboardVersion | None:
         row = self._run(
             "SELECT version, created_at, author, yaml FROM dashboard_versions"
-            " WHERE dashboard_id = ? AND version = ?", (id, number),
+            " WHERE dashboard = ? AND version = ?", (id, number),
         ).fetchone()
         return DashboardVersion(int(row[0]), int(row[1]), row[2], row[3]) if row else None
 
@@ -186,44 +209,42 @@ class _SqlUses:
     indexed yet is indexed the first time the index is read."""
 
     def _index(self, id: str, yaml: str) -> None:
-        self._run("DELETE FROM dashboard_uses WHERE dashboard_id = ?", (id,))
+        self._run("DELETE FROM dashboard_uses WHERE dashboard = ?", (id,))
         for dataset, column in [("", "")] + _uses_of(yaml):
             self._run(
-                "INSERT INTO dashboard_uses (dashboard_id, dataset, column_name) VALUES (?, ?, ?)",
+                "INSERT INTO dashboard_uses (dashboard, dataset, column_name) VALUES (?, ?, ?)",
                 (id, dataset, column),
             )
 
     def uses(self) -> list[Use]:
         for id, yaml in self._run(
-            "SELECT id, yaml FROM dashboards"
-            " WHERE id NOT IN (SELECT dashboard_id FROM dashboard_uses)"
+            "SELECT name, yaml FROM dashboards"
+            " WHERE name NOT IN (SELECT dashboard FROM dashboard_uses)"
         ).fetchall():
             self._index(str(id), yaml)
         rows = self._run(
-            "SELECT u.dashboard_id, d.name, u.dataset, u.column_name FROM dashboard_uses u"
-            " JOIN dashboards d ON d.id = u.dashboard_id WHERE u.dataset <> ''"
-            " ORDER BY d.name, u.dataset, u.column_name"
+            "SELECT dashboard, dataset, column_name FROM dashboard_uses"
+            " WHERE dataset <> '' ORDER BY dashboard, dataset, column_name"
         ).fetchall()
-        return [Use(str(i), n, ds, c) for i, n, ds, c in rows]
+        return [Use(n, n, ds, c) for n, ds, c in rows]
 
 
-# The Access tab's roles: a name each, and when it was made and last renamed.
+# The Access tab's roles: a name each — its key — and when it was made and
+# last renamed.
 _ROLES_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS roles ("
-    " id TEXT PRIMARY KEY,"
-    " name TEXT NOT NULL UNIQUE,"
+    " name TEXT PRIMARY KEY,"
     " description TEXT NOT NULL DEFAULT '',"
     " created_at TEXT NOT NULL,"
     " updated_at TEXT NOT NULL)"
 )
 
 
-# The Users tab's people (portal mode): a name each, and the roles they hold —
-# by role id, so a renamed role stays held.
+# The Users tab's people (portal mode): a name each — its key — and the roles
+# they hold, by name (a rename updates the holdings).
 _USERS_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS users ("
-    " id TEXT PRIMARY KEY,"
-    " name TEXT NOT NULL UNIQUE,"
+    " name TEXT PRIMARY KEY,"
     " first_name TEXT NOT NULL DEFAULT '',"
     " last_name TEXT NOT NULL DEFAULT '',"
     " email TEXT NOT NULL DEFAULT '',"
@@ -239,9 +260,9 @@ _USERS_SCHEMA = (
 )
 _USER_ROLES_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS user_roles ("
-    " user_id TEXT NOT NULL,"
-    " role_id TEXT NOT NULL,"
-    " PRIMARY KEY (user_id, role_id))"
+    " user_name TEXT NOT NULL,"
+    " role_name TEXT NOT NULL,"
+    " PRIMARY KEY (user_name, role_name))"
 )
 
 
@@ -256,13 +277,11 @@ class RoleError(ValueError):
 ADMIN = "admin"
 LOCAL = "local"           # a user who signs in with a password kept here
 _ADMIN_ABOUT = "Built-in"
-_ADMIN_USER_ID = "admin"
 
 
 @dataclass
 class Role:
-    id: str
-    name: str
+    name: str              # its key
     created_at: str        # ISO UTC, as the dashboards' timestamps
     updated_at: str
     description: str = ""  # what the role is for — under its name, and in tooltips
@@ -271,8 +290,7 @@ class Role:
 
 @dataclass
 class User:
-    id: str
-    name: str
+    name: str              # its key
     created_at: str
     updated_at: str
     roles: list[str] = field(default_factory=list)  # the role names held, sorted
@@ -306,12 +324,15 @@ def _person(first_name: str, last_name: str, email: str) -> tuple[str, str, str]
 
 
 def _role_name(name: str, roles: list, keep: str = "", kind: str = "role") -> str:
-    """`name` trimmed, checked: not empty, and no other role (than `keep`, the
-    one being renamed) has it. Users' names too (`kind`)."""
+    """`name` trimmed, checked: not empty, fit for a URL (`/access/<name>/…`,
+    like a dataset's: no / or \\, no leading dot), and no other role (than
+    `keep`, the one being renamed) has it. Users' names too (`kind`)."""
     name = name.strip()
     if not name:
         raise RoleError(f"a {kind} needs a name")
-    if any(r.name == name and r.id != keep for r in roles):
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise RoleError(f"a {kind} name can't contain / or \\ or start with a dot")
+    if any(r.name == name and r.name != keep for r in roles):
         raise RoleError(f"there is already a {kind} named {name!r}")
     return name
 
@@ -334,16 +355,16 @@ def clash_error(user: str, clashes: list[tuple[str, list[str]]]) -> RoleError:
 
 
 class RoleStore:
-    """The roles, in a database — the portal's (sqlite, or Postgres with a
-    `postgresql://` DSN; `psycopg` imported only then), or a local sqlite file
-    when there's no portal. Its own connection, like the dataset catalog's.
+    """The roles, in a database — the portal's Postgres (`psycopg` imported
+    only then), or a local sqlite file when there's no portal. Its own connection, like the dataset catalog's.
+    Roles and users are keyed by name.
 
     `admin`: the login's user name, in portal mode — the store then always has
     the built-in `admin` role and lists that user first, holding it; both
     locked. "" (local mode, tests) has neither."""
 
     def __init__(self, dsn: str, admin: str = ""):
-        self._pg = dsn.startswith(("postgres://", "postgresql://"))
+        self._pg = is_postgres(dsn)
         if self._pg:
             import psycopg
 
@@ -352,13 +373,15 @@ class RoleStore:
             if dsn != ":memory:":
                 Path(dsn).parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(dsn, check_same_thread=False)
-        self._run(_ROLES_SCHEMA)
-        self._run(_USERS_SCHEMA)
-        self._run(_USER_ROLES_SCHEMA)
-        self._add_description()
+        self._migrate_ids()
+        self._create()
         self._admin = admin
         if admin and not any(r.name == ADMIN for r in self.roles()):
             self.create_role(ADMIN, _ADMIN_ABOUT)
+
+    def _create(self) -> None:
+        for schema in (_ROLES_SCHEMA, _USERS_SCHEMA, _USER_ROLES_SCHEMA):
+            self._run(schema)
 
     def _run(self, sql: str, params: tuple = ()) -> list[tuple]:
         if self._pg:
@@ -369,101 +392,141 @@ class RoleStore:
             self._conn.commit()
         return rows
 
-    def _add_description(self) -> None:
-        """A roles table from before descriptions gets the column."""
+    def _migrate_ids(self) -> None:
+        """Roles and users were once keyed by a UUID (and held by it): rebuild
+        those tables keyed by their names, which were unique already. Read by
+        column name — older tables don't all have every column."""
         try:
-            self._run("ALTER TABLE roles ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+            self._run("SELECT id FROM roles LIMIT 1")
         except Exception:
-            pass                                   # there already
+            if self._pg:
+                self._conn.rollback()
+            return                                  # new tables, or none yet
+        roles, users, held = self._table("roles"), self._table("users"), self._table("user_roles")
+        for table in ("user_roles", "users", "roles"):
+            self._run(f"DROP TABLE IF EXISTS {table}")
+        self._create()
+        now = _now()
+        role_names = {str(r["id"]): r["name"] for r in roles}
+        user_names = {str(u["id"]): u["name"] for u in users}
+        for r in roles:
+            self._run("INSERT INTO roles (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                      (r["name"], r.get("description") or "", str(r.get("created_at") or now),
+                       str(r.get("updated_at") or now)))
+        columns = ("first_name", "last_name", "email", "password_hash", "session_key")
+        for u in users:
+            self._run(
+                "INSERT INTO users (name, first_name, last_name, email, password_hash, session_key, source,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (u["name"], *(u.get(c) or "" for c in columns), u.get("source") or LOCAL,
+                 str(u.get("created_at") or now), str(u.get("updated_at") or now)),
+            )
+        for h in held:
+            user, role = user_names.get(str(h["user_id"])), role_names.get(str(h["role_id"]))
+            if user and role:
+                self._run("INSERT INTO user_roles (user_name, role_name) VALUES (?, ?)", (user, role))
+
+    def _table(self, table: str) -> list[dict]:
+        """Every row of `table` as {column: value}; [] when there's no such table."""
+        try:
+            cursor = self._conn.execute(f"SELECT * FROM {table}")
+        except Exception:
+            if self._pg:
+                self._conn.rollback()
+            return []
+        names = [d[0] for d in cursor.description]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]
 
     def roles(self) -> list[Role]:
-        rows = self._run("SELECT id, name, created_at, updated_at, description FROM roles ORDER BY name")
+        rows = self._run("SELECT name, created_at, updated_at, description FROM roles ORDER BY name")
         builtin = lambda n: bool(self._admin) and n == ADMIN
-        return [Role(str(i), n, str(c), str(u), _ADMIN_ABOUT if builtin(n) else d or "", builtin(n))
-                for i, n, c, u, d in rows]
+        return [Role(n, str(c), str(u), _ADMIN_ABOUT if builtin(n) else d or "", builtin(n))
+                for n, c, u, d in rows]
 
-    def _unlocked(self, roles_or_users: list, id: str, kind: str) -> None:
-        if any(x.id == id and x.builtin for x in roles_or_users):
+    def _unlocked(self, roles_or_users: list, name: str, kind: str) -> None:
+        if any(x.name == name and x.builtin for x in roles_or_users):
             raise RoleError(f"the {kind} is built in")
 
     def create_role(self, name: str, description: str = "") -> str:
         name = _role_name(name, self.roles())
-        new_id, now = str(uuid.uuid4()), _now()
+        now = _now()
         self._run(
-            "INSERT INTO roles (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (new_id, name, description.strip(), now, now),
+            "INSERT INTO roles (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (name, description.strip(), now, now),
         )
-        return new_id
+        return name
 
-    def rename_role(self, id: str, name: str, description: str | None = None) -> None:
-        """A new name — and description, unless None (kept as it is)."""
-        self._unlocked(self.roles(), id, "admin role")
-        name = _role_name(name, self.roles(), keep=id)
+    def rename_role(self, name: str, new_name: str, description: str | None = None) -> str:
+        """A new name — held by the same users — and description, unless None
+        (kept as it is). Returns the name now."""
+        self._unlocked(self.roles(), name, "admin role")
+        new_name = _role_name(new_name, self.roles(), keep=name)
         if description is None:
-            self._run("UPDATE roles SET name = ?, updated_at = ? WHERE id = ?", (name, _now(), id))
+            self._run("UPDATE roles SET name = ?, updated_at = ? WHERE name = ?", (new_name, _now(), name))
         else:
-            self._run("UPDATE roles SET name = ?, description = ?, updated_at = ? WHERE id = ?",
-                      (name, description.strip(), _now(), id))
+            self._run("UPDATE roles SET name = ?, description = ?, updated_at = ? WHERE name = ?",
+                      (new_name, description.strip(), _now(), name))
+        self._run("UPDATE user_roles SET role_name = ? WHERE role_name = ?", (new_name, name))
+        return new_name
 
-    def delete_role(self, id: str) -> None:
-        self._unlocked(self.roles(), id, "admin role")
-        self._run("DELETE FROM user_roles WHERE role_id = ?", (id,))
-        self._run("DELETE FROM roles WHERE id = ?", (id,))
+    def delete_role(self, name: str) -> None:
+        self._unlocked(self.roles(), name, "admin role")
+        self._run("DELETE FROM user_roles WHERE role_name = ?", (name,))
+        self._run("DELETE FROM roles WHERE name = ?", (name,))
 
     # --- users ---
 
     def users(self) -> list[User]:
         held: dict[str, list[str]] = {}
-        for user_id, role in self._run(
-            "SELECT ur.user_id, r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id ORDER BY r.name"
-        ):
-            held.setdefault(str(user_id), []).append(role)
+        for user, role in self._run("SELECT user_name, role_name FROM user_roles ORDER BY role_name"):
+            held.setdefault(user, []).append(role)
         rows = self._run(
-            "SELECT id, name, created_at, updated_at, first_name, last_name, email,"
+            "SELECT name, created_at, updated_at, first_name, last_name, email,"
             " password_hash <> '', source FROM users ORDER BY name"
         )
-        stored = [User(str(i), n, str(c), str(u), held.get(str(i), []), f or "", l or "", e or "",
+        stored = [User(n, str(c), str(u), held.get(n, []), f or "", l or "", e or "",
                        has_password=bool(pw), source=src or LOCAL)
-                  for i, n, c, u, f, l, e, pw, src in rows]
+                  for n, c, u, f, l, e, pw, src in rows]
         if not self._admin:
             return stored
         # Not a row: the login, first — its name is taken for any other user.
         # Its password is the environment's, not managed here.
-        return [User(_ADMIN_USER_ID, self._admin, "", "", [ADMIN], builtin=True, has_password=True)] + stored
+        return [User(self._admin, "", "", [ADMIN], builtin=True, has_password=True)] + stored
 
     def user(self, name: str) -> User | None:
         return next((u for u in self.users() if u.name == name), None)
 
-    def create_user(self, name: str, role_ids: list[str] = (),
+    def create_user(self, name: str, roles: list[str] = (),
                     first_name: str = "", last_name: str = "", email: str = "") -> str:
         name = _role_name(name, self.users(), kind="user")
         person = _person(first_name, last_name, email)
-        new_id, now = str(uuid.uuid4()), _now()
+        now = _now()
         self._run(
-            "INSERT INTO users (id, name, first_name, last_name, email, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (new_id, name, *person, now, now),
+            "INSERT INTO users (name, first_name, last_name, email, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (name, *person, now, now),
         )
-        self._hold(new_id, role_ids)
-        return new_id
+        self._hold(name, roles)
+        return name
 
-    def edit_user(self, id: str, name: str, role_ids: list[str] = (),
-                  first_name: str = "", last_name: str = "", email: str = "") -> None:
-        self._unlocked(self.users(), id, "admin user")
-        held = self._by_id(id)
-        if held and held.external and name.strip() != held.name:
+    def edit_user(self, name: str, new_name: str, roles: list[str] = (),
+                  first_name: str = "", last_name: str = "", email: str = "") -> str:
+        """Returns the name now."""
+        self._unlocked(self.users(), name, "admin user")
+        held = self.user(name)
+        if held is None:
+            raise RoleError(f"there is no user named {name!r}")
+        if held.external and new_name.strip() != held.name:
             raise RoleError(f"{held.name}'s name comes from {held.source}")
-        name = _role_name(name, self.users(), keep=id, kind="user")
+        new_name = _role_name(new_name, self.users(), keep=name, kind="user")
         person = _person(first_name, last_name, email)
         self._run(
-            "UPDATE users SET name = ?, first_name = ?, last_name = ?, email = ?, updated_at = ? WHERE id = ?",
-            (name, *person, _now(), id),
+            "UPDATE users SET name = ?, first_name = ?, last_name = ?, email = ?, updated_at = ? WHERE name = ?",
+            (new_name, *person, _now(), name),
         )
-        self._run("DELETE FROM user_roles WHERE user_id = ?", (id,))
-        self._hold(id, role_ids)
-
-    def _by_id(self, id: str) -> User | None:
-        return next((u for u in self.users() if u.id == id), None)
+        self._run("DELETE FROM user_roles WHERE user_name = ?", (name,))
+        self._hold(new_name, roles)
+        return new_name
 
     def provision(self, name: str, source: str, first_name: str = "", last_name: str = "",
                   email: str = "") -> str:
@@ -479,49 +542,49 @@ class RoleStore:
             raise RoleError(f"{name} doesn't sign in through {source}")
         person = _person(first_name, last_name, email)
         if held is None:
-            user_id, now = str(uuid.uuid4()), _now()
+            now = _now()
             self._run(
-                "INSERT INTO users (id, name, first_name, last_name, email, source, session_key,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (user_id, _role_name(name, self.users(), kind="user"), *person, source,
+                "INSERT INTO users (name, first_name, last_name, email, source, session_key,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (_role_name(name, self.users(), kind="user"), *person, source,
                  auth.new_session_key(), now, now),
             )
         elif any(person):
             fields = dict(zip(("first_name", "last_name", "email"), person))
             given = {k: v for k, v in fields.items() if v}
             sets = ", ".join(f"{k} = ?" for k in given)
-            self._run(f"UPDATE users SET {sets}, updated_at = ? WHERE id = ?", (*given.values(), _now(), held.id))
+            self._run(f"UPDATE users SET {sets}, updated_at = ? WHERE name = ?", (*given.values(), _now(), name))
         return self.session_key(name)
 
-    def _hold(self, user_id: str, role_ids) -> None:
-        known = {r.id for r in self.roles()}
-        for role_id in dict.fromkeys(role_ids):
-            if role_id in known:
-                self._run("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", (user_id, role_id))
+    def _hold(self, user: str, roles) -> None:
+        known = {r.name for r in self.roles()}
+        for role in dict.fromkeys(roles):
+            if role in known:
+                self._run("INSERT INTO user_roles (user_name, role_name) VALUES (?, ?)", (user, role))
 
     # --- passwords: only ever the hash, and it never leaves the store ---
 
-    def set_password(self, id: str, password: str) -> None:
-        """A new password for user `id` (the policy checked first) — which
+    def set_password(self, name: str, password: str) -> None:
+        """A new password for user `name` (the policy checked first) — which
         also rotates their session key, signing them out everywhere."""
-        self._unlocked(self.users(), id, "admin user")
-        self._local(id)
+        self._unlocked(self.users(), name, "admin user")
+        self._local(name)
         try:
             hashed = auth.hash_password(auth.check_policy(password))
         except auth.PasswordError as exc:
             raise RoleError(str(exc)) from exc
-        self._run("UPDATE users SET password_hash = ?, session_key = ?, updated_at = ? WHERE id = ?",
-                  (hashed, auth.new_session_key(), _now(), id))
+        self._run("UPDATE users SET password_hash = ?, session_key = ?, updated_at = ? WHERE name = ?",
+                  (hashed, auth.new_session_key(), _now(), name))
 
-    def clear_password(self, id: str) -> None:
+    def clear_password(self, name: str) -> None:
         """No password: the user can't sign in, and is signed out."""
-        self._unlocked(self.users(), id, "admin user")
-        self._local(id)
-        self._run("UPDATE users SET password_hash = '', session_key = ?, updated_at = ? WHERE id = ?",
-                  (auth.new_session_key(), _now(), id))
+        self._unlocked(self.users(), name, "admin user")
+        self._local(name)
+        self._run("UPDATE users SET password_hash = '', session_key = ?, updated_at = ? WHERE name = ?",
+                  (auth.new_session_key(), _now(), name))
 
-    def _local(self, id: str) -> None:
-        held = self._by_id(id)
+    def _local(self, name: str) -> None:
+        held = self.user(name)
         if held and held.external:
             raise RoleError(f"{held.name} signs in through {held.source}: no password here")
 
@@ -542,10 +605,10 @@ class RoleStore:
         )
         return rows[0][0] if rows else None
 
-    def delete_user(self, id: str) -> None:
-        self._unlocked(self.users(), id, "admin user")
-        self._run("DELETE FROM user_roles WHERE user_id = ?", (id,))
-        self._run("DELETE FROM users WHERE id = ?", (id,))
+    def delete_user(self, name: str) -> None:
+        self._unlocked(self.users(), name, "admin user")
+        self._run("DELETE FROM user_roles WHERE user_name = ?", (name,))
+        self._run("DELETE FROM users WHERE name = ?", (name,))
 
 
 def _name_of(yaml_text: str) -> str:
@@ -556,142 +619,251 @@ def _name_of(yaml_text: str) -> str:
     return Dashboard.from_yaml(yaml_text).name
 
 
-class SqliteStore(_SqlVersions, _SqlUses):
-    """Local/test store. `:memory:` for tests, a file path for local portal dev."""
+def _check_dashboard_name(name: str) -> str:
+    """A name is a dashboard's key and sits in its URL (`/d/<name>`), so — like
+    a dataset's — it can't hold a path separator or start with a dot."""
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise DashboardError("a dashboard name can't contain / or \\ or start with a dot")
+    return name
 
-    def __init__(self, path: str = ":memory:"):
-        # check_same_thread=False: uvicorn serves requests off a threadpool.
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.execute(_SCHEMA)
-        self._conn.execute(_VERSIONS_SCHEMA)
-        self._conn.execute(_USES_SCHEMA)
-        self._conn.commit()
+
+def set_yaml_name(yaml_text: str, name: str) -> str:
+    """Rewrite the top-level `name:` line (cloning, a name made unique). `name:`
+    is a required column-0 key, so replacing the first such line suffices."""
+    return re.sub(r"(?m)^name:.*$", lambda _: f"name: {json.dumps(name)}", yaml_text, count=1)
+
+
+class SqlStore(_SqlVersions, _SqlUses):
+    """The portal's dashboards: in Postgres (a `postgresql://` DSN — `psycopg`
+    imported only then, so this module needs no `.[portal]` extra), or sqlite
+    `:memory:` for the tests. One schema, `?`
+    placeholders, adapted for Postgres in `_run`."""
+
+    def __init__(self, dsn: str = ":memory:"):
+        self._pg = is_postgres(dsn)
+        if self._pg:
+            import psycopg  # optional dependency, only needed at portal runtime
+
+            self._conn = psycopg.connect(dsn, autocommit=True)
+        else:
+            # check_same_thread=False: uvicorn serves requests off a threadpool.
+            self._conn = sqlite3.connect(dsn, check_same_thread=False)
+        self._migrate_ids()
+        for schema in (_SCHEMA, _VERSIONS_SCHEMA, _USES_SCHEMA):
+            self._run(schema)
 
     def _run(self, sql: str, params=()):
+        if self._pg:
+            sql = sql.replace("?", "%s")
         cursor = self._conn.execute(sql, params)
-        self._conn.commit()
+        if not self._pg:
+            self._conn.commit()
         return cursor
 
-    def list(self) -> list[DashboardRow]:
-        rows = self._conn.execute(
-            "SELECT id, name, author, yaml, updated_at FROM dashboards"
-            " ORDER BY updated_at DESC"
-        ).fetchall()
-        return [DashboardRow(*r) for r in rows]
-
-    def get(self, id: str) -> DashboardRow | None:
-        row = self._conn.execute(
-            "SELECT id, name, author, yaml, updated_at FROM dashboards WHERE id = ?",
-            (id,),
-        ).fetchone()
-        return DashboardRow(*row) if row else None
-
-    def create(self, yaml: str, author: str = "") -> str:
-        name = _name_of(yaml)  # validates + reads the top-level `name:` key
-        new_id, now = str(uuid.uuid4()), _now()
-        self._conn.execute(
-            "INSERT INTO dashboards (id, name, author, yaml, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (new_id, name, author, yaml, now, now),
-        )
-        self._conn.commit()
-        self._record(new_id, yaml, author)
-        self._index(new_id, yaml)
-        return new_id
-
-    def save(self, id: str, yaml: str, author: str = "") -> None:
-        # Name is re-derived from the YAML; author (the creator) is left as-is.
-        # `author` is who saved — recorded on the version, not the dashboard.
-        name = _name_of(yaml)
-        self._baseline(id)
-        self._conn.execute(
-            "UPDATE dashboards SET name = ?, yaml = ?, updated_at = ? WHERE id = ?",
-            (name, yaml, _now(), id),
-        )
-        self._conn.commit()
-        self._record(id, yaml, author)
-        self._index(id, yaml)
-
-    def delete(self, id: str) -> None:
-        self._conn.execute("DELETE FROM dashboards WHERE id = ?", (id,))
-        self._conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", (id,))
-        self._conn.execute("DELETE FROM dashboard_uses WHERE dashboard_id = ?", (id,))
-        self._conn.commit()
-
-
-class PostgresStore(_SqlVersions, _SqlUses):
-    """Runtime store. Same schema, `%s` placeholders; imports psycopg lazily so
-    this module stays importable without the `.[portal]` extra installed."""
-
-    def __init__(self, dsn: str):
-        import psycopg  # optional dependency, only needed at portal runtime
-
-        self._conn = psycopg.connect(dsn, autocommit=True)
-        self._conn.execute(_SCHEMA)
-        self._conn.execute(_VERSIONS_SCHEMA)
-        self._conn.execute(_USES_SCHEMA)
-
-    def _run(self, sql: str, params=()):
-        return self._conn.execute(sql.replace("?", "%s"), params)
+    def _migrate_ids(self) -> None:
+        """Dashboards were once keyed by a UUID, and two could share a name:
+        rebuild those tables keyed by name, a repeated name made unique
+        ("Sales 2") in its row and YAML. The uses index is rebuilt on read."""
+        try:
+            old = self._run(
+                "SELECT id, name, author, yaml, created_at, updated_at FROM dashboards ORDER BY created_at"
+            ).fetchall()
+            versions = self._run(
+                "SELECT dashboard_id, version, yaml, author, created_at FROM dashboard_versions"
+            ).fetchall()
+        except Exception:
+            if self._pg:
+                self._conn.rollback()
+            return                                  # new tables, or none yet
+        for table in ("dashboard_uses", "dashboard_versions", "dashboards"):
+            self._run(f"DROP TABLE IF EXISTS {table}")
+        for schema in (_SCHEMA, _VERSIONS_SCHEMA, _USES_SCHEMA):
+            self._run(schema)
+        names: dict[str, str] = {}
+        for id, name, author, yaml_text, created, updated in old:
+            unique, n = name, 2
+            while unique in names.values():
+                unique, n = f"{name} {n}", n + 1
+            names[str(id)] = unique
+            if unique != name:
+                yaml_text = set_yaml_name(yaml_text, unique)
+            self._run(
+                "INSERT INTO dashboards (name, author, yaml, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (unique, author, yaml_text, str(created), str(updated)),
+            )
+        for id, version, yaml_text, author, at in versions:
+            if str(id) in names:
+                self._run(
+                    "INSERT INTO dashboard_versions (dashboard, version, yaml, author, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)", (names[str(id)], version, yaml_text, author, at),
+                )
 
     def list(self) -> list[DashboardRow]:
-        rows = self._conn.execute(
-            "SELECT id, name, author, yaml, updated_at FROM dashboards"
-            " ORDER BY updated_at DESC"
+        rows = self._run(
+            "SELECT name, author, yaml, updated_at FROM dashboards ORDER BY updated_at DESC"
         ).fetchall()
-        return [DashboardRow(str(r[0]), r[1], r[2], r[3], str(r[4])) for r in rows]
+        return [DashboardRow(n, n, a, y, str(u)) for n, a, y, u in rows]
 
-    def get(self, id: str) -> DashboardRow | None:
-        row = self._conn.execute(
-            "SELECT id, name, author, yaml, updated_at FROM dashboards WHERE id = %s",
-            (id,),
+    def get(self, name: str) -> DashboardRow | None:
+        row = self._run(
+            "SELECT name, author, yaml, updated_at FROM dashboards WHERE name = ?", (name,),
         ).fetchone()
-        if not row:
-            return None
-        return DashboardRow(str(row[0]), row[1], row[2], row[3], str(row[4]))
+        return DashboardRow(row[0], row[0], row[1], row[2], str(row[3])) if row else None
+
+    def _free(self, name: str) -> str:
+        _check_dashboard_name(name)
+        if self.get(name) is not None:
+            raise DashboardError(f"a dashboard named {name!r} already exists")
+        return name
+
+    def free_name(self, name: str) -> str:
+        """`name`, or the first of "name 2", "name 3"… no dashboard has."""
+        unique, n = name, 2
+        while self.get(unique) is not None:
+            unique, n = f"{name} {n}", n + 1
+        return unique
 
     def create(self, yaml: str, author: str = "") -> str:
-        name = _name_of(yaml)  # validates + reads the top-level `name:` key
-        new_id, now = str(uuid.uuid4()), _now()
-        self._conn.execute(
-            "INSERT INTO dashboards (id, name, author, yaml, created_at, updated_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s)",
-            (new_id, name, author, yaml, now, now),
+        name = self._free(_name_of(yaml))  # validates + reads the top-level `name:` key
+        now = _now()
+        self._run(
+            "INSERT INTO dashboards (name, author, yaml, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (name, author, yaml, now, now),
         )
-        self._record(new_id, yaml, author)
-        self._index(new_id, yaml)
-        return new_id
+        self._record(name, yaml, author)
+        self._index(name, yaml)
+        return name
 
-    def save(self, id: str, yaml: str, author: str = "") -> None:
-        # Name is re-derived from the YAML; author (the creator) is left as-is.
-        # `author` is who saved — recorded on the version, not the dashboard.
-        name = _name_of(yaml)
-        self._baseline(id)
-        self._conn.execute(
-            "UPDATE dashboards SET name = %s, yaml = %s, updated_at = %s WHERE id = %s",
-            (name, yaml, _now(), id),
+    def save(self, name: str, yaml: str, author: str = "") -> str:
+        """Keep `yaml` as dashboard `name` and return its name now: a changed
+        `name:` renames it — history and all — unless another has that name.
+        `author` is who saved, recorded on the version; the creator stays."""
+        new = _name_of(yaml)
+        if new != name:
+            self._free(new)
+        self._baseline(name)
+        self._run(
+            "UPDATE dashboards SET name = ?, yaml = ?, updated_at = ? WHERE name = ?",
+            (new, yaml, _now(), name),
         )
-        self._record(id, yaml, author)
-        self._index(id, yaml)
+        if new != name:
+            self._run("UPDATE dashboard_versions SET dashboard = ? WHERE dashboard = ?", (new, name))
+            self._run("DELETE FROM dashboard_uses WHERE dashboard = ?", (name,))
+        self._record(new, yaml, author)
+        self._index(new, yaml)
+        return new
 
-    def delete(self, id: str) -> None:
-        self._conn.execute("DELETE FROM dashboards WHERE id = %s", (id,))
-        self._conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = %s", (id,))
-        self._conn.execute("DELETE FROM dashboard_uses WHERE dashboard_id = %s", (id,))
+    def delete(self, name: str) -> None:
+        self._run("DELETE FROM dashboards WHERE name = ?", (name,))
+        self._run("DELETE FROM dashboard_versions WHERE dashboard = ?", (name,))
+        self._run("DELETE FROM dashboard_uses WHERE dashboard = ?", (name,))
 
 
-def make_store(dsn: str | None):
-    """Postgres when a DSN is given (portal runtime); otherwise a local sqlite
-    file so the portal can be tried without standing up a database."""
-    if dsn:
-        return PostgresStore(dsn)
-    return SqliteStore("portal.db")
+# --- activity log -------------------------------------------------------------
+# Who did what, when, to which thing — a security audit trail and the data for
+# a usage dashboard later. One row per action, written by `app.py` after the
+# response (so `status_code` is what really came back: 200, 303, 400, 403, 409,
+# 500…).
+# `detail` is the action's own parameters as JSON — never a password, a
+# session, or a whole dashboard's YAML (a save's is in its version).
+
+_ACTIVITY_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS activity ("
+    " id {id},"
+    " at TEXT NOT NULL,"
+    " actor TEXT NOT NULL DEFAULT '',"
+    " action TEXT NOT NULL,"
+    " object_type TEXT NOT NULL DEFAULT '',"
+    " object_name TEXT NOT NULL DEFAULT '',"
+    " status_code INTEGER NOT NULL DEFAULT 0,"
+    " detail TEXT NOT NULL DEFAULT '{{}}',"
+    " ip TEXT NOT NULL DEFAULT '',"
+    " user_agent TEXT NOT NULL DEFAULT '')"
+)
+_ACTIVITY_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS activity_at ON activity (at)",
+    "CREATE INDEX IF NOT EXISTS activity_actor ON activity (actor, at)",
+    "CREATE INDEX IF NOT EXISTS activity_object ON activity (object_type, object_name, at)",
+)
+_DAY = 24 * 60 * 60
+
+
+@dataclass
+class Activity:
+    actor: str
+    action: str
+    object_type: str = ""
+    object_name: str = ""
+    status_code: int = 200
+    detail: dict = field(default_factory=dict)
+    ip: str = ""
+    user_agent: str = ""
+    at: str = ""
+
+
+class ActivityLog:
+    """The `activity` table, in the portal's Postgres (sqlite `:memory:` for
+    the tests). Rows older than `keep_days` are dropped when it
+    opens and then once a day as it writes; 0 keeps them all."""
+
+    def __init__(self, dsn: str, keep_days: int = 365):
+        self._pg = is_postgres(dsn)
+        if self._pg:
+            import psycopg
+
+            self._conn = psycopg.connect(dsn, autocommit=True)
+        else:
+            if dsn != ":memory:":
+                Path(dsn).parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(dsn, check_same_thread=False)
+        self._run(_ACTIVITY_SCHEMA.format(id="BIGSERIAL PRIMARY KEY" if self._pg else "INTEGER PRIMARY KEY"))
+        for index in _ACTIVITY_INDEXES:
+            self._run(index)
+        self._keep_days = keep_days
+        self._pruned = 0.0
+        self.prune()
+
+    def _run(self, sql: str, params: tuple = ()) -> list[tuple]:
+        if self._pg:
+            sql = sql.replace("?", "%s")
+        cursor = self._conn.execute(sql, params)
+        rows = cursor.fetchall() if cursor.description else []
+        if not self._pg:
+            self._conn.commit()
+        return rows
+
+    def record(self, entry: Activity) -> None:
+        self._run(
+            "INSERT INTO activity (at, actor, action, object_type, object_name, status_code, detail, ip, user_agent)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (entry.at or _now(), entry.actor, entry.action, entry.object_type, entry.object_name,
+             int(entry.status_code), json.dumps(entry.detail, ensure_ascii=False, default=str),
+             entry.ip, entry.user_agent[:512]),
+        )
+        if time.time() - self._pruned > _DAY:
+            self.prune()
+
+    def prune(self) -> None:
+        self._pruned = time.time()
+        if self._keep_days > 0:
+            cutoff = datetime.fromtimestamp(time.time() - self._keep_days * _DAY, timezone.utc)
+            self._run("DELETE FROM activity WHERE at < ?", (cutoff.isoformat(timespec="seconds"),))
+
+    def entries(self, limit: int = 100) -> list[Activity]:
+        """The newest first — what a test, or later the usage dashboard, reads."""
+        rows = self._run(
+            "SELECT actor, action, object_type, object_name, status_code, detail, ip, user_agent, at"
+            " FROM activity ORDER BY id DESC LIMIT ?", (limit,),
+        )
+        return [Activity(a, ac, ot, on, int(c), json.loads(d), ip, ua, str(at))
+                for a, ac, ot, on, c, d, ip, ua, at in rows]
 
 
 # --- gallery page -----------------------------------------------------------
 # Editor chrome, not chart output, so f-strings are fine here (the no-f-string
-# rule is for chart HTML). User input — dashboard names — is escape()'d; ids are
-# UUIDs and timestamps are machine-generated, so they're safe. The styles and
+# rule is for chart HTML). User input — dashboard names, which are also
+# their ids — is escape()'d (and quote()'d in a URL); timestamps are
+# machine-generated, so they're safe. The styles and
 # the dialog openers live in static/ (gallery.css, nav.css, gallery.js).
 
 # Inline-SVG action icons (stroke=currentColor so they follow the button colour).
@@ -839,15 +1011,15 @@ def _row(row: DashboardRow, authors: bool = True, known: set[str] | None = None,
     updated = _stamp(row.updated_at)
     return (
         "<tr>"
-        f'<td>{name_cell(f"/d/{row.id}", row.name, row.description)}</td>'
+        f'<td>{name_cell(f"/d/{quote(row.id)}", row.name, row.description)}</td>'
         f"{_author_cell(row.author, authors)}"
         f'<td class="muted">{updated}</td>'
         f"<td>{_dashboard_datasets(row, known, uses)}</td>"
         # The name opens the dashboard, so the row needs no edit button.
         '<td class="actions">'
-        f'<button class="act" type="button" title="Clone" data-id="{row.id}"'
+        f'<button class="act" type="button" title="Clone" data-id="{escape(row.id, quote=True)}"'
         f' data-name="{escape(row.name, quote=True)}" onclick="openClone(this)">{_icon("copy")}</button>'
-        f'<form method="post" action="/d/{row.id}/delete"'
+        f'<form method="post" action="/d/{escape(quote(row.id), quote=True)}/delete"'
         " onsubmit=\"return confirm('Remove this dashboard?')\">"
         f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
         "</td></tr>"
@@ -1108,7 +1280,7 @@ def _dataset_row(ds: Dataset, authors: bool = True,
     href = f"/datasets/{quote(ds.name)}"
     updated = _stamp(ds.updated_at)
     dashboards = "" if used_by is None else (
-        "<td>" + _ref_links([(f"/d/{did}", name) for did, name in used_by.get(ds.name, [])]) + "</td>"
+        "<td>" + _ref_links([(f"/d/{quote(did)}", name) for did, name in used_by.get(ds.name, [])]) + "</td>"
     )
     return (
         "<tr>"
@@ -1344,10 +1516,10 @@ def _locked() -> str:
 
 def _role_actions(role: Role) -> str:
     return (
-        f'<button class="act" type="button" title="Edit" data-id="{role.id}"'
+        f'<button class="act" type="button" title="Edit"'
         f' data-name="{escape(role.name, quote=True)}" data-description="{escape(role.description, quote=True)}"'
         f' onclick="openRename(this)">{_icon("pencil")}</button>'
-        f'<form method="post" action="/access/{role.id}/delete"'
+        f'<form method="post" action="/access/{escape(quote(role.name), quote=True)}/delete"'
         " onsubmit=\"return confirm('Remove this role?')\">"
         f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
     )
@@ -1404,14 +1576,14 @@ def _key(user: User) -> str:
 
 def _user_actions(user: User) -> str:
     return (
-        f'<button class="act" type="button" title="Edit" data-id="{user.id}"'
+        f'<button class="act" type="button" title="Edit"'
         f'{" data-has-password" if user.has_password else ""}'
         + (f' data-source="{escape(user.source, quote=True)}"' if user.external else "")
         + "".join(f' data-{k}="{escape(getattr(user, k.replace("-", "_")), quote=True)}"'
                   for k in ("name", "first-name", "last-name", "email"))
         + f' data-roles="{escape(json.dumps(user.roles), quote=True)}"'
         f' onclick="openUser(this)">{_icon("pencil")}</button>'
-        f'<form method="post" action="/users/{user.id}/delete"'
+        f'<form method="post" action="/users/{escape(quote(user.name), quote=True)}/delete"'
         " onsubmit=\"return confirm('Remove this user?')\">"
         f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
     )
@@ -1484,7 +1656,7 @@ def _user_dialog(roles: list[Role], reads: dict[str, list[str]]) -> str:
     the roles that would read a dataset twice — the server checks again
     (`role_clashes`)."""
     boxes = multi_select("role", [
-        Option(r.id, r.name, r.description,
+        Option(r.name, r.name, r.description,
                {"name": r.name, "reads": json.dumps(reads.get(r.name, [])),
                 **({"builtin": "1"} if r.builtin else {})})
         for r in roles
@@ -1551,7 +1723,7 @@ def render_dataset_detail(
             f'{_icon("trash")}<span class="badge">{len(used_by)}</span></button>'
         )
         links = "".join(
-            f'<li><a href="/d/{did}" target="_blank" rel="noopener">{escape(name)}</a></li>'
+            f'<li><a href="/d/{escape(quote(did), quote=True)}" target="_blank" rel="noopener">{escape(name)}</a></li>'
             for did, name in used_by
         )
         usage_dialog = f"""
@@ -1713,7 +1885,7 @@ def _columns_view(ds: Dataset, mapping: str, versions: list[Version], examples: 
         + (_service_mark() if r.service else "") + "</td>"
         f'<td class="muted mono">{escape(r.formula)}</td>'
         f'<td class="ex">{_examples(examples.get(r.name, []))}</td>'
-        f"<td>{_ref_links([(f'/d/{did}', n) for did, n in used_in.get(r.name, [])])}</td></tr>"
+        f"<td>{_ref_links([(f'/d/{quote(did)}', n) for did, n in used_in.get(r.name, [])])}</td></tr>"
         for r in _mapping_rules(ds, mapping, versions)
     )
     return (

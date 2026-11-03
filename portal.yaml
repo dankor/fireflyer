@@ -4,8 +4,8 @@
 
 title: Fireflyer Portal
 
-# Postgres connection string. Leave unset to fall back to a local sqlite file
-# (portal.db) so you can try portal mode without standing up a database.
+# Postgres connection string — required: portal mode runs on Postgres only
+# (`docker compose --profile portal up` brings one up and sets DATABASE_URL).
 # database_url: postgresql://fireflyer:fireflyer@localhost:5432/fireflyer
 
 # HTTPS. The portal serves it by default; the environment overrides each key

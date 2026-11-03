@@ -31,7 +31,7 @@ def test_users_are_created_with_roles_listed_edited_and_deleted(store):
     store.edit_user(bob, "robert", [admin, viewer, "no-such-role"], email="rob@x.com")
     assert store.user("robert").roles == ["admin", "viewer"]
     assert store.user("robert").about == "rob@x.com"                 # what's left out is cleared
-    store.delete_user(bob)
+    store.delete_user("robert")
     assert [u.name for u in store.users()] == ["alice"]
 
 
@@ -47,10 +47,10 @@ def test_a_user_name_is_required_and_unique(store):
 
 def test_a_renamed_role_stays_held_and_a_removed_one_is_dropped(store):
     viewer = store.create_role("viewer")
-    store.create_user("bob", role_ids=[viewer])
+    store.create_user("bob", roles=[viewer])
     store.rename_role(viewer, "reader")
     assert store.user("bob").roles == ["reader"]
-    store.delete_role(viewer)
+    store.delete_role("reader")
     assert store.user("bob").roles == []
 
 
@@ -65,7 +65,7 @@ def test_two_roles_clash_only_where_both_may_read_a_dataset():
 
 def test_the_users_page_lists_users_escaped_with_their_roles(store):
     rid = store.create_role("viewer")
-    store.create_user("<bob>", role_ids=[rid], first_name="Bob", last_name="<Smith>")
+    store.create_user("<bob>", roles=[rid], first_name="Bob", last_name="<Smith>")
     html = render_users(store.users(), store.roles(), reads={"viewer": ["orders"]})
     # Full name (and email) under the name, as a role's description; the Edit
     # button carries each for the dialog.
@@ -144,9 +144,9 @@ def test_users_are_added_edited_and_removed_through_the_routes(client):
     client.post("/users/new", data={"name": "bob", "role": [viewer], "last_name": "Smith", "email": "b@x.io"})
     bob = roles.user("bob")
     assert bob.roles == ["viewer"] and bob.about == "Smith · b@x.io" and "bob" in client.get("/users").text
-    client.post(f"/users/{bob.id}/edit", data={"name": "robert"})
+    client.post(f"/users/{bob.name}/edit", data={"name": "robert"})
     assert roles.user("robert").roles == [] and roles.user("bob") is None
-    client.post(f"/users/{bob.id}/delete")
+    client.post("/users/robert/delete")
     assert roles.users() == []
 
 
@@ -162,7 +162,7 @@ def test_a_user_cant_hold_two_roles_that_read_one_dataset(client, datasets):  # 
 def test_a_dataset_cant_give_one_users_two_roles_access(client, datasets):  # noqa: F811
     roles = app_mod.app.state.roles
     viewer, admin = roles.create_role("viewer"), roles.create_role("admin")
-    roles.create_user("bob", role_ids=[viewer, admin])
+    roles.create_user("bob", roles=[viewer, admin])
     grant(datasets, "orders", {"viewer": PAID})
     form = {"mapping": datasets.mapping("orders"), "role": ["viewer", "admin"]}
     refused = client.post("/datasets/orders/access/yaml", data=form)
@@ -176,7 +176,7 @@ def test_a_dataset_cant_give_one_users_two_roles_access(client, datasets):  # no
 def test_the_cell_route_renders_as_the_posted_user(client, datasets):  # noqa: F811
     roles = app_mod.app.state.roles
     viewer = roles.create_role("viewer")
-    roles.create_user("bob", role_ids=[viewer])
+    roles.create_user("bob", roles=[viewer])
     roles.create_user("eve")
     grant(datasets, "orders", {"viewer": PAID})
     cell = lambda user: client.post("/dashboard/cell", data={"yaml_text": _YAML, "cid": "rows", "user": user}).text
@@ -202,8 +202,8 @@ def test_portal_has_a_locked_admin_role_and_user(portal_roles):
     assert admin.builtin and admin.description
     first = portal_roles.users()[0]
     assert (first.name, first.roles, first.builtin) == ("root", ["admin"], True)
-    for change in (lambda: portal_roles.rename_role(admin.id, "boss"), lambda: portal_roles.delete_role(admin.id),
-                   lambda: portal_roles.edit_user(first.id, "x"), lambda: portal_roles.delete_user(first.id),
+    for change in (lambda: portal_roles.rename_role(admin.name, "boss"), lambda: portal_roles.delete_role(admin.name),
+                   lambda: portal_roles.edit_user(first.name, "x"), lambda: portal_roles.delete_user(first.name),
                    lambda: portal_roles.create_user("root")):                   # its name is taken
         with pytest.raises(RoleError):
             change()
@@ -241,9 +241,9 @@ def test_the_admin_role_reads_every_dataset_and_no_permissions_name_it(client, d
     # It reads every dataset, so it clashes with any role that reads one.
     viewer = portal_roles.create_role("viewer")
     grant(datasets, "orders", {"viewer": PAID})
-    admin = next(r.id for r in portal_roles.roles() if r.name == "admin")
+    admin = next(r.name for r in portal_roles.roles() if r.name == "admin")
     assert client.post("/users/new", data={"name": "bob", "role": [admin, viewer]}).status_code == 400
-    root = portal_roles.users()[0].id
+    root = portal_roles.users()[0].name
     assert client.post(f"/users/{root}/delete").status_code == 400
     assert client.post(f"/access/{admin}/delete").status_code == 400
 
@@ -269,7 +269,7 @@ def test_the_store_never_holds_or_hands_out_the_password(portal_roles):
     bob = portal_roles.create_user("bob")
     assert not portal_roles.user("bob").has_password and portal_roles.verify("bob", "") is None
     portal_roles.set_password(bob, "s3cret-pass")
-    raw = portal_roles._run("SELECT password_hash FROM users WHERE id = ?", (bob,))[0][0]
+    raw = portal_roles._run("SELECT password_hash FROM users WHERE name = ?", (bob,))[0][0]
     assert "s3cret-pass" not in raw and raw.startswith("scrypt$")
     assert portal_roles.user("bob").has_password and not hasattr(portal_roles.user("bob"), "password_hash")
     assert portal_roles.verify("bob", "s3cret-pass") == "bob"
@@ -277,7 +277,7 @@ def test_the_store_never_holds_or_hands_out_the_password(portal_roles):
     with pytest.raises(RoleError):
         portal_roles.set_password(bob, "short")
     with pytest.raises(RoleError):
-        portal_roles.set_password(portal_roles.users()[0].id, "the-admins-own")   # the env's, not ours
+        portal_roles.set_password(portal_roles.users()[0].name, "the-admins-own")   # the env's, not ours
     key = portal_roles.session_key("bob")
     portal_roles.set_password(bob, "another-pass")
     assert portal_roles.session_key("bob") not in (None, key)            # rotated: old sessions end
@@ -327,7 +327,7 @@ def test_an_admin_sets_a_password_and_the_user_signs_in_with_it(portal, portal_r
     assert bob.post("/access/new", data={"name": "boss"}).status_code == 403
 
     # Editing without a password keeps it; a new one signs bob out everywhere.
-    uid = portal_roles.user("bob").id
+    uid = portal_roles.user("bob").name
     portal.post(f"/users/{uid}/edit", data={"name": "bob"})
     assert portal_roles.verify("bob", "bobs-pass-1") == "bob"
     portal.post(f"/users/{uid}/edit", data={"name": "bob", "password": "bobs-pass-2"})
@@ -339,7 +339,7 @@ def test_an_admin_sets_a_password_and_the_user_signs_in_with_it(portal, portal_r
 
 
 def test_a_user_holding_admin_manages_users(portal, portal_roles):
-    admin = next(r.id for r in portal_roles.roles() if r.name == "admin")
+    admin = next(r.name for r in portal_roles.roles() if r.name == "admin")
     ann = portal_roles.create_user("ann", [admin])
     portal_roles.set_password(ann, "anns-pass-1")
     assert _login(portal, "ann", "anns-pass-1").status_code == 303
@@ -368,7 +368,7 @@ def test_no_system_signs_in_as_anothers_user(portal_roles):
 
 def test_an_external_user_has_no_password_here_and_keeps_their_name(portal_roles):
     portal_roles.provision("dana", "sso")
-    dana = portal_roles.user("dana").id
+    dana = portal_roles.user("dana").name
     for change in (lambda: portal_roles.set_password(dana, "a-long-pass"),
                    lambda: portal_roles.clear_password(dana),
                    lambda: portal_roles.edit_user(dana, "danielle")):
@@ -403,7 +403,7 @@ def test_an_authenticator_with_a_source_signs_its_users_in(portal, portal_roles,
     assert portal_roles.user("lee").source == "ldap"
     assert client.get("/datasets", follow_redirects=False).status_code == 200
     # Deleting them signs them out; signing in again makes them anew, with no roles.
-    portal_roles.delete_user(portal_roles.user("lee").id)
+    portal_roles.delete_user(portal_roles.user("lee").name)
     assert client.get("/datasets", follow_redirects=False).status_code == 303
     portal_roles.create_user("bob")
     assert "Invalid" in _login(client, "bob", "ldap-pass").text              # not LDAP's to sign in
@@ -432,3 +432,31 @@ def test_an_sso_callback_signs_in_through_sign_in(portal, portal_roles):
     finally:
         app_mod.app.router.routes[:] = [r for r in app_mod.app.router.routes
                                         if getattr(r, "path", "") != "/auth/test-sso/callback"]
+
+
+def test_roles_and_users_keyed_by_uuid_are_migrated_to_their_names(tmp_path):
+    """The tables from before: UUID ids, held by id."""
+    import sqlite3
+
+    path = str(tmp_path / "roles.db")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE roles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL"
+               " DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    db.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, first_name TEXT NOT NULL"
+               " DEFAULT '', last_name TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', password_hash"
+               " TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'local', session_key TEXT NOT NULL"
+               " DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    db.execute("CREATE TABLE user_roles (user_id TEXT NOT NULL, role_id TEXT NOT NULL)")
+    db.execute("INSERT INTO roles VALUES ('r-1', 'viewer', 'Reads', 'c', 'u')")
+    db.execute("INSERT INTO users VALUES ('u-1', 'bob', 'Bob', '', '', 'scrypt$x', 'local', 'key', 'c', 'u')")
+    db.execute("INSERT INTO user_roles VALUES ('u-1', 'r-1')")
+    db.commit()
+    db.close()
+
+    store = RoleStore(path)
+    assert [(r.name, r.description) for r in store.roles()] == [("viewer", "Reads")]
+    bob = store.user("bob")
+    assert (bob.roles, bob.first_name, bob.has_password) == (["viewer"], "Bob", True)
+    assert store.session_key("bob") == "key"                         # their sessions still hold
+    store.rename_role("viewer", "reader")
+    assert store.user("bob").roles == ["reader"]

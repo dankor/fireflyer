@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-03
+
+### Added
+
+- **Activity log** (portal mode, on Postgres): every action is a row in the
+  portal database's `activity` table — who (`actor`), what (`action`: `login`,
+  `open`, `save`, `move`, `filter`, …), on what (`object_type`,
+  `object_name`), the response's `status_code` (so refusals and failures are
+  there: a bad login is 401, a non-admin 403, a guarded delete 409), the
+  action's parameters (`detail`, JSON — filter values included; never a
+  password or a dashboard's YAML), `ip` and `user_agent`. Logins, page opens,
+  every render, filter, tab, editor gesture, save, assistant prompt, dataset,
+  role and user change are logged; rows are kept a year
+  (`FIREFLYER_ACTIVITY_DAYS`). No page shows it yet.
+
+### Changed
+
+- **No more UUIDs**: dashboards, roles and users are keyed by their **name**,
+  which must be unique (and can't hold `/` or `\` or start with a dot — it's
+  in the URL). Links and routes are `/d/<name>`, `/access/<name>/…`,
+  `/users/<name>/…`. Saving a new `name:` renames a dashboard, history and all
+  (the editor follows to the new address); renaming a role or user carries its
+  holdings. A taken name is refused. Existing tables migrate on start; a
+  repeated dashboard name becomes "Sales 2". `SqliteStore` and `PostgresStore`
+  are one `SqlStore`.
+
+- **Portal mode runs on Postgres only.** Without a `postgresql://`
+  `DATABASE_URL` (or `portal.yaml`'s `database_url`) it stops before serving
+  and says what to set; the local `portal.db` sqlite fallback is gone. sqlite
+  stays for local mode's roles file and the tests.
+
+### Fixed
+
+- `portal.py` caught `DashboardError` without importing it.
+
 ## [0.22.0] - 2026-10-31
 
 ### Fixed
@@ -1294,7 +1329,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/dankor/fireflyer/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/dankor/fireflyer/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/dankor/fireflyer/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/dankor/fireflyer/compare/v0.19.0...v0.20.0

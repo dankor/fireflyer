@@ -8,7 +8,7 @@ import traceback
 from html import escape
 
 from dotenv import load_dotenv
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -51,17 +51,16 @@ CHAT_ENABLED = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 # Portal mode (owner-approved exception to the no-persistence anti-goal, scoped
 # to web/): when FIREFLYER_PORTAL is set, `/` becomes a gallery of dashboards
-# stored in a DB and each opens in the existing editor. A DATABASE_URL selects
-# Postgres; otherwise a local sqlite file. Off by default — `/` is the usual
+# stored in Postgres (`DATABASE_URL` — it won't start without one) and each
+# opens in the existing editor. Off by default — `/` is the usual
 # single-dashboard editor. Tests set `app.state.store` directly.
 PORTAL_ENABLED = bool(os.environ.get("FIREFLYER_PORTAL"))
 PORTAL_TITLE = os.environ.get("FIREFLYER_PORTAL_TITLE", "Fireflyer Portal")
+_DATABASE_URL = portal_mod.database_url() if PORTAL_ENABLED else ""
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=assets.STATIC_DIR), name="static")
-app.state.store = (
-    portal_mod.make_store(os.environ.get("DATABASE_URL")) if PORTAL_ENABLED else None
-)
+app.state.store = portal_mod.SqlStore(_DATABASE_URL) if PORTAL_ENABLED else None
 # Portal mode is gated behind a login. `authenticator` is the swappable
 # credential check (default: admin/admin); None disables auth entirely (local
 # mode). Tests set both `store` and `authenticator` directly. In portal mode the
@@ -101,7 +100,7 @@ def _object_store_config() -> dict:
 # database in portal mode, and as a file beside its data locally.
 app.state.datasets = DatasetStore(
     make_object_store(_object_store_config()),
-    SqlCatalog(os.environ.get("DATABASE_URL") or "portal.db") if PORTAL_ENABLED else None,
+    SqlCatalog(_DATABASE_URL) if PORTAL_ENABLED else None,
 )
 
 
@@ -138,6 +137,87 @@ async def _hsts(request: Request, call_next):
     if os.environ.get("FIREFLYER_HSTS") == "1" and request.url.scheme == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
+
+
+# --- activity log ------------------------------------------------------------------
+# Portal mode keeps a row per action in its database (`portal.ActivityLog`):
+# the security audit trail, and later a usage dashboard's data. A route says
+# what it did with `_log`; `_activity` writes it once the response is made, so
+# the row carries the real status code — a refusal or a crash is logged too.
+# Local and paths modes log nothing. Tests set `app.state.activity`.
+app.state.activity = (
+    portal_mod.ActivityLog(
+        _DATABASE_URL, keep_days=int(os.environ.get("FIREFLYER_ACTIVITY_DAYS", "365")),
+    ) if PORTAL_ENABLED else None
+)
+# The editor's requests name their dashboard (editor.js): its routes take the
+# YAML, not an id.
+_DASHBOARD_HEADER = "X-FF-Dashboard"
+# Form fields a row never keeps: secrets, and a dashboard's whole YAML (a save's
+# version holds it).
+_UNLOGGED = {"yaml_text", "password", "clear_password"}
+
+
+def _log(request: Request, action: str, object_type: str = "", object_name: str = "",
+         *, status_code: int | None = None, actor: str | None = None, **detail) -> None:
+    """What this request did, for `_activity` to write. `status_code` overrides
+    the response's — a JSON `{ok: false}` comes back 200 but failed; `actor` names
+    who before there's a session (a login)."""
+    if app.state.activity is None:
+        return
+    request.state.activity = (portal_mod.Activity(
+        actor=(auth_mod.current_user(request) or "") if actor is None else actor,
+        action=action, object_type=object_type, object_name=object_name,
+        detail={k: v for k, v in detail.items() if v not in (None, "", [], {})},
+        ip=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
+    ), status_code)
+
+
+def _record(entry) -> None:
+    """Never in the way: a log that can't be written loses its row, not the
+    request."""
+    try:
+        app.state.activity.record(entry)
+    except Exception:
+        traceback.print_exc()
+
+
+@app.middleware("http")
+async def _activity(request: Request, call_next):
+    try:
+        response = await call_next(request)
+    except Exception:
+        _write_activity(request, 500)
+        raise
+    await run_in_threadpool(_write_activity, request, response.status_code)
+    return response
+
+
+def _write_activity(request: Request, status: int) -> None:
+    logged = getattr(request.state, "activity", None)
+    if logged is None or app.state.activity is None:
+        return
+    entry, status_code = logged
+    entry.status_code = status_code if status_code is not None else status
+    _record(entry)
+
+
+def _form_detail(form) -> dict:
+    """A form's fields as a row's detail — a repeated one as its list."""
+    return {k: (vs if len(vs) > 1 else vs[0])
+            for k in dict.fromkeys(form.keys()) if k not in _UNLOGGED
+            for vs in [form.getlist(k)]}
+
+
+def _dash_of(request: Request, yaml_text: str = "") -> str:
+    """Which dashboard an editor request is about: the one the page opened
+    (its name, sent by editor.js), else the posted YAML's `name:`."""
+    sent = request.headers.get(_DASHBOARD_HEADER)
+    if sent:
+        return unquote(sent)
+    found = re.search(r"(?m)^name:[ \t]*(.*?)[ \t]*$", yaml_text)
+    return found.group(1).strip("\"'") if found else ""
 
 
 def _session_valid(signed: tuple[str, str] | None) -> bool:
@@ -231,7 +311,7 @@ def _save_html(dash_id: str) -> str:
         '<span class="ff-savebar" role="group" aria-label="Unsaved changes">'
         '<button class="ff-discard" id="ff-discard" type="button" title="Discard unsaved changes"'
         f' aria-label="Discard unsaved changes" hidden>{_DISCARD_ICON}</button>'
-        f'<button class="ff-save" id="ff-save" data-save-url="/d/{dash_id}/save" title="Save (⌘/Ctrl+S)"'
+        f'<button class="ff-save" id="ff-save" data-save-url="/d/{escape(quote(dash_id), quote=True)}/save" title="Save (⌘/Ctrl+S)"'
         f' aria-label="Save" hidden>{_SAVE_ICON}</button>'
         "</span>"
     )
@@ -513,13 +593,16 @@ def login_form():
 @app.post("/login")
 async def login_submit(request: Request, username: str = Form(""), password: str = Form("")):
     found = auth_mod.identify(app.state.authenticator, username, password)
-    if not found:
-        return auth_mod.login_page("Invalid username or password.", PORTAL_TITLE)
     resp = RedirectResponse("/", status_code=303)
     try:
+        if not found:
+            raise portal_mod.RoleError("no such user")
         sign_in(request, resp, *found)
     except portal_mod.RoleError:
+        # The page asks again with 200; the row says what it was — 401.
+        _log(request, "login", actor=username, status_code=401)
         return auth_mod.login_page("Invalid username or password.", PORTAL_TITLE)
+    _log(request, "login", actor=found[0], source=found[1])
     return resp
 
 
@@ -543,7 +626,8 @@ def sign_in(request: Request, response, identity: str, source: str = portal_mod.
 
 
 @app.post("/logout")
-async def logout() -> RedirectResponse:
+async def logout(request: Request) -> RedirectResponse:
+    _log(request, "logout")
     resp = RedirectResponse("/login", status_code=303)
     auth_mod.clear_session(resp)
     return resp
@@ -553,6 +637,7 @@ async def logout() -> RedirectResponse:
 def index(request: Request) -> str:
     # Portal: DB gallery. Paths mode: gallery of the active path's dashboards
     # (with the path picker). Plain local: the single-dashboard editor.
+    _log(request, "open", "gallery", "dashboards")
     if app.state.store is not None:
         return portal_mod.render_gallery(
             app.state.store.list(), PORTAL_TITLE, _user_menu(request),
@@ -585,12 +670,6 @@ def _empty_yaml(name: str, description: str = "") -> str:
     )
 
 
-def _set_yaml_name(yaml_text: str, name: str) -> str:
-    """Rewrite the top-level `name:` line (used when cloning). `name:` is a
-    required column-0 key, so replacing the first such line suffices."""
-    return re.sub(r"(?m)^name:.*$", f"name: {json.dumps(name)}", yaml_text, count=1)
-
-
 def _current_author(request: Request) -> str:
     """The logged-in user, recorded as a dashboard's author. Empty when auth is
     off (local dev)."""
@@ -603,9 +682,19 @@ def _current_author(request: Request) -> str:
 async def portal_new(
     request: Request, name: str = Form(""), description: str = Form("")
 ) -> RedirectResponse:
-    yaml_text = _empty_yaml(name.strip() or "Untitled dashboard", description.strip())
-    new_id = _dash_store(request).create(yaml_text, _current_author(request))
-    return RedirectResponse(f"/d/{new_id}", status_code=303)
+    store = _dash_store(request)
+    wanted = name.strip() or _free_name(store, "Untitled dashboard")
+    _log(request, "create", "dashboard", wanted, description=description.strip())
+    try:
+        new_id = store.create(_empty_yaml(wanted, description.strip()), _current_author(request))
+    except DashboardError as exc:                  # the name is taken
+        return _error(exc)
+    return RedirectResponse(f"/d/{quote(new_id)}", status_code=303)
+
+
+def _free_name(store, name: str) -> str:
+    """A default name no dashboard has yet."""
+    return store.free_name(name)
 
 
 @app.post("/d/{dash_id}/clone")
@@ -613,16 +702,20 @@ async def portal_clone(dash_id: str, request: Request, name: str = Form("")):
     store = _dash_store(request)
     row = store.get(dash_id)
     if row is None:
+        _log(request, "clone", "dashboard", name.strip(), source=dash_id)
         return HTMLResponse("Dashboard not found", status_code=404)
-    new_name = name.strip() or f"{row.name} (copy)"
-    new_id = store.create(
-        _set_yaml_name(row.yaml, new_name), _current_author(request)
-    )
-    return RedirectResponse(f"/d/{new_id}", status_code=303)
+    new_name = name.strip() or _free_name(store, f"{row.name} (copy)")
+    _log(request, "clone", "dashboard", new_name, source=row.name)
+    try:
+        new_id = store.create(portal_mod.set_yaml_name(row.yaml, new_name), _current_author(request))
+    except DashboardError as exc:
+        return _error(exc)
+    return RedirectResponse(f"/d/{quote(new_id)}", status_code=303)
 
 
 @app.get("/d/{dash_id}", response_class=HTMLResponse)
 def portal_open(dash_id: str, request: Request) -> HTMLResponse:
+    _log(request, "open", "dashboard", dash_id, **dict(request.query_params))
     row = _dash_store(request).get(dash_id)
     if row is None:
         return HTMLResponse("Dashboard not found", status_code=404)
@@ -652,17 +745,25 @@ def portal_open(dash_id: str, request: Request) -> HTMLResponse:
 async def portal_save(
     dash_id: str, request: Request, yaml_text: str = Form("")
 ) -> dict:
+    """`id` comes back: a changed `name:` renames a portal dashboard (its name
+    is its key), and the editor moves to the new address."""
+    store = _dash_store(request)
     try:
-        _dash_store(request).save(dash_id, yaml_text, author=_current_author(request))
-        return {"ok": True}
+        saved = store.save(dash_id, yaml_text, author=_current_author(request)) or dash_id
     except DashboardError as exc:
+        _log(request, "save", "dashboard", dash_id, status_code=400, error=str(exc))
         return {"ok": False, "error": str(exc)}
+    versions = store.versions(saved)
+    _log(request, "save", "dashboard", saved, renamed_from=dash_id if saved != dash_id else "",
+         version=versions[0].version if versions else None)
+    return {"ok": True, "id": saved}
 
 
 @app.get("/d/{dash_id}/versions")
 def dashboard_versions(dash_id: str, request: Request):
     """The dashboard's saved versions, newest first: number, Unix time, author.
     The compare view lists them; it fetches one's YAML when it's picked."""
+    _log(request, "versions", "dashboard", dash_id)
     store = _dash_store(request)
     if store is None or store.get(dash_id) is None:
         return JSONResponse({"error": "no such dashboard"}, status_code=404)
@@ -674,6 +775,7 @@ def dashboard_versions(dash_id: str, request: Request):
 
 @app.get("/d/{dash_id}/versions/{number}")
 def dashboard_version(dash_id: str, number: int, request: Request):
+    _log(request, "version", "dashboard", dash_id, version=number)
     store = _dash_store(request)
     found = store.version(dash_id, number) if store is not None else None
     if found is None:
@@ -684,6 +786,7 @@ def dashboard_version(dash_id: str, number: int, request: Request):
 
 @app.post("/d/{dash_id}/delete")
 async def portal_delete(dash_id: str, request: Request) -> RedirectResponse:
+    _log(request, "delete", "dashboard", dash_id)
     _dash_store(request).delete(dash_id)
     return RedirectResponse("/", status_code=303)
 
@@ -753,6 +856,7 @@ def _dataset_users(request: Request) -> dict[str, list[tuple[str, str]]] | None:
 
 @app.get("/datasets", response_class=HTMLResponse)
 def datasets_gallery(request: Request) -> str:
+    _log(request, "open", "gallery", "datasets")
     return portal_mod.render_datasets(
         _dataset_store(request).list(), _page_title(), _user_menu(request),
         used_by=_dataset_users(request), users=_users_tab(request), **_gallery_kwargs(request),
@@ -769,7 +873,7 @@ app.state.roles = None
 def _role_store():
     if app.state.roles is None:
         local = f"{_DATA_BASE}/fireflyer.db"
-        dsn = (os.environ.get("DATABASE_URL") or "portal.db") if PORTAL_ENABLED else local
+        dsn = _DATABASE_URL if PORTAL_ENABLED else local
         # Portal mode has people: the login is the built-in admin user.
         app.state.roles = portal_mod.RoleStore(dsn, admin=auth_mod.admin_name() if PORTAL_ENABLED else "")
     return app.state.roles
@@ -786,6 +890,7 @@ def _every_dataset_store() -> list[DatasetStore]:
 
 @app.get("/access", response_class=HTMLResponse)
 def access_gallery(request: Request) -> str:
+    _log(request, "open", "gallery", "access")
     kwargs = _gallery_kwargs(request)
     return portal_mod.render_access(
         _role_store().roles(), _page_title(), _user_menu(request),
@@ -823,6 +928,7 @@ def _assignable(roles: list) -> list:
 
 @app.post("/access/new")
 async def access_new(request: Request, name: str = Form(""), description: str = Form("")):
+    _log(request, "create", "role", name.strip(), description=description.strip())
     if _users_on() and not _is_admin(request):
         return HTMLResponse("Only an admin manages roles", status_code=403)
     try:
@@ -832,40 +938,43 @@ async def access_new(request: Request, name: str = Form(""), description: str = 
     return RedirectResponse("/access", status_code=303)
 
 
-def _role_named(role_id: str) -> str | None:
-    return next((r.name for r in _role_store().roles() if r.id == role_id), None)
+def _role_exists(name: str) -> bool:
+    return any(r.name == name for r in _role_store().roles())
 
 
-@app.post("/access/{role_id}/rename")
-async def access_rename(role_id: str, request: Request, name: str = Form(""),
+@app.post("/access/{old}/rename")
+async def access_rename(old: str, request: Request, name: str = Form(""),
                         description: str | None = Form(None)):
+    _log(request, "rename", "role", name.strip(), renamed_from=old if old != name.strip() else "",
+         description=description)
     if _users_on() and not _is_admin(request):
         return HTMLResponse("Only an admin manages roles", status_code=403)
-    old = _role_named(role_id)
+    if not _role_exists(old):
+        return HTMLResponse("No such role", status_code=404)
     try:
-        _role_store().rename_role(role_id, name, description)
+        new = _role_store().rename_role(old, name, description)
     except portal_mod.RoleError as exc:
         return _error(exc)
     # Datasets name their roles in `permissions:`: they follow the new name.
-    new = _role_named(role_id)
-    if old and new != old:
+    if new != old:
         for datasets in _every_dataset_store():
             datasets.rename_role(old, new, author=_current_author(request))
     return RedirectResponse("/access", status_code=303)
 
 
-@app.post("/access/{role_id}/delete")
-async def access_delete(role_id: str, request: Request):
+@app.post("/access/{name}/delete")
+async def access_delete(name: str, request: Request):
+    _log(request, "delete", "role", name)
     if _users_on() and not _is_admin(request):
         return HTMLResponse("Only an admin manages roles", status_code=403)
-    name = _role_named(role_id)
+    if not _role_exists(name):
+        return HTMLResponse("No such role", status_code=404)
     try:
-        _role_store().delete_role(role_id)
+        _role_store().delete_role(name)
     except portal_mod.RoleError as exc:
         return _error(exc)
-    if name:
-        for datasets in _every_dataset_store():
-            datasets.drop_role(name, author=_current_author(request))
+    for datasets in _every_dataset_store():
+        datasets.drop_role(name, author=_current_author(request))
     return RedirectResponse("/access", status_code=303)
 
 
@@ -905,10 +1014,9 @@ def _role_reads() -> dict[str, list[str]]:
     return out
 
 
-def _check_roles(user: str, role_ids: list[str]) -> None:
-    """RoleError when the roles `role_ids` name would read a dataset twice."""
-    names = [r.name for r in _role_store().roles() if r.id in role_ids]
-    clashes = portal_mod.role_clashes(names, _every_permission())
+def _check_roles(user: str, roles: list[str]) -> None:
+    """RoleError when `roles` would read a dataset twice."""
+    clashes = portal_mod.role_clashes(roles, _every_permission())
     if clashes:
         raise portal_mod.clash_error(user.strip(), clashes)
 
@@ -963,17 +1071,26 @@ def _password_change(password: str, clear: str) -> str | None:
         raise portal_mod.RoleError(str(exc)) from exc
 
 
-def _apply_password(user_id: str, change: str | None) -> None:
+def _apply_password(user: str, change: str | None) -> None:
     if change is None:
         return
     if change:
-        _role_store().set_password(user_id, change)
+        _role_store().set_password(user, change)
     else:
-        _role_store().clear_password(user_id)
+        _role_store().clear_password(user)
+
+
+def _log_user(request: Request, action: str, name: str, roles: list[str] = (),
+              password: str = "", clear: str = "", **detail) -> None:
+    """A Users change: its roles, and whether the password was set or removed
+    — never the password."""
+    change = "cleared" if clear else "set" if password else ""
+    _log(request, action, "user", name.strip(), roles=list(roles), password=change, **detail)
 
 
 @app.get("/users", response_class=HTMLResponse)
 def users_gallery(request: Request):
+    _log(request, "open", "gallery", "users")
     if refused := _admins_only(request):
         return refused
     store = _role_store()
@@ -988,41 +1105,46 @@ def users_gallery(request: Request):
 async def users_new(request: Request, name: str = Form(""), role: list[str] = Form(default=[]),
                     first_name: str = Form(""), last_name: str = Form(""), email: str = Form(""),
                     password: str = Form("")):
+    _log_user(request, "create", name, role, password, first_name=first_name,
+              last_name=last_name, email=email)
     if refused := _admins_only(request):
         return refused
     try:
         change = _password_change(password, "")
         _check_roles(name, role)
-        user_id = _role_store().create_user(name, role, first_name, last_name, email)
-        _apply_password(user_id, change)
+        created = _role_store().create_user(name, role, first_name, last_name, email)
+        _apply_password(created, change)
     except portal_mod.RoleError as exc:
         return _error(exc)
     return RedirectResponse("/users", status_code=303)
 
 
-@app.post("/users/{user_id}/edit")
-async def users_edit(user_id: str, request: Request, name: str = Form(""),
+@app.post("/users/{old}/edit")
+async def users_edit(old: str, request: Request, name: str = Form(""),
                      role: list[str] = Form(default=[]), first_name: str = Form(""),
                      last_name: str = Form(""), email: str = Form(""),
                      password: str = Form(""), clear_password: str = Form("")):
+    _log_user(request, "edit", name, role, password, clear_password, first_name=first_name,
+              last_name=last_name, email=email, renamed_from=old if old != name.strip() else "")
     if refused := _admins_only(request):
         return refused
     try:
         change = _password_change(password, clear_password)
         _check_roles(name, role)
-        _role_store().edit_user(user_id, name, role, first_name, last_name, email)
-        _apply_password(user_id, change)
+        edited = _role_store().edit_user(old, name, role, first_name, last_name, email)
+        _apply_password(edited, change)
     except portal_mod.RoleError as exc:
         return _error(exc)
     return RedirectResponse("/users", status_code=303)
 
 
-@app.post("/users/{user_id}/delete")
-async def users_delete(user_id: str, request: Request):
+@app.post("/users/{name}/delete")
+async def users_delete(name: str, request: Request):
+    _log(request, "delete", "user", name)
     if refused := _admins_only(request):
         return refused
     try:
-        _role_store().delete_user(user_id)
+        _role_store().delete_user(name)
     except portal_mod.RoleError as exc:
         return _error(exc)
     return RedirectResponse("/users", status_code=303)
@@ -1048,8 +1170,13 @@ def _build(key: str, datasets: DatasetStore, dashboards, name: str, author: str)
         _building.add(key)
         try:
             renames = datasets.build(name)
+        except Exception as exc:
+            _log_build(author, name, error=str(exc))
+            raise
         finally:
             _building.discard(key)
+    built = datasets.get(name)
+    _log_build(author, name, version=built.version if built else None, error=built.error if built else None)
     # Renamed columns: rewrite the dashboards that use them, as a dataset
     # rename rewrites its name.
     if renames and dashboards is not None:
@@ -1057,6 +1184,15 @@ def _build(key: str, datasets: DatasetStore, dashboards, name: str, author: str)
             text = rename_column_refs(row.yaml, name, renames)
             if text != row.yaml:
                 dashboards.save(row.id, text, author=author)
+
+
+def _log_build(author: str, name: str, version=None, error=None) -> None:
+    """A background build's outcome — no request, so written here, as who
+    asked for it: 200 built, 500 failed (the previous version kept)."""
+    if app.state.activity is None:
+        return
+    detail = {k: v for k, v in {"version": version, "error": error}.items() if v}
+    _record(portal_mod.Activity(author, "build", "dataset", name, 500 if error else 200, detail))
 
 
 def _build_later(background: BackgroundTasks, request: Request, name: str) -> None:
@@ -1079,10 +1215,13 @@ async def datasets_new(
     delimiter: str = Form(","),
     file: UploadFile = File(...),
 ):
+    content = await file.read()
+    _log(request, "upload", "dataset", name.strip(), file=file.filename, bytes=len(content),
+         description=description, delimiter=delimiter)
     try:
         ds = _dataset_store(request).create(
             name,
-            await file.read(),
+            content,
             description=description,
             delimiter=delimiter or ",",
             author=_current_author(request),
@@ -1098,6 +1237,7 @@ async def datasets_new(
 
 @app.get("/datasets/{name}", response_class=HTMLResponse)
 def dataset_detail(name: str, request: Request):
+    _log(request, "open", "dataset", name)
     datasets = _dataset_store(request)
     ds = datasets.get(name)
     if ds is None:
@@ -1124,9 +1264,12 @@ async def dataset_replace(
     delimiter: str = Form(","),
     file: UploadFile = File(...),
 ):
+    content = await file.read()
+    _log(request, "replace", "dataset", name, file=file.filename, bytes=len(content),
+         description=description, delimiter=delimiter)
     try:
         _dataset_store(request).replace(
-            name, await file.read(),
+            name, content,
             description=description or None, delimiter=delimiter or ",",
             author=_current_author(request), build=False,
         )
@@ -1141,6 +1284,7 @@ async def dataset_mapping(
     name: str, request: Request, background: BackgroundTasks, mapping: str = Form("")
 ) -> JSONResponse:
     """A new column mapping (the YAML) — the next minor, built in the background."""
+    _log(request, "mapping", "dataset", name, mapping=mapping)
     try:
         _check_permissions(name, mapping)
         ds = _dataset_store(request).remap(
@@ -1181,6 +1325,7 @@ def dataset_status(name: str, request: Request, background: BackgroundTasks) -> 
 
 @app.get("/datasets/{name}/versions")
 def dataset_versions(name: str, request: Request) -> JSONResponse:
+    _log(request, "versions", "dataset", name)
     try:
         versions = _dataset_store(request).versions(name)
     except DatasetError as exc:
@@ -1194,6 +1339,7 @@ def dataset_versions(name: str, request: Request) -> JSONResponse:
 
 @app.get("/datasets/{name}/versions/{label}")
 def dataset_version(name: str, label: str, request: Request) -> JSONResponse:
+    _log(request, "version", "dataset", name, version=label)
     try:
         v = _dataset_store(request).version(name, label)
     except DatasetError:
@@ -1208,6 +1354,7 @@ def dataset_version(name: str, label: str, request: Request) -> JSONResponse:
 def dataset_version_restore(name: str, label: str, request: Request) -> JSONResponse:
     """A version's mapping fitted to the latest upload — for the compare view's
     restore, which loads it as an unsaved edit (saving builds it anew)."""
+    _log(request, "restore", "dataset", name, version=label)
     try:
         return JSONResponse({"mapping": _dataset_store(request).restored(name, label)})
     except DatasetError as exc:
@@ -1216,6 +1363,7 @@ def dataset_version_restore(name: str, label: str, request: Request) -> JSONResp
 
 @app.post("/datasets/{name}/versions/{major}/delete")
 def dataset_delete_major(name: str, major: int, request: Request):
+    _log(request, "delete_version", "dataset", name, version=major)
     try:
         _dataset_store(request).delete_major(name, major)
     except DatasetError as exc:
@@ -1232,6 +1380,8 @@ async def dataset_rename(
     (`next=detail`, its title card) back to that page, at the new name;
     otherwise to the list."""
     new = name.strip()
+    _log(request, "rename", "dataset", new, renamed_from=old_name if new != old_name else "",
+         description=description)
     try:
         _dataset_store(request).rename(old_name, new, description=description)
     except DatasetError as exc:
@@ -1290,6 +1440,7 @@ async def dataset_access_yaml(name: str, request: Request) -> JSONResponse:
     the YAML Save then keeps as the next version. Only roles that exist, and
     never two that one user holds."""
     form = await request.form()
+    _log(request, "permissions", "dataset", name, **_form_detail(form))
     known = {r.name for r in _assignable(_role_store().roles())}
     try:
         grants = portal_mod.parse_access_form(form)
@@ -1319,6 +1470,7 @@ async def dataset_access_filter(name: str, request: Request):
 
 @app.post("/datasets/{name}/delete")
 async def dataset_delete(name: str, request: Request):
+    _log(request, "delete", "dataset", name)
     used = _dashboards_using(request, name)
     if used:  # guard: don't orphan dashboards
         names = ", ".join(n for _, n in used)
@@ -1328,6 +1480,22 @@ async def dataset_delete(name: str, request: Request):
     return RedirectResponse("/datasets", status_code=303)
 
 
+# What the editor does without a request of its own — put the last save back,
+# switch mode, pick a role or user to view as — it says here (a beacon).
+_CLIENT_ACTIONS = {"discard", "mode", "view_as"}
+
+
+@app.post("/activity")
+async def client_activity(request: Request) -> Response:
+    form = await request.form()
+    action = form.get("action", "")
+    if action not in _CLIENT_ACTIONS:
+        return Response(status_code=400)
+    detail = {k: v for k, v in _form_detail(form).items() if k not in ("action", "dashboard")}
+    _log(request, action, "dashboard", form.get("dashboard", ""), **detail)
+    return Response(status_code=204)
+
+
 @app.post("/execute")
 async def execute(request: Request, active_tab: int = 0, f: str = "", role: str = "",
                   user: str = "") -> dict:
@@ -1335,6 +1503,9 @@ async def execute(request: Request, active_tab: int = 0, f: str = "", role: str 
     editor passes it on every render, so a reload, a shared link, or a YAML edit
     all keep the filters in play."""
     body = (await request.body()).decode("utf-8")
+    # Every render: opening, ↻, an edit applied, a role picked, a tab clicked.
+    seen = dict(tab=active_tab or None, filters=filters_mod.decode_state(f), role=role, user=user)
+    _log(request, "refresh", "dashboard", _dash_of(request, body), **seen)
     try:
         dashboard = _as_role(request, Dashboard.from_yaml(body, datasets=_dataset_store(request)), role, user)
         # The response is a skeleton — each cell fetches itself via htmx so
@@ -1354,8 +1525,10 @@ async def execute(request: Request, active_tab: int = 0, f: str = "", role: str 
             "description": dashboard.description,
         }
     except DashboardError as exc:
+        _log(request, "refresh", "dashboard", _dash_of(request, body), status_code=400, error=str(exc), **seen)
         return {"ok": False, "html": f'<pre class="error">{escape(str(exc))}</pre>'}
-    except Exception:
+    except Exception as exc:
+        _log(request, "refresh", "dashboard", _dash_of(request, body), status_code=500, error=str(exc), **seen)
         return {
             "ok": False,
             "html": f'<pre class="error">{escape(traceback.format_exc())}</pre>',
@@ -1401,7 +1574,9 @@ async def chat(request: Request, req: ChatRequest) -> dict:
     swaps it into the editor and re-renders. The available datasets' schemas
     (columns + types, no data) are handed to the model so it builds charts and
     calcs from real columns."""
+    asked = dict(prompt=req.message, turns=len(req.history))
     if not CHAT_ENABLED:
+        _log(request, "chat", "dashboard", _dash_of(request, req.yaml), status_code=503, **asked)
         return {
             "ok": False,
             "reply": "AI assistant is disabled. Set ANTHROPIC_API_KEY in .env and restart.",
@@ -1413,9 +1588,12 @@ async def chat(request: Request, req: ChatRequest) -> dict:
             chat_mod.run_chat, req.message, req.yaml, req.history,
             datasets=_dataset_schemas(request),
         )
-        return {"ok": True, **result}
     except Exception as exc:  # surface SDK/auth/network errors as a chat reply
+        _log(request, "chat", "dashboard", _dash_of(request, req.yaml), status_code=502, error=str(exc), **asked)
         return {"ok": False, "reply": f"Assistant error: {exc}"}
+    _log(request, "chat", "dashboard", _dash_of(request, req.yaml), changed="yaml" in result,
+         reply=result.get("reply"), **asked)
+    return {"ok": True, **result}
 
 
 def _dataset_schemas(request: Request) -> list[dict]:
@@ -1504,6 +1682,27 @@ def _url_with_state(url: str, tokens: list[str]) -> str:
     return urlunsplit(("", "", parts.path or "/", urlencode(query), ""))
 
 
+def _log_dashboard(request: Request, yaml_text: str, cf: list[str], toggle: str, remove: list[str],
+                   replace: str, added: list[dict], set_grain: str, active_tab: int, **seen) -> None:
+    """What a viewer did to make `/dashboard` re-render — clicked a chart
+    (crossfilter), added or edited a quick filter (filter), took one off
+    (unfilter), picked a time grain, or switched tab — with the values: an
+    audit trail says what was looked at."""
+    if toggle:
+        action = "crossfilter"
+    elif added:
+        action = "filter"
+    elif remove:
+        action = "unfilter"
+    elif set_grain:
+        action = "grain"
+    else:
+        action = "tab"
+    _log(request, action, "dashboard", _dash_of(request, yaml_text), toggle=toggle, added=added,
+         replaced=replace, removed=remove, grain=set_grain, tab=active_tab,
+         filters=cf, **seen)
+
+
 @app.post("/dashboard", response_class=HTMLResponse)
 async def dashboard_render(
     request: Request,
@@ -1531,6 +1730,9 @@ async def dashboard_render(
     `editing` round-trips (as a hidden input) so the editor keeps its resize
     handles and per-chart edit buttons after a crossfilter click.
     """
+    added = parse_filters(await request.form())
+    _log_dashboard(request, yaml_text, list(cf), toggle, remove, replace, added, set_grain, active_tab,
+                   role=role, user=user)
     try:
         dashboard = Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request))
     except DashboardError as exc:
@@ -1543,7 +1745,7 @@ async def dashboard_render(
     # same filter twice must not remove it; its row's ✕ does that. One the
     # model rejects (a `between` without exactly two bounds) is dropped rather
     # than kept as a token nothing would ever apply or show.
-    for f in parse_filters(await request.form()):
+    for f in added:
         try:
             filters_mod.normalize([f])
         except filters_mod.FilterError:
@@ -1613,6 +1815,12 @@ async def dashboard_cell(
     rather than the whole dashboard. The page-level grain state rides back as an
     out-of-band swap, since a cell response doesn't otherwise touch it."""
     grains = set_grain_token(list(grain), set_grain) if set_grain else list(grain)
+    # A render fans out into a cell request per chart — logged as its one
+    # `refresh`. A cell's own row is a viewer paging, searching or re-graining it.
+    if set_grain or legend_page or table_page > 1 or table_q:
+        _log(request, "search" if table_q else "grain" if set_grain else "page", "dashboard",
+             _dash_of(request, yaml_text), chart=cid, q=table_q, page=table_page if table_page > 1 else None,
+             legend_page=legend_page, grain=set_grain, filters=list(cf), role=role, user=user)
     try:
         dashboard = _as_role(request, Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request)), role, user)
         html = dashboard.render_cell(
@@ -1783,120 +1991,112 @@ async def chart_config_add_form(
         return f'<div class="ff-modal-error" role="alert">{escape(str(exc))}</div>'
 
 
+def _edited(request: Request, action: str, yaml_text: str, edit, **detail) -> dict:
+    """An editor gesture: `edit()` makes the new YAML — `{ok, yaml}` for the
+    browser to swap in — or says why it can't (`{ok: false, error}`). Logged
+    either way, a refusal as 400."""
+    try:
+        result = {"ok": True, "yaml": edit()}
+    except (config_edit.ConfigEditError, DashboardError, calcs_edit.CalcsEditError, ValueError) as exc:
+        result = {"ok": False, "error": str(exc)}
+    _log(request, action, "dashboard", _dash_of(request, yaml_text),
+         status_code=None if result["ok"] else 400, error=result.get("error"), **detail)
+    return result
+
+
 @app.post("/chart/config/create")
 async def chart_config_create(request: Request) -> dict:
     """Create a chart from the add-form and place it in the layout. Returns
     {ok, yaml} on success, else {ok:false, error}."""
     form = await request.form()
     yaml_text = form.get("yaml_text", "")
-    try:
-        return {"ok": True, "yaml": config_edit.add_chart(yaml_text, form)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "add_chart", yaml_text, lambda: config_edit.add_chart(yaml_text, form),
+                   **_form_detail(form))
 
 
 @app.post("/chart/config/insert-item")
 async def chart_config_insert_item(
+    request: Request,
     yaml_text: str = Form(""),
     kind: str = Form(""),
     before: str = Form("end"),
 ) -> dict:
     """Insert a header or separator into the layout (no modal needed)."""
-    try:
-        return {"ok": True, "yaml": config_edit.insert_layout_item(yaml_text, kind, before)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "insert", yaml_text, lambda: config_edit.insert_layout_item(yaml_text, kind, before), kind=kind, before=before)
 
 
 @app.post("/chart/config/move-item")
 async def chart_config_move_item(
+    request: Request,
     yaml_text: str = Form(""),
     index: int = Form(0),
     before: str = Form("end"),
 ) -> dict:
     """Move a header/separator (at layout-item `index`) to a new spot between rows."""
-    try:
-        return {"ok": True, "yaml": config_edit.move_layout_item(yaml_text, index, before)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "move_item", yaml_text, lambda: config_edit.move_layout_item(yaml_text, index, before), index=index, before=before)
 
 
 @app.post("/chart/config/delete-item")
-async def chart_config_delete_item(yaml_text: str = Form(""), index: int = Form(0)) -> dict:
+async def chart_config_delete_item(request: Request, yaml_text: str = Form(""), index: int = Form(0)) -> dict:
     """Delete the header/separator at layout-item `index`."""
-    try:
-        return {"ok": True, "yaml": config_edit.delete_layout_item(yaml_text, index)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "delete_item", yaml_text, lambda: config_edit.delete_layout_item(yaml_text, index), index=index)
 
 
 @app.post("/chart/config/move")
 async def chart_config_move(
+    request: Request,
     yaml_text: str = Form(""),
     src: str = Form(""),
     dst: str = Form(""),
     position: str = Form("before"),
 ) -> dict:
     """Move chart `src` next to `dst` (drag-and-drop). Returns {ok, yaml}."""
-    try:
-        return {"ok": True, "yaml": config_edit.move_placement(yaml_text, src, dst, position)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "move", yaml_text, lambda: config_edit.move_placement(yaml_text, src, dst, position), src=src, dst=dst, position=position)
 
 
 @app.post("/chart/config/merge-down")
-async def chart_config_merge_down(yaml_text: str = Form(""), cid: str = Form("")) -> dict:
+async def chart_config_merge_down(request: Request, yaml_text: str = Form(""), cid: str = Form("")) -> dict:
     """Extend `cid`'s own span down by one row (merge current row + 1 below).
     Returns {ok, yaml}."""
-    try:
-        return {"ok": True, "yaml": config_edit.merge_down(yaml_text, cid)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "merge", yaml_text, lambda: config_edit.merge_down(yaml_text, cid), cid=cid)
 
 
 @app.post("/chart/config/new-row")
 async def chart_config_new_row(
+    request: Request,
     yaml_text: str = Form(""), src: str = Form(""), before: str = Form("end")
 ) -> dict:
     """Move chart `src` into its own new row at `before` (drag onto a row gap)."""
-    try:
-        return {"ok": True, "yaml": config_edit.move_to_new_row(yaml_text, src, before)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "new_row", yaml_text, lambda: config_edit.move_to_new_row(yaml_text, src, before), src=src, before=before)
 
 
 @app.post("/chart/config/resize-columns")
 async def chart_config_resize_columns(
+    request: Request,
     yaml_text: str = Form(""), ordinals: str = Form(""), widths: str = Form("")
 ) -> dict:
     """Rewrite a merge group's column widths after a column-boundary drag.
     `ordinals` and `widths` are comma-separated. Returns {ok, yaml}."""
-    try:
+    def resize() -> str:
         ords = [int(o) for o in ordinals.split(",") if o != ""]
         ws = [float(w) for w in widths.split(",") if w != ""]
-        return {"ok": True, "yaml": config_edit.resize_columns(yaml_text, ords, ws)}
-    except (config_edit.ConfigEditError, DashboardError, ValueError) as exc:
-        return {"ok": False, "error": str(exc)}
+        return config_edit.resize_columns(yaml_text, ords, ws)
+    return _edited(request, "resize", yaml_text, resize, ordinals=ordinals, widths=widths)
 
 
 @app.post("/chart/config/header")
 async def chart_config_header(
+    request: Request,
     yaml_text: str = Form(""), index: int = Form(0), text: str = Form("")
 ) -> dict:
     """Rename the `index`-th layout header. Returns {ok, yaml} or error."""
-    try:
-        return {"ok": True, "yaml": config_edit.set_header_text(yaml_text, index, text)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "header", yaml_text, lambda: config_edit.set_header_text(yaml_text, index, text), index=index, text=text)
 
 
 @app.post("/chart/config/delete")
-async def chart_config_delete(yaml_text: str = Form(""), cid: str = Form("")) -> dict:
+async def chart_config_delete(request: Request, yaml_text: str = Form(""), cid: str = Form("")) -> dict:
     """Delete a chart (block + layout placements). Returns {ok, yaml} or error."""
-    try:
-        return {"ok": True, "yaml": config_edit.delete_chart(yaml_text, cid)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "delete_chart", yaml_text, lambda: config_edit.delete_chart(yaml_text, cid), cid=cid)
 
 
 # --- tabs --------------------------------------------------------------------
@@ -1905,68 +2105,55 @@ async def chart_config_delete(yaml_text: str = Form(""), cid: str = Form("")) ->
 
 
 @app.post("/chart/config/tab-add-first")
-async def chart_config_tab_add_first(yaml_text: str = Form("")) -> dict:
+async def chart_config_tab_add_first(request: Request, yaml_text: str = Form("")) -> dict:
     """Wrap a flat dashboard in its first tab. Returns {ok, yaml}."""
-    try:
-        return {"ok": True, "yaml": config_edit.add_first_tab(yaml_text)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "tab_add", yaml_text, lambda: config_edit.add_first_tab(yaml_text))
 
 
 @app.post("/chart/config/tab-insert")
 async def chart_config_tab_insert(
+    request: Request,
     yaml_text: str = Form(""), before: str = Form("end")
 ) -> dict:
     """Add a tab that splits the current one at layout-item `before`."""
-    try:
-        return {"ok": True, "yaml": config_edit.insert_tab(yaml_text, before)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "tab_insert", yaml_text, lambda: config_edit.insert_tab(yaml_text, before), before=before)
 
 
 @app.post("/chart/config/tab-rename")
 async def chart_config_tab_rename(
+    request: Request,
     yaml_text: str = Form(""), index: int = Form(0), name: str = Form("")
 ) -> dict:
     """Rename the `index`-th tab. Returns {ok, yaml} or error."""
-    try:
-        return {"ok": True, "yaml": config_edit.set_tab_text(yaml_text, index, name)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "tab_rename", yaml_text, lambda: config_edit.set_tab_text(yaml_text, index, name), index=index, name=name)
 
 
 @app.post("/chart/config/tab-move")
 async def chart_config_tab_move(
+    request: Request,
     yaml_text: str = Form(""), index: int = Form(0), before: str = Form("end")
 ) -> dict:
     """Move the `index`-th tab to layout-item gap `before`. Returns {ok, yaml}."""
-    try:
-        return {"ok": True, "yaml": config_edit.move_tab(yaml_text, index, before)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "tab_move", yaml_text, lambda: config_edit.move_tab(yaml_text, index, before), index=index, before=before)
 
 
 @app.post("/chart/config/tab-reorder")
 async def chart_config_tab_reorder(
+    request: Request,
     yaml_text: str = Form(""), index: int = Form(0), to: int = Form(0)
 ) -> dict:
     """Move the `index`-th tab, rows and all, to before tab `to` (the tab count:
     after the last). Returns {ok, yaml}."""
-    try:
-        return {"ok": True, "yaml": config_edit.reorder_tab(yaml_text, index, to)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "tab_reorder", yaml_text, lambda: config_edit.reorder_tab(yaml_text, index, to), index=index, to=to)
 
 
 @app.post("/chart/config/tab-delete")
 async def chart_config_tab_delete(
+    request: Request,
     yaml_text: str = Form(""), index: int = Form(0)
 ) -> dict:
     """Delete the `index`-th tab (first tab dissolves all). Returns {ok, yaml}."""
-    try:
-        return {"ok": True, "yaml": config_edit.delete_tab(yaml_text, index)}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "tab_delete", yaml_text, lambda: config_edit.delete_tab(yaml_text, index), index=index)
 
 
 @app.post("/chart/config/save")
@@ -1978,11 +2165,8 @@ async def chart_config_save(request: Request) -> dict:
     form = await request.form()
     yaml_text = form.get("yaml_text", "")
     cid = form.get("cid", "")
-    try:
-        new_yaml = config_edit.apply_edit(yaml_text, cid, form)
-        return {"ok": True, "yaml": new_yaml}
-    except (config_edit.ConfigEditError, DashboardError) as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "edit_chart", yaml_text, lambda: config_edit.apply_edit(yaml_text, cid, form),
+                   **_form_detail(form))
 
 
 # --- Calcs manager ---------------------------------------------------------
@@ -2028,24 +2212,16 @@ async def calcs_save(request: Request) -> dict:
     dataset = form.get("dataset", "")
     key = form.get("key", "")
     original_key = form.get("original_key", "")
-    try:
-        definition = calcs_edit.definition_from_form(form)
-        new_yaml = calcs_edit.upsert_calc(
-            yaml_text, dataset, key, definition, original_key=original_key
-        )
-        return {"ok": True, "yaml": new_yaml}
-    except calcs_edit.CalcsEditError as exc:
-        return {"ok": False, "error": str(exc)}
+    return _edited(request, "calc_save", yaml_text, lambda: calcs_edit.upsert_calc(
+        yaml_text, dataset, key, calcs_edit.definition_from_form(form), original_key=original_key,
+    ), **_form_detail(form))
 
 
 @app.post("/calcs/delete")
 async def calcs_delete(request: Request) -> dict:
     """Delete a calc (guarded if a chart still references it)."""
     form = await request.form()
-    try:
-        new_yaml = calcs_edit.delete_calc(
-            form.get("yaml_text", ""), form.get("dataset", ""), form.get("key", "")
-        )
-        return {"ok": True, "yaml": new_yaml}
-    except calcs_edit.CalcsEditError as exc:
-        return {"ok": False, "error": str(exc)}
+    yaml_text = form.get("yaml_text", "")
+    return _edited(request, "calc_delete", yaml_text, lambda: calcs_edit.delete_calc(
+        yaml_text, form.get("dataset", ""), form.get("key", ""),
+    ), **_form_detail(form))

@@ -272,7 +272,7 @@ def test_renaming_or_removing_a_role_reaches_the_datasets(client, datasets):
     grant(datasets, "orders", {"viewer": PAID})
     client.post(f"/access/{rid}/rename", data={"name": "reader"})
     assert datasets.permissions("orders") == {"reader": PAID}
-    client.post(f"/access/{rid}/delete")
+    client.post("/access/reader/delete")
     assert datasets.permissions("orders") == {}
 
 

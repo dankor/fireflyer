@@ -5,7 +5,7 @@ chat tests). Postgres is only used at portal runtime; here sqlite stands in."""
 import pytest
 
 from fireflyer.dashboard import DashboardError
-from fireflyer.web.portal import SqliteStore, render_gallery
+from fireflyer.web.portal import SqlStore, database_url, render_gallery
 
 # Minimal valid dashboard. `from_yaml` only parses (it never opens the CSV), so
 # the dataset path need not exist for validation to pass. The listing name comes
@@ -26,7 +26,7 @@ INVALID_YAML = "charts: [not, a, dashboard]"
 
 @pytest.fixture
 def store():
-    return SqliteStore(":memory:")
+    return SqlStore(":memory:")
 
 
 def test_create_derives_name_from_yaml(store):
@@ -57,10 +57,12 @@ def test_create_records_author(store):
 def test_save_updates_name_and_yaml_but_keeps_author(store):
     new_id = store.create(VALID_YAML, author="dana")
 
-    store.save(new_id, _yaml(name="Revenue", title="Total"))
+    renamed = store.save(new_id, _yaml(name="Revenue", title="Total"))
 
-    row = store.get(new_id)
-    assert row.name == "Revenue"  # re-derived from the edited `name:` key
+    # The name is the key: the edited `name:` moves the dashboard to it.
+    assert renamed == "Revenue" and store.get(new_id) is None
+    row = store.get(renamed)
+    assert row.id == row.name == "Revenue"
     assert "Total" in row.yaml
     assert row.author == "dana"  # author (creator) is preserved across saves
 
@@ -101,10 +103,10 @@ def test_gallery_is_a_table_with_author_and_actions(store):
 
 
 def test_gallery_escapes_dashboard_names(store):
-    store.create(_yaml(name='"<script>alert(1)</script>"'), author="dana")
+    store.create(_yaml(name='"<b onmouseover=alert(1)>x"'), author="dana")
     html = render_gallery(store.list())
-    assert "<script>alert(1)</script>" not in html
-    assert "&lt;script&gt;" in html
+    assert "<b onmouseover" not in html
+    assert "&lt;b onmouseover=alert(1)&gt;x" in html
 
 
 def test_gallery_empty_state():
@@ -199,3 +201,28 @@ def test_every_list_puts_its_add_button_at_the_head_of_the_actions_column():
         assert 'class="topbar-right"><button class="act"' not in html     # not in the topbar
     empty = list_table(["Name", "Roles"], [], "No users yet", "+")
     assert '<td class="empty-row" colspan="3">No users yet</td>' in empty
+
+
+# --- the database: Postgres only ------------------------------------------------
+
+
+@pytest.mark.parametrize("env", [{}, {"DATABASE_URL": "portal.db"}, {"DATABASE_URL": "sqlite:///x.db"}])
+def test_portal_mode_wont_start_without_postgres(env):
+    with pytest.raises(SystemExit, match="portal mode needs Postgres"):
+        database_url(env)
+
+
+def test_portal_mode_runs_on_a_postgres_url():
+    for url in ("postgresql://u:p@db:5432/f", "postgres://u:p@db/f"):
+        assert database_url({"DATABASE_URL": url}) == url
+
+
+def test_the_portal_entrypoint_stops_before_serving_without_postgres(monkeypatch, tmp_path):
+    from fireflyer import portal as entrypoint
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("FIREFLYER_PORTAL", raising=False)        # main() sets it; put back after
+    monkeypatch.setenv("FIREFLYER_PORTAL_CONFIG", str(tmp_path / "none.yaml"))
+    monkeypatch.setattr(entrypoint.uvicorn, "run", lambda *a, **k: pytest.fail("served without Postgres"))
+    with pytest.raises(SystemExit, match="portal mode needs Postgres"):
+        entrypoint.main()
