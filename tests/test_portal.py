@@ -129,10 +129,13 @@ def _ds(name="orders"):
 
 
 def test_render_datasets_table():
-    html = render_datasets([_ds()])
-    # Overview nav is the Dashboards | Datasets switch, Datasets segment active.
+    html = render_datasets([_ds()], group="sales")
+    # Overview nav is the Dashboards | Datasets switch, Datasets segment active
+    # — both in the group being looked at.
     assert 'class="ff-switch"' in html
-    assert '<a class="ff-switch-seg active" href="/datasets">Datasets</a>' in html
+    assert '<a class="ff-switch-seg active" href="/datasets/sales">Datasets</a>' in html
+    assert '<a class="ff-switch-seg" href="/d/sales">Dashboards</a>' in html
+    assert '<td class="muted">sales</td>' in html                       # the Group column
     assert ">orders<" in html and ">dana<" in html
     assert "openUpload" in html
 
@@ -154,14 +157,19 @@ def test_render_dataset_detail_is_its_columns_without_a_data_preview():
 
 def test_render_dataset_detail_delete_when_unused():
     html = render_dataset_detail(_ds())   # used_by empty
-    assert 'action="/datasets/orders/delete"' in html    # trash deletes
+    assert 'action="/datasets/local/orders/delete"' in html    # trash deletes
     assert "usage-dialog" not in html
 
 
+def test_removing_a_dataset_says_which_other_groups_dashboards_lock():
+    html = render_dataset_detail(_ds(), group="sales", elsewhere=[("/d/mkt/Q", "mkt:Q")])
+    assert "usage-dialog" not in html and "will lock:\\n  mkt:Q" in html
+
+
 def test_render_dataset_detail_usage_lists_dashboards():
-    html = render_dataset_detail(_ds(), used_by=[("id1", "Sales"), ("id2", "Ops")])
+    html = render_dataset_detail(_ds(), used_by=[("/d/local/Sales", "Sales"), ("/d/local/Ops", "Ops")])
     assert 'class="badge">2<' in html                     # count badge on the trash icon
-    assert 'href="/d/id1" target="_blank"' in html        # opens in a new tab
+    assert 'href="/d/local/Sales" target="_blank"' in html  # opens in a new tab
     assert ">Sales<" in html and ">Ops<" in html
     assert 'class="warn"' not in html                     # no red text
 
@@ -178,16 +186,19 @@ def test_each_dashboard_links_the_datasets_it_reads(store):
     """One that isn't uploaded shows, unlinked, so it stands out."""
     store.create(VALID_YAML, author="dana")                              # reads `orders`
     store.create(_yaml(name="Old").replace("dataset: orders", "dataset: gone"), author="dana")
-    html = render_gallery(store.list(), datasets={"orders"})
+    store.create(_yaml(name="Cross").replace("dataset: orders", "dataset: sales:orders"))
+    html = render_gallery(store.list(), datasets={"orders", "sales:orders"}, group="_admin")
     assert ">Datasets</th>" in html
-    assert '<a class="ref" href="/datasets/orders" title="orders">orders</a>' in html
+    assert '<a class="ref" href="/datasets/_admin/orders" title="orders">orders</a>' in html
     assert '<span class="ref is-missing" title="Not uploaded">gone</span>' in html
+    # Another group's, with its group in front.
+    assert 'href="/datasets/sales/orders" title="sales:orders">sales:orders</a>' in html
 
 
 def test_each_dataset_links_the_dashboards_reading_it():
-    html = render_datasets([_ds()], used_by={"orders": [("id1", "Sales"), ("id2", "Ops")]})
+    html = render_datasets([_ds()], used_by={"orders": [("/d/local/Sales", "Sales"), ("/d/mkt/Ops", "mkt:Ops")]})
     assert ">Dashboards</th>" in html
-    assert 'href="/d/id1"' in html and ">Ops</a>" in html
+    assert 'href="/d/local/Sales"' in html and ">mkt:Ops</a>" in html
     # Plain local mode has no dashboards to look at: no column.
     assert ">Dashboards</th>" not in render_datasets([_ds()])
 

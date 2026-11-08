@@ -25,6 +25,7 @@ from fireflyer import calcs as calcs_mod
 from fireflyer import date_range
 from fireflyer import number_range
 from fireflyer import filters as filters_mod
+from fireflyer import groups
 
 # What a param's value reads from the chart's dataset — every Param class says,
 # and `columns_read` turns a chart's values into the columns it may use. A chart
@@ -64,6 +65,9 @@ def icon(name: str) -> str:
 class ParamContext:
     """What a widget needs to render without reaching into chart code."""
     datasets: dict[str, str] = field(default_factory=dict)  # dataset name -> its description
+    # The dashboard's group (portal mode): a dataset of another is `group:name`
+    # in `datasets`, and the dataset field gets a pick of group beside it.
+    group: str = ""
     dataset_id: str | None = None                           # this chart's dataset
     columns: list[str] = field(default_factory=list)        # its dataset's columns
     calcs: list[str] = field(default_factory=list)       # calc keys for its dataset
@@ -160,20 +164,40 @@ class DatasetParam(Param):
         name = escape(self.name, quote=True)
         if not ctx.datasets:
             return self._wrap(f'<input class="ff-input" type="text" name="{name}" value="{escape(val, quote=True)}">')
+        home = ctx.group
+        found = {ref: groups.split(ref, home) for ref in ctx.datasets}
         options = "".join(
-            f'<button type="button" class="ff-combo-item" data-value="{escape(n, quote=True)}">'
-            f'<span class="ff-combo-name">{escape(n)}</span>'
+            f'<button type="button" class="ff-combo-item" data-value="{escape(ref, quote=True)}"'
+            f' data-group="{escape(found[ref][0], quote=True)}">'
+            f'<span class="ff-combo-name">{escape(found[ref][1] if home else ref)}</span>'
             + (f'<span class="ff-combo-about">{escape(about)}</span>' if about else "")
             + "</button>"
-            for n, about in sorted(ctx.datasets.items(), key=lambda kv: kv[0].lower())
+            for ref, about in sorted(ctx.datasets.items(), key=lambda kv: kv[0].lower())
         )
         return self._wrap(
             '<div class="ff-combo">'
-            f'<input class="ff-input" type="text" name="{name}" value="{escape(val, quote=True)}"'
+            + self._group_pick(home, [g for g, _ in found.values()], val)
+            + f'<input class="ff-input" type="text" name="{name}" value="{escape(val, quote=True)}"'
             ' placeholder="Search datasets" autocomplete="off" spellcheck="false" role="combobox"'
             ' aria-autocomplete="list" aria-expanded="false">'
             f'<div class="ff-combo-list" role="listbox" hidden>{options}</div></div>'
         )
+
+    @staticmethod
+    def _group_pick(home: str, among: list[str], value: str) -> str:
+        """Beside the search, which group's datasets it lists — the dashboard's
+        own by default, the value's when it names another. Not a field: the
+        value is the reference picked (`group:name` for another's). None when
+        every dataset there is is the dashboard's own group's."""
+        names = list(dict.fromkeys([home, *among])) if home else []
+        if len(names) < 2:
+            return ""
+        current = groups.split(value, home)[0] if value else home
+        options = "".join(
+            f'<option value="{escape(g, quote=True)}"{" selected" if g == current else ""}>{escape(g)}</option>'
+            for g in names
+        )
+        return f'<select class="ff-input ff-combo-group" aria-label="Group" title="Group">{options}</select>'
 
     def parse(self, form):
         return (form.get(self.name) or "").strip()

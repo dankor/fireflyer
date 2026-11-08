@@ -34,6 +34,7 @@ ones in force.
 from __future__ import annotations
 
 import io
+import re
 import sqlite3
 import threading
 import time
@@ -46,7 +47,8 @@ import yaml
 
 from fireflyer import column_map
 from fireflyer import filters as filters_mod
-from fireflyer.storage import ObjectStore
+from fireflyer import groups
+from fireflyer.storage import ObjectStore, PrefixedStore, move_keys
 
 
 class DatasetError(Exception):
@@ -122,12 +124,21 @@ def _data_key(name: str) -> str:
 
 
 def _check_name(name: str) -> str:
-    name = name.strip()
-    if not name:
-        raise DatasetError("dataset name is required")
-    if "/" in name or "\\" in name or name.startswith("."):
-        raise DatasetError("a dataset name can't contain / or \\ or start with a dot")
-    return name
+    try:
+        return groups.check_name(name, "dataset")
+    except groups.GroupError as exc:
+        raise DatasetError(str(exc)) from exc
+
+
+def fit_name(name: str) -> str:
+    """The nearest valid dataset name to `name` — for a dataset from before
+    the rule, renamed once when it moves into its group."""
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-") or "dataset"
+
+
+# Each group's files sit in a folder of the one object store.
+def group_prefix(group: str) -> str:
+    return f"groups/{group}/"
 
 
 # --- catalogs: where a dataset's YAML document lives ----------------------------
@@ -157,12 +168,24 @@ class ObjectCatalog:
         self._store.delete(f"{_folder(name)}dataset.yaml")
 
 
+_CATALOG_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS datasets ("
+    " group_name TEXT NOT NULL, name TEXT NOT NULL, doc TEXT NOT NULL,"
+    " PRIMARY KEY (group_name, name))"
+)
+
+
 class SqlCatalog:
     """Portal mode: a `datasets` table in the portal's database — sqlite (a file,
     or `:memory:` for tests) or Postgres (a `postgresql://` DSN; `psycopg` is
-    imported only then)."""
+    imported only then). Keyed by group and name; one catalog reads one group
+    (`scoped` gives another's, over the same connection)."""
 
-    def __init__(self, dsn: str):
+    def __init__(self, dsn: str, group: str = groups.ADMIN_GROUP, _shared: tuple | None = None):
+        self._group = group
+        if _shared is not None:
+            self._pg, self._conn, self._lock = _shared
+            return
         self._pg = dsn.startswith(("postgres://", "postgresql://"))
         if self._pg:
             import psycopg
@@ -174,7 +197,11 @@ class SqlCatalog:
             # Builds run on a worker thread; the lock keeps one statement at a time.
             self._conn = sqlite3.connect(dsn, check_same_thread=False)
         self._lock = threading.Lock()
-        self._run("CREATE TABLE IF NOT EXISTS datasets (name TEXT PRIMARY KEY, doc TEXT NOT NULL)")
+        self._migrate_groups()
+        self._run(_CATALOG_SCHEMA)
+
+    def scoped(self, group: str) -> "SqlCatalog":
+        return SqlCatalog("", group, _shared=(self._pg, self._conn, self._lock))
 
     def _run(self, sql: str, params: tuple = ()) -> list[tuple]:
         if self._pg:
@@ -186,21 +213,45 @@ class SqlCatalog:
                 self._conn.commit()
             return rows
 
+    def _migrate_groups(self) -> None:
+        """Datasets were once keyed by name alone: those rows move into the
+        admin's group, where everything from before groups went."""
+        try:
+            self._run("SELECT group_name FROM datasets LIMIT 1")
+            return
+        except Exception:
+            pass
+        try:
+            old = self._run("SELECT name, doc FROM datasets")
+        except Exception:
+            return                                   # no table yet
+        self._run("DROP TABLE datasets")
+        self._run(_CATALOG_SCHEMA)
+        for name, doc in old:
+            self._run("INSERT INTO datasets (group_name, name, doc) VALUES (?, ?, ?)",
+                      (groups.ADMIN_GROUP, name, doc))
+
     def names(self) -> list[str]:
-        return [r[0] for r in self._run("SELECT name FROM datasets")]
+        return [r[0] for r in self._run("SELECT name FROM datasets WHERE group_name = ?", (self._group,))]
 
     def load(self, name: str) -> str | None:
-        rows = self._run("SELECT doc FROM datasets WHERE name = ?", (name,))
+        rows = self._run("SELECT doc FROM datasets WHERE group_name = ? AND name = ?", (self._group, name))
         return rows[0][0] if rows else None
 
     def save(self, name: str, text: str) -> None:
         if self.load(name) is None:
-            self._run("INSERT INTO datasets (name, doc) VALUES (?, ?)", (name, text))
+            self._run("INSERT INTO datasets (group_name, name, doc) VALUES (?, ?, ?)", (self._group, name, text))
         else:
-            self._run("UPDATE datasets SET doc = ? WHERE name = ?", (text, name))
+            self._run("UPDATE datasets SET doc = ? WHERE group_name = ? AND name = ?", (text, self._group, name))
 
     def delete(self, name: str) -> None:
-        self._run("DELETE FROM datasets WHERE name = ?", (name,))
+        self._run("DELETE FROM datasets WHERE group_name = ? AND name = ?", (self._group, name))
+
+    def move_group(self, old: str, new: str) -> None:
+        self._run("UPDATE datasets SET group_name = ? WHERE group_name = ?", (new, old))
+
+    def drop_group(self, group: str) -> None:
+        self._run("DELETE FROM datasets WHERE group_name = ?", (group,))
 
 
 # --- the store ---------------------------------------------------------------------
@@ -210,12 +261,49 @@ class DatasetStore:
     """Datasets over an `ObjectStore` (the files) and a catalog (their YAML).
     Pure logic — unit-tested with a `LocalObjectStore` in a tmp dir, no live S3."""
 
-    def __init__(self, store: ObjectStore, catalog=None):
+    def __init__(self, store: ObjectStore, catalog=None, *, migrate: bool = True):
         self._store = store
         self._catalog = catalog or ObjectCatalog(store)
-        self._migrate_unversioned()
+        self._groups: dict[str, DatasetStore] = {}
+        if migrate:
+            self._migrate_unversioned()
+
+    # --- groups: each a store of its own, in a folder of this one --------------
+
+    def group(self, name: str) -> "DatasetStore":
+        """Group `name`'s datasets: their files under `groups/<name>/`, their
+        documents in the catalog's rows for it. Made once per group."""
+        if name not in self._groups:
+            scoped = getattr(self._catalog, "scoped", None)
+            prefixed = PrefixedStore(self._store, group_prefix(name))
+            self._groups[name] = DatasetStore(prefixed, scoped(name) if scoped else None, migrate=False)
+        return self._groups[name]
+
+    def move_into_group(self, name: str) -> None:
+        """Datasets from before groups — `datasets/…` at the top — moved into
+        group `name`'s folder (the catalog's rows went there on open)."""
+        move_keys(self._store, _ROOT, group_prefix(name) + _ROOT)
+
+    def rename_group(self, old: str, new: str) -> None:
+        move_keys(self._store, group_prefix(old), group_prefix(new))
+        if hasattr(self._catalog, "move_group"):
+            self._catalog.move_group(old, new)
+        self._groups.pop(old, None)
+        self._groups.pop(new, None)
+
+    def drop_group(self, name: str) -> None:
+        """Every dataset of group `name`, files and documents, gone."""
+        for key in [k for k in self._store.list_keys() if k.startswith(group_prefix(name))]:
+            self._store.delete(key)
+        if hasattr(self._catalog, "drop_group"):
+            self._catalog.drop_group(name)
+        self._groups.pop(name, None)
 
     # --- reads ---------------------------------------------------------------
+
+    def names(self) -> list[str]:
+        """Just the names — no document read."""
+        return list(self._catalog.names())
 
     def list(self) -> list[Dataset]:
         out = [self.get(n) for n in self._catalog.names()]
@@ -323,10 +411,16 @@ class DatasetStore:
         doc = self._require(name)
         return _latest(doc)["mapping"]
 
-    def examples(self, name: str, n: int = 5) -> dict[str, list[str]]:
+    def examples(self, name: str, n: int = 5, rows: list[dict] | None = None) -> dict[str, list[str]]:
         """Up to `n` distinct values per column, from the data charts read (its
         first thousand rows) — computed columns included; shown beside each
-        column. Before the first build, the upload's own columns."""
+        column. Before the first build, the upload's own columns.
+
+        `rows`: someone reading another's dataset sees the values of the rows
+        their role lets through (its filters), and none of its service columns
+        — what a chart of theirs would read."""
+        if rows is not None:
+            return self._examples_seen(name, n, rows)
         doc = self._require(name)
         latest = _latest(doc)
         raw = _read(self._store.get(_raw_key(name, latest["major"], latest["raw"])),
@@ -344,6 +438,16 @@ class DatasetStore:
             except column_map.MappingError:
                 pass
         return out
+
+    def _examples_seen(self, name: str, n: int, rows: list[dict]) -> dict[str, list[str]]:
+        from fireflyer.scan import NoAccess, narrow
+
+        try:
+            uri, opts = self.source(name)
+            lf = narrow(pl.scan_parquet(uri, storage_options=opts), rows)
+        except (DatasetError, NoAccess):
+            return {}
+        return column_map.examples(lf.head(1000).collect(), n)
 
     def source(self, name: str) -> tuple[str, dict | None]:
         """`(uri, storage_options)` for `pl.scan_parquet` — how charts read it."""

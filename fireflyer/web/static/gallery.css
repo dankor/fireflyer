@@ -253,6 +253,8 @@ a.ref:hover { border-color:var(--accent); color:var(--accent); }
 .ref.is-builtin { color:var(--accent); border-color:var(--accent); }
 .dash-table tr.is-builtin .name, .dash-table tr.is-builtin .act-locked { color:var(--accent); }
 .dash-table tr.is-builtin td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
+/* Data not (all) shared with you: listed last, greyed — it still opens. */
+.dash-table tr.is-inactive td { opacity:.45; }
 .ds-cols th { white-space:nowrap; }
 /* Edit mode: drop a column (✕), add one (＋). */
 .col-drop, .col-add { border:1px solid var(--border); border-radius:4px; background:none;

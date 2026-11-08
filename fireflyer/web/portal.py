@@ -31,6 +31,7 @@ import yaml
 
 from fireflyer import column_map
 from fireflyer import filters as filters_mod
+from fireflyer import groups
 from fireflyer.dashboard import Dashboard, DashboardError
 from fireflyer.datasets import Dataset, Version
 from fireflyer.params import COLUMN_TYPES, column_type, type_icon_svg
@@ -58,55 +59,66 @@ def database_url(env=os.environ) -> str:
     return dsn
 
 
-# A dashboard is keyed by its name — the YAML's `name:`, unique like a
-# dataset's — so the log, a link and a person all say the same thing.
+# A dashboard is keyed by its group and its name — the YAML's `name:`, unique
+# in its group like a dataset's — so the log, a link and a person all say the
+# same thing.
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS dashboards ("
-    " name TEXT PRIMARY KEY,"
+    " group_name TEXT NOT NULL,"
+    " name TEXT NOT NULL,"
     " author TEXT NOT NULL DEFAULT '',"
     " yaml TEXT NOT NULL,"
     " created_at TEXT NOT NULL,"
-    " updated_at TEXT NOT NULL)"
+    " updated_at TEXT NOT NULL,"
+    " PRIMARY KEY (group_name, name))"
 )
 # Every saved state of every dashboard, numbered 1, 2, 3… per dashboard, with
 # who saved it and when (Unix seconds). What the editor's compare view diffs.
 _VERSIONS_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS dashboard_versions ("
+    " group_name TEXT NOT NULL,"
     " dashboard TEXT NOT NULL,"
     " version INTEGER NOT NULL,"
     " yaml TEXT NOT NULL,"
     " author TEXT NOT NULL DEFAULT '',"
     " created_at BIGINT NOT NULL,"
-    " PRIMARY KEY (dashboard, version))"
+    " PRIMARY KEY (group_name, dashboard, version))"
 )
 
 
-# What each dashboard reads — `(dataset, column)` pairs from `Dashboard.uses`,
-# written on every save — so the overviews (a dashboard's datasets, a dataset's
-# dashboards, a column's) are a query, not a parse of every dashboard. Each
-# indexed dashboard also has one `('', '')` row, so "indexed, uses nothing" is
-# told apart from "not indexed yet" (a dashboard from before the index).
+# What each dashboard reads — `(dataset group, dataset, column)` from
+# `Dashboard.uses`, written on every save — so the overviews (a dashboard's
+# datasets, a dataset's dashboards, a column's) are a query, not a parse of every
+# dashboard. Each indexed dashboard also has one `('', '', '')` row, so "indexed,
+# uses nothing" is told apart from "not indexed yet" (a dashboard from before
+# the index).
 _USES_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS dashboard_uses ("
+    " group_name TEXT NOT NULL,"
     " dashboard TEXT NOT NULL,"
+    " dataset_group TEXT NOT NULL,"
     " dataset TEXT NOT NULL,"
     " column_name TEXT NOT NULL)"
 )
+_TABLES = (_SCHEMA, _VERSIONS_SCHEMA, _USES_SCHEMA)
 
 
 @dataclass(frozen=True)
 class Use:
     """One thing a dashboard reads: a dataset (`column` ""), one of its columns,
-    or every column (`column` "*")."""
+    or every column (`column` "*"). `group`: the dashboard's; `dataset_group`:
+    the dataset's ("" where there are no groups: the same as the dashboard's)."""
     dashboard_id: str
     dashboard_name: str
     dataset: str
     column: str
+    group: str = ""
+    dataset_group: str = ""
 
 
-def _uses_of(yaml: str) -> list[tuple[str, str]]:
+def _uses_of(yaml: str, group: str = "") -> list[tuple[str, str]]:
     try:
-        return Dashboard.uses(yaml)
+        return Dashboard.uses(yaml, group)
     except DashboardError:
         return []
 
@@ -118,6 +130,7 @@ class DashboardRow:
     author: str
     yaml: str
     updated_at: str
+    group: str = ""
 
     @property
     def description(self) -> str:
@@ -151,82 +164,6 @@ def _unix(iso: str) -> int:
         return int(datetime.fromisoformat(iso).timestamp())
     except ValueError:
         return int(time.time())
-
-
-class _SqlVersions:
-    """Version history over SQL, shared by both stores. A store supplies
-    `_run(sql, params)` — `?` placeholders, the store adapts them — and these
-    record a version on create and save, list them, and fetch one.
-
-    A save that changes nothing records nothing. A dashboard saved before
-    history existed gets its stored state recorded as version 1 on its first
-    save, so even an old dashboard can be compared with its first edit."""
-
-    def _latest(self, id: str):
-        return self._run(
-            "SELECT version, yaml FROM dashboard_versions WHERE dashboard = ?"
-            " ORDER BY version DESC LIMIT 1", (id,),
-        ).fetchone()
-
-    def _record(self, id: str, yaml: str, author: str, at: int | None = None) -> int:
-        latest = self._latest(id)
-        if latest and latest[1] == yaml:
-            return latest[0]
-        number = latest[0] + 1 if latest else 1
-        self._run(
-            "INSERT INTO dashboard_versions (dashboard, version, yaml, author, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (id, number, yaml, author, at if at is not None else int(time.time())),
-        )
-        return number
-
-    def _baseline(self, id: str) -> None:
-        """Record what's stored now as version 1, if this dashboard has none."""
-        if self._latest(id) is None:
-            row = self.get(id)
-            if row is not None:
-                self._record(id, row.yaml, row.author, _unix(row.updated_at))
-
-    def versions(self, id: str) -> list[DashboardVersion]:
-        """Newest first, without their YAML."""
-        rows = self._run(
-            "SELECT version, created_at, author FROM dashboard_versions"
-            " WHERE dashboard = ? ORDER BY version DESC", (id,),
-        ).fetchall()
-        return [DashboardVersion(int(v), int(at), a) for v, at, a in rows]
-
-    def version(self, id: str, number: int) -> DashboardVersion | None:
-        row = self._run(
-            "SELECT version, created_at, author, yaml FROM dashboard_versions"
-            " WHERE dashboard = ? AND version = ?", (id, number),
-        ).fetchone()
-        return DashboardVersion(int(row[0]), int(row[1]), row[2], row[3]) if row else None
-
-
-class _SqlUses:
-    """The `dashboard_uses` index over SQL, shared by both stores (`_run` as in
-    `_SqlVersions`). Written on create/save, dropped on delete; a dashboard not
-    indexed yet is indexed the first time the index is read."""
-
-    def _index(self, id: str, yaml: str) -> None:
-        self._run("DELETE FROM dashboard_uses WHERE dashboard = ?", (id,))
-        for dataset, column in [("", "")] + _uses_of(yaml):
-            self._run(
-                "INSERT INTO dashboard_uses (dashboard, dataset, column_name) VALUES (?, ?, ?)",
-                (id, dataset, column),
-            )
-
-    def uses(self) -> list[Use]:
-        for id, yaml in self._run(
-            "SELECT name, yaml FROM dashboards"
-            " WHERE name NOT IN (SELECT dashboard FROM dashboard_uses)"
-        ).fetchall():
-            self._index(str(id), yaml)
-        rows = self._run(
-            "SELECT dashboard, dataset, column_name FROM dashboard_uses"
-            " WHERE dataset <> '' ORDER BY dashboard, dataset, column_name"
-        ).fetchall()
-        return [Use(n, n, ds, c) for n, ds, c in rows]
 
 
 # The Access tab's roles: a name each — its key — and when it was made and
@@ -266,6 +203,19 @@ _USER_ROLES_SCHEMA = (
 )
 
 
+# The groups datasets and dashboards live in: each user's own (personal, `_bob`)
+# and the shared ones an admin makes. Kept beside the roles and users, which
+# are global — one Access tab, one Users tab for every group.
+_GROUPS_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS portal_groups ("
+    " name TEXT PRIMARY KEY,"
+    " personal INTEGER NOT NULL DEFAULT 0,"
+    " description TEXT NOT NULL DEFAULT '',"
+    " created_at TEXT NOT NULL,"
+    " updated_at TEXT NOT NULL)"
+)
+
+
 class RoleError(ValueError):
     """A role (or user) name that's empty or already taken, or roles a user
     can't hold together."""
@@ -286,6 +236,15 @@ class Role:
     updated_at: str
     description: str = ""  # what the role is for — under its name, and in tooltips
     builtin: bool = False  # the admin role: shown locked
+
+
+@dataclass
+class Group:
+    name: str              # its key, and its URL's segment
+    created_at: str
+    updated_at: str
+    personal: bool = False  # a user's own: comes and goes with them
+    description: str = ""
 
 
 @dataclass
@@ -323,15 +282,26 @@ def _person(first_name: str, last_name: str, email: str) -> tuple[str, str, str]
     return first_name.strip(), last_name.strip(), email
 
 
+def _valid_user(name: str) -> bool:
+    try:
+        groups.check_user_name(name)
+    except groups.GroupError:
+        return False
+    return True
+
+
 def _role_name(name: str, roles: list, keep: str = "", kind: str = "role") -> str:
     """`name` trimmed, checked: not empty, fit for a URL (`/access/<name>/…`,
     like a dataset's: no / or \\, no leading dot), and no other role (than
-    `keep`, the one being renamed) has it. Users' names too (`kind`)."""
+    `keep`, the one being renamed) has it. Users' names too (`kind`) — which
+    are stricter: their group, `_<name>`, carries it (`groups.check_user_name`)."""
     name = name.strip()
     if not name:
         raise RoleError(f"a {kind} needs a name")
     if "/" in name or "\\" in name or name.startswith("."):
         raise RoleError(f"a {kind} name can't contain / or \\ or start with a dot")
+    if kind == "user" and name != keep and not _valid_user(name):
+        raise RoleError("a user name is lowercase latin letters, then letters or digits")
     if any(r.name == name and r.name != keep for r in roles):
         raise RoleError(f"there is already a {kind} named {name!r}")
     return name
@@ -376,11 +346,27 @@ class RoleStore:
         self._migrate_ids()
         self._create()
         self._admin = admin
-        if admin and not any(r.name == ADMIN for r in self.roles()):
-            self.create_role(ADMIN, _ADMIN_ABOUT)
+        if admin:
+            if not any(r.name == ADMIN for r in self.roles()):
+                self.create_role(ADMIN, _ADMIN_ABOUT)
+            self._check_user_names()
+            self._ensure_group(groups.ADMIN_GROUP, personal=True)
+            for user in self.users()[1:]:
+                self._ensure_group(groups.personal(user.name), personal=True)
+
+    def _check_user_names(self) -> None:
+        """Each user's group is `_<name>`, so a name must be one a group can
+        carry. Users from before the rule stop the portal, named, rather than be
+        renamed — a rename changes the name they sign in with."""
+        bad = [u.name for u in self.users()[1:] if not _valid_user(u.name)]
+        if bad:
+            raise SystemExit(
+                "rename these users first — a user name is lowercase latin letters, then"
+                f" letters or digits: {', '.join(bad)}"
+            )
 
     def _create(self) -> None:
-        for schema in (_ROLES_SCHEMA, _USERS_SCHEMA, _USER_ROLES_SCHEMA):
+        for schema in (_ROLES_SCHEMA, _USERS_SCHEMA, _USER_ROLES_SCHEMA, _GROUPS_SCHEMA):
             self._run(schema)
 
     def _run(self, sql: str, params: tuple = ()) -> list[tuple]:
@@ -507,26 +493,27 @@ class RoleStore:
             (name, *person, now, now),
         )
         self._hold(name, roles)
+        self._ensure_group(groups.personal(name), personal=True)
         return name
 
     def edit_user(self, name: str, new_name: str, roles: list[str] = (),
                   first_name: str = "", last_name: str = "", email: str = "") -> str:
-        """Returns the name now."""
+        """Everything but the name, which never changes: their group, `_<name>`,
+        and every reference to its datasets carry it. Returns the name."""
         self._unlocked(self.users(), name, "admin user")
         held = self.user(name)
         if held is None:
             raise RoleError(f"there is no user named {name!r}")
-        if held.external and new_name.strip() != held.name:
-            raise RoleError(f"{held.name}'s name comes from {held.source}")
-        new_name = _role_name(new_name, self.users(), keep=name, kind="user")
+        if new_name.strip() != held.name:
+            raise RoleError("a user's name can't change")
         person = _person(first_name, last_name, email)
         self._run(
-            "UPDATE users SET name = ?, first_name = ?, last_name = ?, email = ?, updated_at = ? WHERE name = ?",
-            (new_name, *person, _now(), name),
+            "UPDATE users SET first_name = ?, last_name = ?, email = ?, updated_at = ? WHERE name = ?",
+            (*person, _now(), name),
         )
         self._run("DELETE FROM user_roles WHERE user_name = ?", (name,))
-        self._hold(new_name, roles)
-        return new_name
+        self._hold(name, roles)
+        return name
 
     def provision(self, name: str, source: str, first_name: str = "", last_name: str = "",
                   email: str = "") -> str:
@@ -549,6 +536,7 @@ class RoleStore:
                 (_role_name(name, self.users(), kind="user"), *person, source,
                  auth.new_session_key(), now, now),
             )
+            self._ensure_group(groups.personal(name), personal=True)
         elif any(person):
             fields = dict(zip(("first_name", "last_name", "email"), person))
             given = {k: v for k, v in fields.items() if v}
@@ -606,9 +594,66 @@ class RoleStore:
         return rows[0][0] if rows else None
 
     def delete_user(self, name: str) -> None:
+        """The user, and their group's row — what was in it is the app's to
+        remove (`app.users_delete`), from the dashboard and dataset stores."""
         self._unlocked(self.users(), name, "admin user")
         self._run("DELETE FROM user_roles WHERE user_name = ?", (name,))
         self._run("DELETE FROM users WHERE name = ?", (name,))
+        self._run("DELETE FROM portal_groups WHERE name = ?", (groups.personal(name),))
+
+    # --- groups ---
+
+    def groups(self) -> list[Group]:
+        """Personal groups first (the admin's leading), then the shared ones."""
+        rows = self._run("SELECT name, created_at, updated_at, personal, description FROM portal_groups")
+        found = [Group(n, str(c), str(u), bool(p), d or "") for n, c, u, p, d in rows]
+        order = lambda g: (not g.personal, g.name != groups.ADMIN_GROUP, g.name.lower())
+        return sorted(found, key=order)
+
+    def group(self, name: str) -> Group | None:
+        return next((g for g in self.groups() if g.name == name), None)
+
+    def _ensure_group(self, name: str, personal: bool = False) -> None:
+        if self.group(name) is None:
+            now = _now()
+            self._run("INSERT INTO portal_groups (name, personal, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                      (name, int(personal), now, now))
+
+    def _shared_group(self, name: str, keep: str = "") -> str:
+        try:
+            name = groups.check_group_name(name)
+        except groups.GroupError as exc:
+            raise RoleError(str(exc)) from exc
+        if name != keep and self.group(name) is not None:
+            raise RoleError(f"there is already a group named {name!r}")
+        return name
+
+    def create_group(self, name: str, description: str = "") -> str:
+        name = self._shared_group(name)
+        now = _now()
+        self._run("INSERT INTO portal_groups (name, personal, description, created_at, updated_at)"
+                  " VALUES (?, 0, ?, ?, ?)", (name, description.strip(), now, now))
+        return name
+
+    def _unlocked_group(self, name: str) -> Group:
+        held = self.group(name)
+        if held is None:
+            raise RoleError(f"there is no group named {name!r}")
+        if held.personal:
+            raise RoleError("a personal group comes and goes with its user")
+        return held
+
+    def rename_group(self, name: str, new_name: str, description: str | None = None) -> str:
+        self._unlocked_group(name)
+        new_name = self._shared_group(new_name, keep=name)
+        held = self.group(name)
+        self._run("UPDATE portal_groups SET name = ?, description = ?, updated_at = ? WHERE name = ?",
+                  (new_name, held.description if description is None else description.strip(), _now(), name))
+        return new_name
+
+    def delete_group(self, name: str) -> None:
+        self._unlocked_group(name)
+        self._run("DELETE FROM portal_groups WHERE name = ?", (name,))
 
 
 def _name_of(yaml_text: str) -> str:
@@ -619,27 +664,30 @@ def _name_of(yaml_text: str) -> str:
     return Dashboard.from_yaml(yaml_text).name
 
 
-def _check_dashboard_name(name: str) -> str:
-    """A name is a dashboard's key and sits in its URL (`/d/<name>`), so — like
-    a dataset's — it can't hold a path separator or start with a dot."""
-    if "/" in name or "\\" in name or name.startswith("."):
-        raise DashboardError("a dashboard name can't contain / or \\ or start with a dot")
-    return name
-
-
 def set_yaml_name(yaml_text: str, name: str) -> str:
     """Rewrite the top-level `name:` line (cloning, a name made unique). `name:`
     is a required column-0 key, so replacing the first such line suffices."""
-    return re.sub(r"(?m)^name:.*$", lambda _: f"name: {json.dumps(name)}", yaml_text, count=1)
+    return re.sub(r"(?m)^name:.*$", lambda _: f"name: {json.dumps(name, ensure_ascii=False)}", yaml_text, count=1)
 
 
-class SqlStore(_SqlVersions, _SqlUses):
+class SqlStore:
     """The portal's dashboards: in Postgres (a `postgresql://` DSN — `psycopg`
     imported only then, so this module needs no `.[portal]` extra), or sqlite
-    `:memory:` for the tests. One schema, `?`
-    placeholders, adapted for Postgres in `_run`."""
+    `:memory:` for the tests. One schema, `?` placeholders, adapted for
+    Postgres in `_run`.
 
-    def __init__(self, dsn: str = ":memory:"):
+    A store reads one group's dashboards — `group(name)` gives another's, over
+    the same connection; a new one reads the admin's, where everything from
+    before groups went. Version history: a save that changes nothing records
+    nothing, and a dashboard from before history gets its stored state as
+    version 1 on its first save."""
+
+    def __init__(self, dsn: str = ":memory:", group: str = groups.ADMIN_GROUP,
+                 _shared: tuple | None = None):
+        self.group_name = group
+        if _shared is not None:
+            self._pg, self._conn = _shared
+            return
         self._pg = is_postgres(dsn)
         if self._pg:
             import psycopg  # optional dependency, only needed at portal runtime
@@ -649,8 +697,12 @@ class SqlStore(_SqlVersions, _SqlUses):
             # check_same_thread=False: uvicorn serves requests off a threadpool.
             self._conn = sqlite3.connect(dsn, check_same_thread=False)
         self._migrate_ids()
-        for schema in (_SCHEMA, _VERSIONS_SCHEMA, _USES_SCHEMA):
+        self._migrate_groups()
+        for schema in _TABLES:
             self._run(schema)
+
+    def group(self, name: str) -> "SqlStore":
+        return SqlStore("", name, _shared=(self._pg, self._conn))
 
     def _run(self, sql: str, params=()):
         if self._pg:
@@ -660,25 +712,44 @@ class SqlStore(_SqlVersions, _SqlUses):
             self._conn.commit()
         return cursor
 
-    def _migrate_ids(self) -> None:
-        """Dashboards were once keyed by a UUID, and two could share a name:
-        rebuild those tables keyed by name, a repeated name made unique
-        ("Sales 2") in its row and YAML. The uses index is rebuilt on read."""
+    def _try(self, sql: str):
+        """Rows, or None when the statement fails — an old table's shape."""
         try:
-            old = self._run(
-                "SELECT id, name, author, yaml, created_at, updated_at FROM dashboards ORDER BY created_at"
-            ).fetchall()
-            versions = self._run(
-                "SELECT dashboard_id, version, yaml, author, created_at FROM dashboard_versions"
-            ).fetchall()
+            return self._run(sql).fetchall()
         except Exception:
             if self._pg:
                 self._conn.rollback()
-            return                                  # new tables, or none yet
+            return None
+
+    def _rebuild(self) -> None:
         for table in ("dashboard_uses", "dashboard_versions", "dashboards"):
             self._run(f"DROP TABLE IF EXISTS {table}")
-        for schema in (_SCHEMA, _VERSIONS_SCHEMA, _USES_SCHEMA):
+        for schema in _TABLES:
             self._run(schema)
+
+    def _insert_old(self, name: str, author: str, yaml_text: str, created, updated) -> None:
+        self._run(
+            "INSERT INTO dashboards (group_name, name, author, yaml, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (groups.ADMIN_GROUP, name, author, yaml_text, str(created), str(updated)),
+        )
+
+    def _insert_old_version(self, name: str, version, yaml_text: str, author: str, at) -> None:
+        self._run(
+            "INSERT INTO dashboard_versions (group_name, dashboard, version, yaml, author, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)", (groups.ADMIN_GROUP, name, version, yaml_text, author, at),
+        )
+
+    def _migrate_ids(self) -> None:
+        """Dashboards were once keyed by a UUID, and two could share a name:
+        rebuild those tables keyed by name — in the admin's group — a repeated
+        name made unique ("Sales 2") in its row and YAML. The uses index is
+        rebuilt on read."""
+        old = self._try("SELECT id, name, author, yaml, created_at, updated_at FROM dashboards ORDER BY created_at")
+        if old is None:
+            return                                  # new tables, or none yet
+        versions = self._try("SELECT dashboard_id, version, yaml, author, created_at FROM dashboard_versions") or []
+        self._rebuild()
         names: dict[str, str] = {}
         for id, name, author, yaml_text, created, updated in old:
             unique, n = name, 2
@@ -687,31 +758,47 @@ class SqlStore(_SqlVersions, _SqlUses):
             names[str(id)] = unique
             if unique != name:
                 yaml_text = set_yaml_name(yaml_text, unique)
-            self._run(
-                "INSERT INTO dashboards (name, author, yaml, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (unique, author, yaml_text, str(created), str(updated)),
-            )
+            self._insert_old(unique, author, yaml_text, created, updated)
         for id, version, yaml_text, author, at in versions:
             if str(id) in names:
-                self._run(
-                    "INSERT INTO dashboard_versions (dashboard, version, yaml, author, created_at)"
-                    " VALUES (?, ?, ?, ?, ?)", (names[str(id)], version, yaml_text, author, at),
-                )
+                self._insert_old_version(names[str(id)], version, yaml_text, author, at)
+
+    def _migrate_groups(self) -> None:
+        """Dashboards keyed by name alone, from before groups: into the admin's
+        group, history and all."""
+        if self._try("SELECT group_name FROM dashboards LIMIT 1") is not None:
+            return
+        old = self._try("SELECT name, author, yaml, created_at, updated_at FROM dashboards")
+        if old is None:
+            return
+        versions = self._try("SELECT dashboard, version, yaml, author, created_at FROM dashboard_versions") or []
+        self._rebuild()
+        for row in old:
+            self._insert_old(*row)
+        for row in versions:
+            self._insert_old_version(*row)
+
+    # --- this group's dashboards -------------------------------------------------
+
+    def _row(self, row) -> DashboardRow:
+        name, author, yaml_text, updated = row
+        return DashboardRow(name, name, author, yaml_text, str(updated), self.group_name)
 
     def list(self) -> list[DashboardRow]:
         rows = self._run(
-            "SELECT name, author, yaml, updated_at FROM dashboards ORDER BY updated_at DESC"
+            "SELECT name, author, yaml, updated_at FROM dashboards WHERE group_name = ?"
+            " ORDER BY updated_at DESC", (self.group_name,),
         ).fetchall()
-        return [DashboardRow(n, n, a, y, str(u)) for n, a, y, u in rows]
+        return [self._row(r) for r in rows]
 
     def get(self, name: str) -> DashboardRow | None:
         row = self._run(
-            "SELECT name, author, yaml, updated_at FROM dashboards WHERE name = ?", (name,),
+            "SELECT name, author, yaml, updated_at FROM dashboards WHERE group_name = ? AND name = ?",
+            (self.group_name, name),
         ).fetchone()
-        return DashboardRow(row[0], row[0], row[1], row[2], str(row[3])) if row else None
+        return self._row(row) if row else None
 
     def _free(self, name: str) -> str:
-        _check_dashboard_name(name)
         if self.get(name) is not None:
             raise DashboardError(f"a dashboard named {name!r} already exists")
         return name
@@ -727,8 +814,9 @@ class SqlStore(_SqlVersions, _SqlUses):
         name = self._free(_name_of(yaml))  # validates + reads the top-level `name:` key
         now = _now()
         self._run(
-            "INSERT INTO dashboards (name, author, yaml, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (name, author, yaml, now, now),
+            "INSERT INTO dashboards (group_name, name, author, yaml, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (self.group_name, name, author, yaml, now, now),
         )
         self._record(name, yaml, author)
         self._index(name, yaml)
@@ -742,21 +830,117 @@ class SqlStore(_SqlVersions, _SqlUses):
         if new != name:
             self._free(new)
         self._baseline(name)
+        g = self.group_name
         self._run(
-            "UPDATE dashboards SET name = ?, yaml = ?, updated_at = ? WHERE name = ?",
-            (new, yaml, _now(), name),
+            "UPDATE dashboards SET name = ?, yaml = ?, updated_at = ? WHERE group_name = ? AND name = ?",
+            (new, yaml, _now(), g, name),
         )
         if new != name:
-            self._run("UPDATE dashboard_versions SET dashboard = ? WHERE dashboard = ?", (new, name))
-            self._run("DELETE FROM dashboard_uses WHERE dashboard = ?", (name,))
+            self._run("UPDATE dashboard_versions SET dashboard = ? WHERE group_name = ? AND dashboard = ?",
+                      (new, g, name))
+            self._run("DELETE FROM dashboard_uses WHERE group_name = ? AND dashboard = ?", (g, name))
         self._record(new, yaml, author)
         self._index(new, yaml)
         return new
 
     def delete(self, name: str) -> None:
-        self._run("DELETE FROM dashboards WHERE name = ?", (name,))
-        self._run("DELETE FROM dashboard_versions WHERE dashboard = ?", (name,))
-        self._run("DELETE FROM dashboard_uses WHERE dashboard = ?", (name,))
+        for table, key in (("dashboards", "name"), ("dashboard_versions", "dashboard"),
+                           ("dashboard_uses", "dashboard")):
+            self._run(f"DELETE FROM {table} WHERE group_name = ? AND {key} = ?", (self.group_name, name))
+
+    # --- versions ----------------------------------------------------------------
+
+    def _latest(self, name: str):
+        return self._run(
+            "SELECT version, yaml FROM dashboard_versions WHERE group_name = ? AND dashboard = ?"
+            " ORDER BY version DESC LIMIT 1", (self.group_name, name),
+        ).fetchone()
+
+    def _record(self, name: str, yaml: str, author: str, at: int | None = None) -> int:
+        latest = self._latest(name)
+        if latest and latest[1] == yaml:
+            return latest[0]
+        number = latest[0] + 1 if latest else 1
+        self._run(
+            "INSERT INTO dashboard_versions (group_name, dashboard, version, yaml, author, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (self.group_name, name, number, yaml, author, at if at is not None else int(time.time())),
+        )
+        return number
+
+    def _baseline(self, name: str) -> None:
+        """Record what's stored now as version 1, if this dashboard has none."""
+        if self._latest(name) is None:
+            row = self.get(name)
+            if row is not None:
+                self._record(name, row.yaml, row.author, _unix(row.updated_at))
+
+    def versions(self, name: str) -> list[DashboardVersion]:
+        """Newest first, without their YAML."""
+        rows = self._run(
+            "SELECT version, created_at, author FROM dashboard_versions"
+            " WHERE group_name = ? AND dashboard = ? ORDER BY version DESC", (self.group_name, name),
+        ).fetchall()
+        return [DashboardVersion(int(v), int(at), a) for v, at, a in rows]
+
+    def version(self, name: str, number: int) -> DashboardVersion | None:
+        row = self._run(
+            "SELECT version, created_at, author, yaml FROM dashboard_versions"
+            " WHERE group_name = ? AND dashboard = ? AND version = ?", (self.group_name, name, number),
+        ).fetchone()
+        return DashboardVersion(int(row[0]), int(row[1]), row[2], row[3]) if row else None
+
+    # --- what dashboards read ------------------------------------------------------
+
+    def _index(self, name: str, yaml: str) -> None:
+        g = self.group_name
+        self._run("DELETE FROM dashboard_uses WHERE group_name = ? AND dashboard = ?", (g, name))
+        for ref, column in [("", "")] + _uses_of(yaml, g):
+            dataset_group, dataset = groups.split(ref, g) if ref else ("", "")
+            self._run(
+                "INSERT INTO dashboard_uses (group_name, dashboard, dataset_group, dataset, column_name)"
+                " VALUES (?, ?, ?, ?, ?)", (g, name, dataset_group, dataset, column),
+            )
+
+    def _index_missing(self) -> None:
+        """Dashboards from before the index: indexed the first time it's read."""
+        for g, name, yaml in self._run(
+            "SELECT group_name, name, yaml FROM dashboards d WHERE NOT EXISTS (SELECT 1 FROM"
+            " dashboard_uses u WHERE u.group_name = d.group_name AND u.dashboard = d.name)"
+        ).fetchall():
+            self.group(g)._index(name, yaml)
+
+    def _uses(self, where: str, params: tuple) -> list[Use]:
+        self._index_missing()
+        rows = self._run(
+            "SELECT group_name, dashboard, dataset_group, dataset, column_name FROM dashboard_uses"
+            f" WHERE dataset <> '' AND {where} ORDER BY group_name, dashboard, dataset, column_name", params,
+        ).fetchall()
+        return [Use(n, n, ds, c, g, dg) for g, n, dg, ds, c in rows]
+
+    def uses(self) -> list[Use]:
+        """What this group's dashboards read, from any group."""
+        return self._uses("group_name = ?", (self.group_name,))
+
+    def readers(self) -> list[Use]:
+        """Every dashboard, of any group, reading one of this group's datasets."""
+        return self._uses("dataset_group = ?", (self.group_name,))
+
+    # --- every group -------------------------------------------------------------------
+
+    def every(self) -> list[DashboardRow]:
+        """Every dashboard of every group — for a cascade that reaches them all."""
+        rows = self._run("SELECT group_name, name, author, yaml, updated_at FROM dashboards").fetchall()
+        return [DashboardRow(n, n, a, y, str(u), g) for g, n, a, y, u in rows]
+
+    def rename_group(self, old: str, new: str) -> None:
+        for table in ("dashboards", "dashboard_versions", "dashboard_uses"):
+            self._run(f"UPDATE {table} SET group_name = ? WHERE group_name = ?", (new, old))
+        self._run("UPDATE dashboard_uses SET dataset_group = ? WHERE dataset_group = ?", (new, old))
+
+    def drop_group(self, name: str) -> None:
+        for table in ("dashboards", "dashboard_versions", "dashboard_uses"):
+            self._run(f"DELETE FROM {table} WHERE group_name = ?", (name,))
 
 
 # --- activity log -------------------------------------------------------------
@@ -778,7 +962,9 @@ _ACTIVITY_SCHEMA = (
     " status_code INTEGER NOT NULL DEFAULT 0,"
     " detail TEXT NOT NULL DEFAULT '{{}}',"
     " ip TEXT NOT NULL DEFAULT '',"
-    " user_agent TEXT NOT NULL DEFAULT '')"
+    " user_agent TEXT NOT NULL DEFAULT '',"
+    # The group the thing acted on is in ("" for what's global: roles, users).
+    " group_name TEXT NOT NULL DEFAULT '')"
 )
 _ACTIVITY_INDEXES = (
     "CREATE INDEX IF NOT EXISTS activity_at ON activity (at)",
@@ -799,6 +985,7 @@ class Activity:
     ip: str = ""
     user_agent: str = ""
     at: str = ""
+    group: str = ""
 
 
 class ActivityLog:
@@ -817,6 +1004,7 @@ class ActivityLog:
                 Path(dsn).parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(dsn, check_same_thread=False)
         self._run(_ACTIVITY_SCHEMA.format(id="BIGSERIAL PRIMARY KEY" if self._pg else "INTEGER PRIMARY KEY"))
+        self._add_group_column()
         for index in _ACTIVITY_INDEXES:
             self._run(index)
         self._keep_days = keep_days
@@ -832,13 +1020,22 @@ class ActivityLog:
             self._conn.commit()
         return rows
 
+    def _add_group_column(self) -> None:
+        """A log from before groups: the column added, empty for its rows."""
+        try:
+            self._run("SELECT group_name FROM activity LIMIT 1")
+        except Exception:
+            if self._pg:
+                self._conn.rollback()
+            self._run("ALTER TABLE activity ADD COLUMN group_name TEXT NOT NULL DEFAULT ''")
+
     def record(self, entry: Activity) -> None:
         self._run(
-            "INSERT INTO activity (at, actor, action, object_type, object_name, status_code, detail, ip, user_agent)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO activity (at, actor, action, object_type, object_name, status_code, detail, ip,"
+            " user_agent, group_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (entry.at or _now(), entry.actor, entry.action, entry.object_type, entry.object_name,
              int(entry.status_code), json.dumps(entry.detail, ensure_ascii=False, default=str),
-             entry.ip, entry.user_agent[:512]),
+             entry.ip, entry.user_agent[:512], entry.group),
         )
         if time.time() - self._pruned > _DAY:
             self.prune()
@@ -852,11 +1049,11 @@ class ActivityLog:
     def entries(self, limit: int = 100) -> list[Activity]:
         """The newest first — what a test, or later the usage dashboard, reads."""
         rows = self._run(
-            "SELECT actor, action, object_type, object_name, status_code, detail, ip, user_agent, at"
+            "SELECT actor, action, object_type, object_name, status_code, detail, ip, user_agent, at, group_name"
             " FROM activity ORDER BY id DESC LIMIT ?", (limit,),
         )
-        return [Activity(a, ac, ot, on, int(c), json.loads(d), ip, ua, str(at))
-                for a, ac, ot, on, c, d, ip, ua, at in rows]
+        return [Activity(a, ac, ot, on, int(c), json.loads(d), ip, ua, str(at), g)
+                for a, ac, ot, on, c, d, ip, ua, at, g in rows]
 
 
 # --- gallery page -----------------------------------------------------------
@@ -986,10 +1183,12 @@ def _ref_links(links: list[tuple[str, str]], missing: set[str] = frozenset(),
 def _dashboard_datasets(row: DashboardRow, known: set[str] | None,
                         uses: dict[str, list[str]] | None) -> str:
     """The uploaded datasets a dashboard reads (inline ones are part of it) —
-    from the store's index when given, else worked out from its YAML."""
-    names = sorted(uses.get(row.id, []) if uses is not None else Dashboard.dataset_names(row.yaml))
-    missing = set(names) - known if known is not None else set()
-    return _ref_links([(f"/datasets/{quote(n)}", n) for n in names], missing)
+    from the store's index when given, else worked out from its YAML — each
+    as a reference from its group: another group's with a `group:` prefix.
+    `known`: the references that exist."""
+    refs = sorted(uses.get(row.id, []) if uses is not None else Dashboard.dataset_names(row.yaml, row.group))
+    missing = set(refs) - known if known is not None else set()
+    return _ref_links([(groups.dataset_url(*groups.split(r, row.group)), r) for r in refs], missing)
 
 
 def list_table(heads: list[str], rows: list[str], empty: str, add: str) -> str:
@@ -1006,36 +1205,60 @@ def _add_button(title: str, onclick: str) -> str:
     return f'<button class="act" type="button" title="{title}" onclick="{onclick}">{_icon("plus")}</button>'
 
 
+# A row whose data isn't all shared with the viewer: listed, greyed, at the
+# end — and it still opens, its charts on what they can't read locked.
+_INACTIVE_ROW = ' class="is-inactive" title="Some of its data isn\'t shared with you"'
+
+
 def _row(row: DashboardRow, authors: bool = True, known: set[str] | None = None,
-         uses: dict[str, list[str]] | None = None) -> str:
+         uses: dict[str, list[str]] | None = None, inactive: bool = False,
+         can_write: bool = True) -> str:
     updated = _stamp(row.updated_at)
+    url = groups.dashboard_url(row.group, row.id)
+    remove = (
+        f'<form method="post" action="{escape(url, quote=True)}/delete"'
+        " onsubmit=\"return confirm('Remove this dashboard?')\">"
+        f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
+    ) if can_write else ""
     return (
-        "<tr>"
-        f'<td>{name_cell(f"/d/{quote(row.id)}", row.name, row.description)}</td>'
+        f"<tr{_INACTIVE_ROW if inactive else ''}>"
+        f'<td>{name_cell(url, row.name, row.description)}</td>'
+        f'<td class="muted">{escape(row.group)}</td>'
         f"{_author_cell(row.author, authors)}"
         f'<td class="muted">{updated}</td>'
         f"<td>{_dashboard_datasets(row, known, uses)}</td>"
         # The name opens the dashboard, so the row needs no edit button.
         '<td class="actions">'
-        f'<button class="act" type="button" title="Clone" data-id="{escape(row.id, quote=True)}"'
+        f'<button class="act" type="button" title="Clone" data-url="{escape(url, quote=True)}"'
         f' data-name="{escape(row.name, quote=True)}" onclick="openClone(this)">{_icon("copy")}</button>'
-        f'<form method="post" action="/d/{escape(quote(row.id), quote=True)}/delete"'
-        " onsubmit=\"return confirm('Remove this dashboard?')\">"
-        f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
-        "</td></tr>"
+        f"{remove}</td></tr>"
     )
+
+
+def _group_field(choices: list[str] | None, current: str) -> str:
+    """Where a clone goes: a pick of the groups the user may write — or, with
+    one to go to, just that one."""
+    if not choices:
+        return ""
+    if len(choices) == 1:
+        return f'\n    <input type="hidden" name="group" value="{escape(choices[0], quote=True)}">'
+    options = "".join(
+        f'<option value="{escape(g, quote=True)}"{" selected" if g == current else ""}>{escape(g)}</option>'
+        for g in choices
+    )
+    return f'\n    <select name="group" aria-label="Group" title="Group">{options}</select>'
 
 
 def _dialog(
     dialog_id: str, form_id: str, action: str, heading: str, ok_label: str,
-    description: bool = False, placeholder: str = "Dashboard name",
+    description: bool = False, placeholder: str = "Dashboard name", extra: str = "",
 ) -> str:
     # `action` is empty for the clone dialog — set by JS from the clicked row.
     # Only a new dashboard asks for a description: a clone keeps its source's.
     about = (
         '\n    <textarea name="description" placeholder="Description (optional)"></textarea>'
         if description else ""
-    )
+    ) + extra
     return f"""
 <dialog id="{dialog_id}">
   <form id="{form_id}" method="post" action="{action}">
@@ -1064,30 +1287,33 @@ def back_button(href: str, title: str) -> str:
     return f'<a class="ff-back" href="{href}" title="{t}" aria-label="{t}">{_icon("back")}</a>'
 
 
-def nav_switch(active: str, users: bool = False) -> str:
+def nav_switch(active: str, users: bool = False, group: str = "") -> str:
     """The list pages' left-nav control: a segmented Dashboards | Datasets |
-    Access switch (`active` marks the current list) — and Users, with `users`
-    (portal mode, where there are people). Not shown on selected-item pages."""
+    Access switch (`active` marks the current list) — and Users and Groups,
+    with `users` (portal mode, an admin). The first two stay in `group`; with
+    none they open the viewer's own. Not shown on selected-item pages."""
     def seg(href, label, key):
         cls = " active" if key == active else ""
         return f'<a class="ff-switch-seg{cls}" href="{href}">{label}</a>'
+    where = f"/{groups.url_name(group)}" if group else ""
     return (
         '<nav class="ff-switch">'
-        + seg("/", "Dashboards", "dashboards")
-        + seg("/datasets", "Datasets", "datasets")
+        + seg(f"/d{where}" if group else "/", "Dashboards", "dashboards")
+        + seg(f"/datasets{where}", "Datasets", "datasets")
         + seg("/access", "Access", "access")
-        + (seg("/users", "Users", "users") if users else "")
+        + (seg("/users", "Users", "users") + seg("/groups", "Groups", "groups") if users else "")
         + "</nav>"
     )
 
 
-def path_dropdown(paths: list[str] | None, active_path: str | None) -> str:
-    """A labelled dropdown showing the active path; picking one switches path.
-    Lives on the **right** of the topbar. Empty with no paths (portal / plain)."""
+def path_dropdown(paths: list[str] | None, active_path: str | None, kind: str = "d") -> str:
+    """A labelled dropdown showing the active path; picking one opens that
+    path's list (`kind`: `d`, its dashboards, or `datasets`). Lives on the
+    **right** of the topbar. Empty with no paths (portal / plain)."""
     if not paths:
         return ""
     items = "".join(
-        f'<a href="/path/{quote(p)}"'
+        f'<a href="/{kind}/{groups.url_name(p)}"'
         f'{" class=\"active\"" if p == active_path else ""}>{escape(p)}</a>'
         for p in paths
     )
@@ -1096,6 +1322,54 @@ def path_dropdown(paths: list[str] | None, active_path: str | None) -> str:
         '<details class="ff-pathdd"><summary title="Switch path">'
         f"{label}{_CHEVRON}</summary>"
         f'<div class="ff-pathdd-menu">{items}</div></details>'
+    )
+
+
+def group_label(name: str, kind: str = "Group") -> str:
+    """The group (or path, `kind`) an opened dashboard or dataset is in, where
+    the lists have the picker: the picker's look, read-only — back is the way
+    to another."""
+    return f'<span class="ff-group-label" title="{kind}" aria-label="{kind}">{escape(name)}</span>'
+
+
+def group_picker(all_groups: list[Group], current: str, inactive: set[str] = frozenset(),
+                 kind: str = "d") -> str:
+    """Portal mode's group dropdown, on the right of the topbar: the group
+    you're in, and a pick of every group — shared ones and personal ones, one
+    list at a time behind a switch at the menu's head (as the view-as menu has
+    roles | users). It opens on the shared groups, the ones people work in
+    together; on the personal ones only while there's no shared group yet. A
+    group with nothing shared with you is greyed (`inactive`) but still opens.
+    `kind`: which list a pick opens, `d` or `datasets`. static/group-picker.js
+    switches the lists."""
+    if not all_groups:
+        return ""
+    opening = "shared" if any(not g.personal for g in all_groups) else "personal"
+
+    def item(g: Group) -> str:
+        classes = " ".join(c for c in ("active" if g.name == current else "",
+                                       "is-inactive" if g.name in inactive else "") if c)
+        tip = "Nothing here is shared with you" if g.name in inactive else g.description
+        cls = f' class="{classes}"' if classes else ""
+        return f'<a href="/{kind}/{groups.url_name(g.name)}"{cls}{_tip(tip)}>{escape(g.name)}</a>'
+
+    lists = "".join(
+        f'<div class="ff-group-list" data-kind="{k}"{"" if k == opening else " hidden"}>'
+        + ("".join(item(g) for g in all_groups if g.personal == (k == "personal"))
+           or '<span class="ff-role-none">None yet</span>')
+        + "</div>"
+        for k in ("shared", "personal")
+    )
+    kinds = "".join(
+        f'<button type="button" data-kind="{k}" title="{label}" aria-label="{label}"'
+        f'{" class=active" if k == opening else ""}>{_icon(icon)}</button>'
+        for k, icon, label in (("shared", "users", "Shared groups"), ("personal", "user", "Personal groups"))
+    )
+    return (
+        '<details class="ff-pathdd ff-group" id="ff-group"><summary title="Switch group">'
+        f"{escape(current)}{_CHEVRON}</summary>"
+        f'<div class="ff-pathdd-menu"><div class="ff-theme ff-group-kinds" role="group"'
+        f' aria-label="Groups">{kinds}</div>{lists}</div></details>'
     )
 
 
@@ -1168,19 +1442,21 @@ def _shell(
     extra: str = "",
     topbar_left: str = "",
     topbar_right: str = "",
-    paths: list[str] | None = None,
-    active_path: str | None = None,
+    picker: str = "",
     detail: bool = False,
     head: str = "",
     users: bool = False,
+    group: str = "",
 ) -> str:
     """The gallery page frame. Overview pages (dashboards/datasets lists) lead
-    with a Dashboards | Datasets switch on the left; in local paths mode the path
-    dropdown sits on the **right**. Detail pages (a selected dataset) lead with a
-    back button (+ switch, local) in `topbar_left`. Then optional `topbar_right`,
-    then `body`. No second nav bar."""
-    nav = "" if detail else nav_switch(active, users)
-    right = path_dropdown(paths, active_path) + topbar_right + theme_switch() + user_menu
+    with a Dashboards | Datasets switch on the left; on the **right** the group
+    picker (`picker`: portal mode's groups, or local paths mode's paths).
+    Detail pages (a selected dataset) lead with a back button in `topbar_left`
+    and show their group read-only in `picker` (`group_label`): back goes to
+    the list, which has the picker.
+    Then optional `topbar_right`, then `body`. No second nav bar."""
+    nav = "" if detail else nav_switch(active, users, group)
+    right = picker + topbar_right + theme_switch() + user_menu
     right_html = f'<span class="topbar-right">{right}</span>' if right else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1190,6 +1466,7 @@ def _shell(
 {assets.favicons()}
 {assets.stylesheets("gallery.css", "nav.css", "profile.css")}
 {assets.script("gallery.js")}
+{assets.script("group-picker.js")}
 {head}
 </head>
 <body>
@@ -1202,25 +1479,32 @@ def _shell(
 
 def render_gallery(
     rows: list[DashboardRow], title: str = "Fireflyer Portal", user_menu: str = "",
-    paths: list[str] | None = None, active_path: str | None = None, authors: bool = True,
+    picker: str = "", authors: bool = True,
     datasets: set[str] | None = None, uses: dict[str, list[str]] | None = None,
-    users: bool = False,
+    users: bool = False, group: str = groups.LOCAL_GROUP, inactive: set[str] = frozenset(),
+    can_write: bool = True, clone_groups: list[str] | None = None,
 ) -> str:
-    """`datasets`: the names uploaded, so a dashboard naming one that isn't can
-    say so; None links every name. `uses`: dashboard id -> the datasets it
-    reads, from the store's index; None works it out from each YAML."""
+    """Group `group`'s dashboards. `datasets`: the references that exist, so a
+    dashboard naming one that doesn't can say so; None links every name.
+    `uses`: dashboard id -> the references it reads, from the store's index;
+    None works it out from each YAML. `inactive`: the ids whose data isn't all
+    shared with the viewer. `can_write`: whether they may add and remove here;
+    `clone_groups`: where they may clone to."""
     body_table = list_table(
-        ["Name", *(["Author"] if authors else []), "Last updated", "Datasets"],
-        [_row(r, authors, datasets, uses) for r in rows],
-        "No dashboards yet", _add_button("New dashboard", "openAdd()"),
+        ["Name", "Group", *(["Author"] if authors else []), "Last updated", "Datasets"],
+        [_row(r, authors, datasets, uses, r.id in inactive, can_write) for r in rows],
+        "No dashboards yet", _add_button("New dashboard", "openAdd()") if can_write else "",
     )
-    add_dialog = _dialog("add-dialog", "add-form", "/new", "New dashboard", "Create", description=True)
-    clone_dialog = _dialog("clone-dialog", "clone-form", "", "Clone dashboard", "Clone")
+    here = groups.url_name(group)
+    add_dialog = _dialog("add-dialog", "add-form", f"/d/{here}/new", "New dashboard", "Create",
+                         description=True) if can_write else ""
+    clone_dialog = _dialog("clone-dialog", "clone-form", "", "Clone dashboard", "Clone",
+                           extra=_group_field(clone_groups, group))
     clone_dialog = clone_dialog.replace('id="clone-form-name"', 'id="clone-name"')
     return _shell(
         title, user_menu, "dashboards", body_table,
         extra=add_dialog + clone_dialog,
-        paths=paths, active_path=active_path, users=users,
+        picker=picker, users=users, group=group,
     )
 
 
@@ -1276,15 +1560,21 @@ def _version_cell(ds: Dataset) -> str:
 
 
 def _dataset_row(ds: Dataset, authors: bool = True,
-                 used_by: dict[str, list[tuple[str, str]]] | None = None) -> str:
-    href = f"/datasets/{quote(ds.name)}"
+                 used_by: dict[str, list[tuple[str, str]]] | None = None,
+                 group: str = groups.LOCAL_GROUP, inactive: bool = False, can_write: bool = True) -> str:
+    href = groups.dataset_url(group, ds.name)
     updated = _stamp(ds.updated_at)
-    dashboards = "" if used_by is None else (
-        "<td>" + _ref_links([(f"/d/{quote(did)}", name) for did, name in used_by.get(ds.name, [])]) + "</td>"
-    )
+    dashboards = "" if used_by is None else "<td>" + _ref_links(used_by.get(ds.name, [])) + "</td>"
+    remove = (
+        f'<form method="post" action="{escape(href, quote=True)}/delete"'
+        " onsubmit=\"return confirm('Remove this dataset?')\">"
+        f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
+    ) if can_write else ""
+    row = ' class="is-inactive" title="Not shared with you"' if inactive else ""
     return (
-        "<tr>"
+        f"<tr{row}>"
         f'<td>{name_cell(href, ds.name, ds.description)}</td>'
+        f'<td class="muted">{escape(group)}</td>'
         f'<td class="muted mono">{_version_cell(ds)}</td>'
         f'<td class="muted">{len(ds.columns) + len(ds.service)}</td>'
         f'<td class="muted">{ds.rows}</td>'
@@ -1293,35 +1583,33 @@ def _dataset_row(ds: Dataset, authors: bool = True,
         f"{dashboards}"
         # The name opens the dataset — where it's renamed and described — so
         # the row needs no view or edit button of its own.
-        '<td class="actions">'
-        f'<form method="post" action="/datasets/{quote(ds.name)}/delete"'
-        " onsubmit=\"return confirm('Remove this dataset?')\">"
-        f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
-        "</td></tr>"
+        f'<td class="actions">{remove}</td></tr>'
     )
 
 
 def render_datasets(
     datasets: list[Dataset], title: str = "Fireflyer Portal", user_menu: str = "",
-    paths: list[str] | None = None, active_path: str | None = None, authors: bool = True,
+    picker: str = "", authors: bool = True,
     used_by: dict[str, list[tuple[str, str]]] | None = None,
-    users: bool = False,
+    users: bool = False, group: str = groups.LOCAL_GROUP, inactive: set[str] = frozenset(),
+    can_write: bool = True,
 ) -> str:
-    """`used_by`: dataset name -> the (id, name) of each dashboard reading it;
-    None (no dashboards to look at, plain local mode) leaves the column out."""
+    """Group `group`'s datasets. `used_by`: dataset name -> (href, label) of
+    each dashboard reading it; None (no dashboards to look at, plain local
+    mode) leaves the column out. `inactive`: the names not shared with the
+    viewer."""
     table = list_table(
-        ["Name", "Version", "Columns", "Rows", "Updated", *(["Author"] if authors else []),
+        ["Name", "Group", "Version", "Columns", "Rows", "Updated", *(["Author"] if authors else []),
          *(["Dashboards"] if used_by is not None else [])],
-        [_dataset_row(d, authors, used_by) for d in datasets],
-        "No datasets yet", _add_button("New dataset", "openUpload()"),
+        [_dataset_row(d, authors, used_by, group, d.name in inactive, can_write) for d in datasets],
+        "No datasets yet", _add_button("New dataset", "openUpload()") if can_write else "",
     )
-    extra = (
-        _upload_dialog("/datasets/new", "New dataset", "Upload", "upload-dialog", True)
-    )
+    extra = _upload_dialog(f"/datasets/{groups.url_name(group)}/new", "New dataset", "Upload",
+                           "upload-dialog", True) if can_write else ""
     return _shell(
         title, user_menu, "datasets", table,
         extra=extra,
-        paths=paths, active_path=active_path, users=users,
+        picker=picker, users=users, group=group,
     )
 
 
@@ -1476,25 +1764,26 @@ def parse_access_form(form) -> dict[str, list[dict]]:
     sent: dataset-columns.js leaves it out.)"""
     from fireflyer.params import parse_filters
 
-    groups: list[list] = []
+    per_role: list[list] = []
     for key, value in form.multi_items():
         if key == "role":
-            groups.append([(key, value)])
-        elif groups:
-            groups[-1].append((key, value))
-    return {items[0][1]: parse_filters(_Items(items)) for items in groups}
+            per_role.append([(key, value)])
+        elif per_role:
+            per_role[-1].append((key, value))
+    return {items[0][1]: parse_filters(_Items(items)) for items in per_role}
 
 
 # --- access gallery -----------------------------------------------------------
 
 
-def _role_row(role: Role, datasets: list[str] | None = None) -> str:
-    """`datasets`: the ones whose permissions name the role, linked as the
-    dashboards list links a dashboard's; None leaves the column out."""
+def _role_row(role: Role, datasets: list[tuple[str, str]] | None = None) -> str:
+    """`datasets`: (href, label) of the ones whose permissions name the role,
+    linked as the dashboards list links a dashboard's; None leaves the column
+    out."""
     # The admin role reads every dataset: "All", rather than each one.
     used = "" if datasets is None else (
         '<td class="muted">All</td>' if role.builtin
-        else "<td>" + _ref_links([(f"/datasets/{quote(n)}", n) for n in datasets]) + "</td>"
+        else "<td>" + _ref_links(datasets) + "</td>"
     )
     return (
         f'<tr{_BUILTIN_ROW if role.builtin else ""}>'
@@ -1527,8 +1816,8 @@ def _role_actions(role: Role) -> str:
 
 def render_access(
     roles: list[Role], title: str = "Fireflyer Portal", user_menu: str = "",
-    paths: list[str] | None = None, active_path: str | None = None,
-    datasets: dict[str, list[str]] | None = None,
+    picker: str = "",
+    datasets: dict[str, list[tuple[str, str]]] | None = None,
     users: bool = False,
 ) -> str:
     """The Access list: every role, by name, with when it last changed and —
@@ -1545,7 +1834,7 @@ def render_access(
     return _shell(
         title, user_menu, "access", table,
         extra=add_dialog + rename_dialog,
-        paths=paths, active_path=active_path, users=users,
+        picker=picker, users=users,
     )
 
 
@@ -1584,7 +1873,7 @@ def _user_actions(user: User) -> str:
         + f' data-roles="{escape(json.dumps(user.roles), quote=True)}"'
         f' onclick="openUser(this)">{_icon("pencil")}</button>'
         f'<form method="post" action="/users/{escape(quote(user.name), quote=True)}/delete"'
-        " onsubmit=\"return confirm('Remove this user?')\">"
+        " onsubmit=\"return confirm('Remove this user, with their group and everything in it?')\">"
         f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
     )
 
@@ -1682,7 +1971,6 @@ def _user_dialog(roles: list[Role], reads: dict[str, list[str]]) -> str:
 
 def render_users(
     users: list[User], roles: list[Role], title: str = "Fireflyer Portal", user_menu: str = "",
-    paths: list[str] | None = None, active_path: str | None = None,
     reads: dict[str, list[str]] | None = None,
 ) -> str:
     """The Users list: every user, by name, with the roles they hold.
@@ -1695,8 +1983,64 @@ def render_users(
         title, user_menu, "users", table,
         head=assets.stylesheets("multi-select.css") + "\n" + assets.script("multi-select.js"),
         extra=_user_dialog(roles, reads or {}),
-        paths=paths, active_path=active_path, users=True,
+        users=True,
     )
+
+
+# --- groups gallery -----------------------------------------------------------
+# Portal mode, admins only: every group — each user's own, locked (it comes and
+# goes with them), and the shared ones, which an admin adds, renames (every
+# `group:` reference follows) and removes (with what's in them).
+
+
+def _group_row(group: Group, dashboards: int, datasets: int, readers: int) -> str:
+    """`readers`: dashboards in other groups reading its datasets — a removal
+    locks their charts, and the confirm says so."""
+    here = groups.url_name(group.name)
+    counts = (
+        f'<td><a class="ref" href="/d/{here}" title="Its dashboards">{dashboards}</a></td>'
+        f'<td><a class="ref" href="/datasets/{here}" title="Its datasets">{datasets}</a></td>'
+    )
+    if group.personal:
+        actions = f'<span class="act act-locked" title="A user\'s own group — it comes and goes with them">{_icon("lock")}</span>'
+    else:
+        warn = (f"Remove {group.name} with its {dashboards} dashboard(s) and {datasets} dataset(s)?"
+                + (f" {readers} dashboard(s) in other groups read its data — their charts on it will lock."
+                   if readers else ""))
+        actions = (
+            f'<button class="act" type="button" title="Edit" data-action="/groups/{here}/rename"'
+            f' data-name="{escape(group.name, quote=True)}" data-description="{escape(group.description, quote=True)}"'
+            f' onclick="openRename(this)">{_icon("pencil")}</button>'
+            f'<form method="post" action="/groups/{here}/delete"'
+            f' onsubmit="return confirm({escape(json.dumps(warn), quote=True)})">'
+            f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
+        )
+    return (
+        f'<tr{_BUILTIN_ROW if group.name == groups.ADMIN_GROUP else ""}>'
+        f'<td><span class="name">{escape(group.name)}</span>{_sub(group.description)}</td>'
+        f"{counts}"
+        f'<td class="muted">{_stamp(group.updated_at)}</td>'
+        f'<td class="actions">{actions}</td></tr>'
+    )
+
+
+def render_groups(
+    all_groups: list[Group], title: str = "Fireflyer Portal", user_menu: str = "",
+    counts: dict[str, tuple[int, int, int]] | None = None,
+) -> str:
+    """`counts`: group -> (its dashboards, its datasets, other groups'
+    dashboards reading them)."""
+    counts = counts or {}
+    table = list_table(
+        ["Name", "Dashboards", "Datasets", "Updated"],
+        [_group_row(g, *counts.get(g.name, (0, 0, 0))) for g in all_groups],
+        "No groups yet", _add_button("New group", "openAdd()"),
+    )
+    add_dialog = _dialog("add-dialog", "add-form", "/groups/new", "New group", "Create",
+                         description=True, placeholder="Group name")
+    rename_dialog = _dialog("rename-dialog", "rename-form", "", "Edit group", "Save",
+                            description=True, placeholder="Group name")
+    return _shell(title, user_menu, "groups", table, extra=add_dialog + rename_dialog, users=True)
 
 
 def render_dataset_detail(
@@ -1704,17 +2048,30 @@ def render_dataset_detail(
     title: str = "Fireflyer Portal",
     user_menu: str = "",
     used_by: list[tuple[str, str]] | None = None,
-    paths: list[str] | None = None,
-    active_path: str | None = None,
+    group_label: str = "",
     mapping: str = "",
     versions: list[Version] | None = None,
     examples: dict[str, list[str]] | None = None,
     authors: bool = True,
     used_in: dict[str, list[tuple[str, str]]] | None = None,
+    group: str = groups.LOCAL_GROUP,
+    readonly: bool = False,
+    elsewhere: list[tuple[str, str]] | None = None,
+    ref: str = "",
 ) -> str:
-    # The trash button: when the dataset is in use it shows a count badge and
-    # opens the list of dashboards (open in a new tab) instead of deleting; when
-    # nothing uses it, it deletes.
+    """Group `group`'s dataset `ds`. `used_by`: (href, label) of the dashboards
+    in its own group that read it — while there are any it can't be removed;
+    `elsewhere`: those of other groups, which a removal turns into locks.
+    `readonly`: someone else's — its columns and examples only, nothing to
+    change, no service column, version history or permissions."""
+    if readonly:
+        return _dataset_read_only(ds, title, user_menu, group_label, mapping, versions or [],
+                                  examples or {}, used_in or {}, group)
+    url = groups.dataset_url(group, ds.name)
+    # The trash button: when the dataset is in use in its group it shows a count
+    # badge and opens the list of dashboards (open in a new tab) instead of
+    # deleting; when nothing there uses it, it deletes — after saying which
+    # other groups' dashboards lose it.
     used_by = used_by or []
     if used_by:
         trash = (
@@ -1723,8 +2080,8 @@ def render_dataset_detail(
             f'{_icon("trash")}<span class="badge">{len(used_by)}</span></button>'
         )
         links = "".join(
-            f'<li><a href="/d/{escape(quote(did), quote=True)}" target="_blank" rel="noopener">{escape(name)}</a></li>'
-            for did, name in used_by
+            f'<li><a href="{escape(href, quote=True)}" target="_blank" rel="noopener">{escape(name)}</a></li>'
+            for href, name in used_by
         )
         usage_dialog = f"""
 <dialog id="usage-dialog">
@@ -1735,9 +2092,12 @@ def render_dataset_detail(
   </form>
 </dialog>"""
     else:
+        lose = "".join(f"\n  {label}" for _, label in elsewhere or [])
+        warn = "Remove this dataset?" + (
+            f"\nThese dashboards in other groups read it — their charts on it will lock:{lose}" if lose else "")
         trash = (
-            f'<form method="post" action="/datasets/{quote(ds.name)}/delete" style="display:inline"'
-            " onsubmit=\"return confirm('Remove this dataset?')\">"
+            f'<form method="post" action="{escape(url, quote=True)}/delete" style="display:inline"'
+            f' onsubmit="return confirm({escape(json.dumps(warn), quote=True)})">'
             f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
         )
         usage_dialog = ""
@@ -1752,7 +2112,7 @@ def render_dataset_detail(
         '<span class="thead" id="ds-title-head" role="button" tabindex="0" aria-haspopup="dialog"'
         ' aria-label="Rename or describe the dataset">'
         f'<span class="tname" id="ds-title-name" data-name="{escape(ds.name, quote=True)}"'
-        f' data-description="{desc}" data-action="/datasets/{quote(ds.name)}/rename">'
+        f' data-description="{desc}" data-action="{escape(url, quote=True)}/rename">'
         f'{escape(ds.name)}</span>'
         f'<span class="tsub" id="ds-title-sub"{"" if ds.description else " hidden"}>'
         f"{escape(ds.description)}</span>"
@@ -1773,10 +2133,10 @@ def render_dataset_detail(
     # the right in local paths mode (added by `_shell`).
     topbar_left = (
         '<div class="topbar-lead">'
-        + back_button("/datasets", "Back to datasets")
+        + back_button(f"/datasets/{groups.url_name(group)}", "Back to datasets")
         + _column_modes()
         + f'<div class="topbar-title" id="ds-title">{tname}{tabout}</div>'
-        + _history_menu(ds, versions, authors)
+        + _history_menu(ds, versions, authors, group)
         + "</div>"
     )
     topbar_right = (
@@ -1797,10 +2157,8 @@ def render_dataset_detail(
   {status}
   <section class="ds-columns" id="ds-columns" data-mode="view">{_columns_view(ds, mapping, versions, examples or {}, used_in or {})}</section>
   <div class="ds-toast" id="ds-toast" role="status" hidden></div>
-  <script type="application/json" id="ds-data">{_page_data(ds, mapping, versions, examples or {}, used_in or {})}</script>"""
-    replace = _upload_dialog(
-        f"/datasets/{quote(ds.name)}/replace", "Upload a new version", "Upload", "replace-dialog", False
-    )
+  <script type="application/json" id="ds-data">{_page_data(ds, mapping, versions, examples or {}, used_in or {}, group, ref)}</script>"""
+    replace = _upload_dialog(f"{url}/replace", "Upload a new version", "Upload", "replace-dialog", False)
     page_head = (
         assets.stylesheets("code.css", "filters.css")
         # htmx for the permissions' filter rows: their date-range picker is htmx.
@@ -1813,8 +2171,29 @@ def render_dataset_detail(
         title, user_menu, "datasets", body,
         extra=replace + usage_dialog,
         topbar_left=topbar_left, topbar_right=topbar_right,
-        paths=paths, active_path=active_path, detail=True, head=page_head,
+        picker=group_label, detail=True, head=page_head,
     )
+
+
+def _dataset_read_only(ds: Dataset, title: str, user_menu: str, group_label: str, mapping: str,
+                       versions: list[Version], examples: dict[str, list[str]],
+                       used_in: dict[str, list[tuple[str, str]]], group: str) -> str:
+    """Someone else's dataset: back, its name and description, and its columns
+    — no service column — with the examples the viewer's role lets them see."""
+    head = (
+        f'<span class="thead"><span class="tname">{escape(ds.name)}</span>'
+        f'<span class="tsub"{"" if ds.description else " hidden"}>{escape(ds.description)}</span></span>'
+    )
+    topbar_left = (
+        '<div class="topbar-lead">'
+        + back_button(f"/datasets/{groups.url_name(group)}", "Back to datasets")
+        + f'<div class="topbar-title" id="ds-title" data-readonly="1">{head}</div>'
+        + "</div>"
+    )
+    seen = Dataset(**{**ds.__dict__, "service": []})
+    body = (f'<section class="ds-columns" id="ds-columns" data-mode="view">'
+            f"{_columns_view(seen, mapping, versions, examples, used_in, service=False)}</section>")
+    return _shell(title, user_menu, "datasets", body, topbar_left=topbar_left, picker=group_label, detail=True)
 
 
 # --- a dataset's columns: view / edit / code / compare -----------------------------
@@ -1877,7 +2256,9 @@ def _kinds(ds: Dataset) -> dict[str, tuple[str, str]]:
 
 
 def _columns_view(ds: Dataset, mapping: str, versions: list[Version], examples: dict[str, list[str]],
-                  used_in: dict[str, list[tuple[str, str]]]) -> str:
+                  used_in: dict[str, list[tuple[str, str]]], service: bool = True) -> str:
+    """`used_in`: column -> (href, label) of the dashboards reading it.
+    `service`: whether service columns are shown (to its group, not others)."""
     kinds = _kinds(ds)
     rows = "".join(
         "<tr>"
@@ -1885,8 +2266,8 @@ def _columns_view(ds: Dataset, mapping: str, versions: list[Version], examples: 
         + (_service_mark() if r.service else "") + "</td>"
         f'<td class="muted mono">{escape(r.formula)}</td>'
         f'<td class="ex">{_examples(examples.get(r.name, []))}</td>'
-        f"<td>{_ref_links([(f'/d/{quote(did)}', n) for did, n in used_in.get(r.name, [])])}</td></tr>"
-        for r in _mapping_rules(ds, mapping, versions)
+        f"<td>{_ref_links(used_in.get(r.name, []))}</td></tr>"
+        for r in _mapping_rules(ds, mapping, versions) if service or not r.service
     )
     return (
         # The type is the icon before the name — what the column's formula gave,
@@ -1905,16 +2286,17 @@ def _examples(values: list[str]) -> str:
     ) + "</span>"
 
 
-def _history_menu(ds: Dataset, versions: list[Version], authors: bool = True) -> str:
+def _history_menu(ds: Dataset, versions: list[Version], authors: bool = True,
+                  ds_group: str = groups.LOCAL_GROUP) -> str:
     """The version chip — `v3.4` — opening every version, grouped by upload.
     A version opens the comparison with the one in use; an upload that isn't
     the one in use can be deleted, with its versions."""
     in_use = {ds.version.split(".")[0], ds.building.split(".")[0]} - {""}
-    groups = []
+    uploads = []
     for major in sorted({v.major for v in versions}, reverse=True):
         mine = [v for v in versions if v.major == major]
         delete = "" if str(major) in in_use else (
-            f'<form class="ds-major-delete" method="post" action="/datasets/{quote(ds.name)}/versions/{major}/delete"'
+            f'<form class="ds-major-delete" method="post" action="{escape(groups.dataset_url(ds_group, ds.name), quote=True)}/versions/{major}/delete"'
             f' onsubmit="return confirm(\'Delete upload {major} and its {len(mine)} version(s)?\')">'
             f'<button class="act act-danger" type="submit" title="Delete upload {major} and its versions"'
             f' aria-label="Delete upload {major}">{_icon("trash")}</button></form>'
@@ -1934,12 +2316,12 @@ def _history_menu(ds: Dataset, versions: list[Version], authors: bool = True) ->
         # One group per upload, set apart by a rule — no heading (named for
         # screen readers only); an upload that can go shows just a trash icon,
         # in its own strip beside the group's rows.
-        groups.append(f'<div class="ds-major" role="group" aria-label="Upload {major}">{delete}{items}</div>')
+        uploads.append(f'<div class="ds-major" role="group" aria-label="Upload {major}">{delete}{items}</div>')
     label = f"v{ds.version}" if ds.version else '<span class="ds-spin" title="Building"></span>'
     return (
         '<details class="ds-history" id="ds-history">'
         f'<summary title="Versions">{label}</summary>'
-        f'<div class="ds-history-menu">{"".join(groups)}</div></details>'
+        f'<div class="ds-history-menu">{"".join(uploads)}</div></details>'
     )
 
 
@@ -1954,12 +2336,18 @@ def _build_status(ds: Dataset) -> str:
 
 
 def _page_data(ds: Dataset, mapping: str, versions: list[Version], examples: dict[str, list[str]],
-               used_in: dict[str, list[tuple[str, str]]]) -> str:
+               used_in: dict[str, list[tuple[str, str]]], group: str = groups.LOCAL_GROUP,
+               ref: str = "") -> str:
     """What dataset-columns.js works from. `</` is escaped so no value can end
     the <script> it sits in."""
     rules = _mapping_rules(ds, mapping, versions)
     data = {
         "name": ds.name,
+        # Its address, for the page's requests; and the reference a filter on it
+        # names — a role's draft row reads it as a chart in its group would.
+        "url": groups.dataset_url(group, ds.name),
+        "ref": ref or ds.name,
+        "group": group,
         "mapping": mapping,
         "rules": [{"name": r.name, "formula": r.formula, "service": r.service} for r in rules],
         "serviceIcon": _icon("service"),

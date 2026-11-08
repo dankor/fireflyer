@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-08
+
+### Added
+
+- **Groups** (portal mode): every dataset and dashboard lives in a group, and
+  names are unique only inside one. Each user has their own, `_<name>` (the
+  admin login's is `_admin`), made and removed with them; an admin adds,
+  renames and removes **shared** groups on a new **Groups** tab. A chart reads
+  `dataset: orders` from its dashboard's group and `dataset: sales:orders` from
+  another. The topbar's **group picker** splits shared and personal groups (opening
+  on the shared ones; on the list pages only — an opened dashboard or
+  dataset, in local paths mode too, shows its group read-only), and
+  every list gets a **Group** column.
+- **Access is enforced.** A signed-in user reads their own group and, elsewhere,
+  only what a role of theirs is granted — with that grant's row filters applied
+  first on every read: charts, filter value lists, column types, the
+  assistant's dataset list. A chart on data you can't read shows a lock. A list
+  shows everything and greys, last, what isn't all shared with you; it still
+  opens. Someone else's dashboard opens **view-only, without its YAML**; their
+  dataset shows its columns and the example values your grant lets through.
+  Only an admin can view as a role or a user.
+- The chart form's dataset field has a **group pick** beside its search.
+- Cloning into another group rewrites bare references to `group:name`, so the
+  copy reads the same data.
+
+### Changed
+
+- **URLs carry the group**: `/d/<group>/<name>` and `/datasets/<group>/<name>`
+  (and every route under them); `/` opens your own group. Old links aren't
+  redirected. Local paths mode uses the path as the group in the URL; the
+  `ff_path` cookie and `/path/<name>` are gone. Plain local mode's datasets are
+  at `/datasets/local`.
+- **Names**: group and dataset names are letters, digits, `_` and `-`; a user
+  name is lowercase latin letters then letters or digits, and **never changes**
+  (their group carries it). A dashboard name is free text — `/`, `\`, `~` and a
+  leading dot are escaped in its URL. An SSO name the rule refuses can't sign
+  in yet.
+- Renames cascade across groups: a dataset's (and a build's column renames)
+  reach every group's dashboards, as does a shared group's rename.
+- A dataset can be removed while only other groups' dashboards read it (the
+  confirm lists them; their charts lock); its own group's still guard it.
+  Removing a user or a group removes everything in it.
+- The activity log has a `group_name` column; `X-FF-Dashboard` is
+  `<group>/<name>`.
+- Everything from before groups moves into `_admin` on start-up — dashboards,
+  history, the dataset catalog and files; a dataset whose name breaks the rule
+  is renamed (dashboards follow). Users whose names break it stop the portal,
+  listed, for an admin to fix.
+
+### Fixed
+
+- A dashboard named with an emoji couldn't be created or saved.
+- Removing or renaming a dataset on a local disk left its empty folders behind.
+
 ## [0.23.0] - 2026-11-03
 
 ### Added
@@ -1329,7 +1383,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/dankor/fireflyer/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/dankor/fireflyer/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/dankor/fireflyer/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/dankor/fireflyer/compare/v0.20.0...v0.21.0

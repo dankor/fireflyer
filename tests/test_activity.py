@@ -35,8 +35,7 @@ def portal(app_state, monkeypatch, datasets, log):  # noqa: F811
     app_state("authenticator", auth.default_authenticator())
     app_state("roles", RoleStore(":memory:", admin=auth.admin_name()))
     app_state("activity", log)
-    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: datasets)
-    monkeypatch.setattr(app_mod, "_every_dataset_store", lambda: [datasets])
+    monkeypatch.setattr(app_mod, "_datasets_in", lambda group: datasets)
     # Not following redirects: each request is one row, not the page it lands on.
     client = TestClient(app_mod.app, follow_redirects=False)
     client.post("/login", data={"username": "admin", "password": "admin"})
@@ -81,8 +80,31 @@ def test_a_dashboard_name_is_unique_and_its_id():
     with pytest.raises(DashboardError, match="already exists"):
         store.create(_YAML)
     assert store.free_name("Sales") == "Sales 2"
-    with pytest.raises(DashboardError, match="can't contain"):
-        store.create(_YAML.replace("name: Sales", "name: a/b"))
+    # Any text: the URL escapes what it must (groups.url_name).
+    assert store.create(_YAML.replace("name: Sales", "name: '../a/b 🦁'")) == "../a/b 🦁"
+    # Unique within its group only.
+    assert store.group("mkt").create(_YAML) == "Sales"
+    assert [r.group for r in store.group("mkt").list()] == ["mkt"]
+
+
+def test_dashboards_from_before_groups_move_into_the_admins(tmp_path):
+    path = str(tmp_path / "portal.db")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE dashboards (name TEXT PRIMARY KEY, author TEXT NOT NULL DEFAULT '',"
+               " yaml TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    db.execute("CREATE TABLE dashboard_versions (dashboard TEXT NOT NULL, version INTEGER NOT NULL,"
+               " yaml TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL,"
+               " PRIMARY KEY (dashboard, version))")
+    db.execute("CREATE TABLE dashboard_uses (dashboard TEXT NOT NULL, dataset TEXT NOT NULL, column_name TEXT NOT NULL)")
+    db.execute("INSERT INTO dashboards VALUES ('Sales', 'dana', ?, '2026-01-01', '2026-01-01')", (_YAML,))
+    db.execute("INSERT INTO dashboard_versions VALUES ('Sales', 1, ?, 'dana', 0)", (_YAML,))
+    db.commit()
+    db.close()
+
+    store = SqlStore(path)
+    assert store.group_name == "_admin" and store.get("Sales").author == "dana"
+    assert [v.version for v in store.versions("Sales")] == [1]
+    assert SqlStore(path).group("other").list() == []
 
 
 def test_saving_a_new_name_renames_it_with_its_history_unless_taken():
@@ -134,14 +156,15 @@ def test_logins_and_logouts_are_logged_a_failed_one_as_401(portal, log):
 
 
 def test_a_dashboards_life_is_logged_by_name(portal, log):
-    portal.get("/")
-    portal.post("/new", data={"name": "Sales"})
-    portal.get("/d/Sales?role=viewer")
-    portal.post("/d/Sales/save", data={"yaml_text": _YAML})
-    assert portal.post("/d/Sales/save", data={"yaml_text": _YAML.replace("Sales", "Revenue")}).json() == {
-        "ok": True, "id": "Revenue"}
-    portal.post("/d/Revenue/clone", data={"name": ""})
-    portal.post("/d/Revenue/delete")
+    assert portal.get("/").headers["location"] == "/d/_admin"         # the admin's own group
+    portal.get("/d/_admin")
+    portal.post("/d/_admin/new", data={"name": "Sales"})
+    portal.get("/d/_admin/Sales?role=viewer")
+    portal.post("/d/_admin/Sales/save", data={"yaml_text": _YAML})
+    assert portal.post("/d/_admin/Sales/save", data={"yaml_text": _YAML.replace("Sales", "Revenue")}).json() == {
+        "ok": True, "id": "_admin/Revenue", "url": "/d/_admin/Revenue"}
+    portal.post("/d/_admin/Revenue/clone", data={"name": ""})
+    portal.post("/d/_admin/Revenue/delete")
     assert [(r.action, r.object_type, r.object_name, r.status_code) for r in _rows(log)] == [
         ("open", "gallery", "dashboards", 200),
         ("create", "dashboard", "Sales", 303),
@@ -151,6 +174,7 @@ def test_a_dashboards_life_is_logged_by_name(portal, log):
         ("clone", "dashboard", "Revenue (copy)", 303),
         ("delete", "dashboard", "Revenue", 303),
     ]
+    assert {r.group for r in _rows(log)} == {"_admin"}         # the group, a column of its own
     opened, saved, renamed = _rows(log)[2:5]
     assert opened.detail == {"role": "viewer"}
     assert saved.detail == {"version": 2}                     # the YAML is in that version, not here
@@ -158,20 +182,20 @@ def test_a_dashboards_life_is_logged_by_name(portal, log):
 
 
 def test_a_taken_name_is_refused_and_logged(portal, log):
-    portal.post("/new", data={"name": "Sales"})
-    assert portal.post("/new", data={"name": "Sales"}).status_code == 400
+    portal.post("/d/_admin/new", data={"name": "Sales"})
+    assert portal.post("/d/_admin/new", data={"name": "Sales"}).status_code == 400
     assert [(r.action, r.status_code) for r in _rows(log)] == [("create", 303), ("create", 400)]
 
 
 def test_renders_filters_and_tabs_are_logged_with_their_values(portal, log):
-    headers = {"X-FF-Dashboard": "Sales%20%C3%A9"}            # the editor's, encoded
+    headers = {"X-FF-Dashboard": "_admin%2FSales%20%C3%A9"}   # the editor's, encoded: group/name
     portal.post("/execute?active_tab=1&role=viewer", content=_YAML, headers=headers)
     portal.post("/dashboard", headers=headers, data={
         "yaml_text": _YAML, "filter_column": "status", "filter_op": "in", "filter_value": ["paid", "void"]})
     portal.post("/dashboard", data={"yaml_text": _YAML, "toggle": "rows|status|paid"})
     portal.post("/dashboard", data={"yaml_text": _YAML, "active_tab": "2"})
     refresh, added, clicked, tab = _rows(log)
-    assert (refresh.action, refresh.object_name) == ("refresh", "Sales é")
+    assert (refresh.action, refresh.object_name, refresh.group) == ("refresh", "Sales é", "_admin")
     assert refresh.detail == {"tab": 1, "role": "viewer"}
     assert added.action == "filter"
     assert added.detail["added"] == [{"column": "status", "op": "in", "values": ["paid", "void"]}]
@@ -225,30 +249,30 @@ def test_a_refusal_is_logged_with_its_code(portal, log, monkeypatch):
 
 
 def test_dataset_actions_are_logged_a_guarded_delete_as_409(portal, log):
-    portal.post("/new", data={"name": "Sales"})
-    portal.post("/d/Sales/save", data={"yaml_text": _YAML})
-    portal.get("/datasets/orders")
-    assert portal.post("/datasets/orders/delete").status_code == 409
+    portal.post("/d/_admin/new", data={"name": "Sales"})
+    portal.post("/d/_admin/Sales/save", data={"yaml_text": _YAML})
+    portal.get("/datasets/_admin/orders")
+    assert portal.post("/datasets/_admin/orders/delete").status_code == 409
     assert [(r.action, r.object_type, r.object_name, r.status_code) for r in _rows(log)][2:] == [
         ("open", "dataset", "orders", 200), ("delete", "dataset", "orders", 409)]
 
 
 def test_the_editor_beacon_logs_only_its_own_actions(portal, log):
-    assert portal.post("/activity", data={"action": "discard", "dashboard": "Sales"}).status_code == 204
-    assert portal.post("/activity", data={"action": "mode", "dashboard": "Sales", "mode": "edit"}).status_code == 204
+    assert portal.post("/activity", data={"action": "discard", "dashboard": "_admin/Sales"}).status_code == 204
+    assert portal.post("/activity", data={"action": "mode", "dashboard": "_admin/Sales", "mode": "edit"}).status_code == 204
     assert portal.post("/activity", data={"action": "delete"}).status_code == 400
-    assert [(r.action, r.object_name, r.detail) for r in _rows(log)] == [
-        ("discard", "Sales", {}), ("mode", "Sales", {"mode": "edit"})]
+    assert [(r.action, r.group, r.object_name, r.detail) for r in _rows(log)] == [
+        ("discard", "_admin", "Sales", {}), ("mode", "_admin", "Sales", {"mode": "edit"})]
 
 
 def test_a_log_that_cant_be_written_doesnt_fail_the_request(portal, log, monkeypatch):
     def broken(entry):
         raise RuntimeError("database gone")
     monkeypatch.setattr(log, "record", broken)
-    assert portal.get("/").status_code == 200
+    assert portal.get("/d/_admin").status_code == 200
 
 
 def test_nothing_is_logged_outside_portal_mode(app_state, datasets, monkeypatch):  # noqa: F811
     app_state("activity", None)
-    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: datasets)
+    monkeypatch.setattr(app_mod, "_datasets_in", lambda group: datasets)
     assert TestClient(app_mod.app).post("/execute", content=_YAML).json()["ok"]

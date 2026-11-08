@@ -1,3 +1,4 @@
+import dataclasses
 import hmac
 import json
 import os
@@ -23,7 +24,9 @@ from fireflyer import yaml_assist
 from fireflyer import filters as filters_mod
 from fireflyer import calcs_edit
 from fireflyer import column_map
-from fireflyer.datasets import DatasetError, DatasetStore, SqlCatalog
+from fireflyer import groups
+from fireflyer.scan import NoAccess
+from fireflyer.datasets import DatasetError, DatasetStore, SqlCatalog, fit_name
 from fireflyer.params import filter_fields as builder_fields, parse_filters
 from fireflyer.storage import make_object_store
 from fireflyer.chart.map.chart import Map
@@ -34,8 +37,10 @@ from fireflyer.dashboard import (
     DashboardError,
     filter_add_body,
     grain_state_html,
+    qualify_refs,
     rename_column_refs,
     rename_dataset_ref,
+    rename_group_ref,
     set_grain_token,
 )
 from fireflyer.web import assets
@@ -153,13 +158,16 @@ app.state.activity = (
 # The editor's requests name their dashboard (editor.js): its routes take the
 # YAML, not an id.
 _DASHBOARD_HEADER = "X-FF-Dashboard"
+# A dataset page's requests outside its address (its filter rows) name its group.
+_GROUP_HEADER = "X-FF-Group"
 # Form fields a row never keeps: secrets, and a dashboard's whole YAML (a save's
 # version holds it).
 _UNLOGGED = {"yaml_text", "password", "clear_password"}
 
 
 def _log(request: Request, action: str, object_type: str = "", object_name: str = "",
-         *, status_code: int | None = None, actor: str | None = None, **detail) -> None:
+         *, status_code: int | None = None, actor: str | None = None, group: str | None = None,
+         **detail) -> None:
     """What this request did, for `_activity` to write. `status_code` overrides
     the response's — a JSON `{ok: false}` comes back 200 but failed; `actor` names
     who before there's a session (a login)."""
@@ -171,7 +179,19 @@ def _log(request: Request, action: str, object_type: str = "", object_name: str 
         detail={k: v for k, v in detail.items() if v not in (None, "", [], {})},
         ip=request.client.host if request.client else "",
         user_agent=request.headers.get("user-agent", ""),
+        group=_logged_group(request) if group is None else group,
     ), status_code)
+
+
+def _logged_group(request: Request) -> str:
+    """The group a logged request acted in: the URL's, or the one its header
+    names — "" for what's global (roles, users, the login)."""
+    if "group" in request.path_params:
+        return groups.from_url(request.path_params["group"])
+    sent = request.headers.get(_DASHBOARD_HEADER)
+    if sent:
+        return unquote(sent).partition("/")[0]
+    return unquote(request.headers.get(_GROUP_HEADER, ""))
 
 
 def _record(entry) -> None:
@@ -212,10 +232,11 @@ def _form_detail(form) -> dict:
 
 def _dash_of(request: Request, yaml_text: str = "") -> str:
     """Which dashboard an editor request is about: the one the page opened
-    (its name, sent by editor.js), else the posted YAML's `name:`."""
+    (`<group>/<name>`, sent by editor.js — the group is the row's own column),
+    else the posted YAML's `name:`."""
     sent = request.headers.get(_DASHBOARD_HEADER)
     if sent:
-        return unquote(sent)
+        return unquote(sent).partition("/")[2]
     found = re.search(r"(?m)^name:[ \t]*(.*?)[ \t]*$", yaml_text)
     return found.group(1).strip("\"'") if found else ""
 
@@ -259,12 +280,8 @@ else:
     CHAT_PANEL = """
       <div class="ff-docs-body"><div class="chat-notice">Set <code>ANTHROPIC_API_KEY</code> in <code>.env</code> and restart to enable the AI assistant.</div></div>"""
 
-# Topbar pieces. Nav is a hamburger link to the dashboards gallery; the brand is
-# a link there too in portal mode (a plain span locally, where `/` is the editor
-# itself). The save button/name-edit/theme JS all live in static/editor.js.
-# Back arrow to the gallery — the opened-dashboard editor mirrors the dataset
-# detail page (same shared `back_button` style, no brand text).
-_BACK_HTML = portal_mod.back_button("/", "Back to dashboards")
+# Topbar pieces: the back button (to the dashboard's group), the name, and the
+# save button/name-edit/theme, whose JS all lives in static/editor.js.
 
 
 def _name_and_description(yaml_text: str) -> tuple[str, str]:
@@ -303,7 +320,7 @@ _DISCARD_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" str
 _SAVE_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h11l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 3v5h7V3"/><rect x="7" y="13" width="10" height="7" rx="1"/></svg>'
 
 
-def _save_html(dash_id: str) -> str:
+def _save_html(url: str) -> str:
     # Both hidden until there are unsaved changes (toggled by updateSaveState()):
     # Discard puts the last save back, Save keeps the changes.
     # One segmented group, styled like the mode switch's resting segments.
@@ -311,7 +328,7 @@ def _save_html(dash_id: str) -> str:
         '<span class="ff-savebar" role="group" aria-label="Unsaved changes">'
         '<button class="ff-discard" id="ff-discard" type="button" title="Discard unsaved changes"'
         f' aria-label="Discard unsaved changes" hidden>{_DISCARD_ICON}</button>'
-        f'<button class="ff-save" id="ff-save" data-save-url="/d/{escape(quote(dash_id), quote=True)}/save" title="Save (⌘/Ctrl+S)"'
+        f'<button class="ff-save" id="ff-save" data-save-url="{escape(url, quote=True)}/save" title="Save (⌘/Ctrl+S)"'
         f' aria-label="Save" hidden>{_SAVE_ICON}</button>'
         "</span>"
     )
@@ -356,11 +373,13 @@ _MODE_ICONS = {
 }
 
 
-def _mode_switch() -> str:
+def _mode_switch(view_only: bool = False) -> str:
+    """Every mode — or, for someone who may only look, just view."""
+    modes = ("view",) if view_only else ("view", "edit", "code", "diff", "chat", "calcs", "docs")
     buttons = "".join(
         f'<button type="button" data-mode="{mode}" title="{_MODE_LABELS[mode]}"'
         f' aria-label="{_MODE_LABELS[mode]}">{_MODE_ICONS[mode]}</button>'
-        for mode in ("view", "edit", "code", "diff", "chat", "calcs", "docs")
+        for mode in modes
     )
     return (
         '<div class="ff-theme ff-modes" id="ff-modes" role="group" '
@@ -452,17 +471,22 @@ def render_editor_page(
     *,
     nav: str = "",
     dash_name: str = "",
-    path_dropdown: str = "",
+    group: str = "",
     save: str = "",
     theme: str = "",
     user_menu: str = "",
     dash_id: str = "",
+    dash_url: str = "",
+    view_only: bool = False,
+    view_as: bool = True,
 ) -> str:
     """The editor page seeded with `yaml_text` and topbar pieces — left: `nav`
-    (back button + switch) + editable `dash_name`; right: `path_dropdown` (local
-    paths mode), `save` (shown only when unsaved), Preview, `theme` switch,
-    `user_menu` (profile). `editor.html` carries the placeholders; both modes
-    share it. Read per render rather than at import, like the CSS and JS it
+    (back button) + editable `dash_name`; right: its `group` (read-only),
+    `save` (shown only when unsaved), `theme` switch,
+    `user_menu` (profile). `dash_id` is `<group>/<name>`, `dash_url` its
+    address; `view_only` (someone who may only look) leaves the YAML out and
+    the mode switch at view; `view_as`, whether the view-as picker shows.
+    `editor.html` carries the placeholders; both modes share it. Read per render rather than at import, like the CSS and JS it
     links: uvicorn's `--reload` ignores non-Python files, so an edit to any of
     them shows on the next page load without a restart."""
     page = (_DIR / "editor.html").read_text()
@@ -477,12 +501,14 @@ def render_editor_page(
         # Which dashboard: its version history, and the key its unsaved draft
         # is kept under in the browser ("" for the plain single-dashboard editor).
         .replace("__FF_DASH_ID__", escape(dash_id, quote=True))
+        .replace("__FF_DASH_URL__", escape(dash_url, quote=True))
+        .replace("__FF_VIEW_ONLY__", "1" if view_only else "")
         .replace("__FF_IMPORTMAP__", assets.import_map("diff-view.js", "yaml-look.js"))
         .replace("__FF_NAV__", nav)
-        .replace("__FF_MODES__", _mode_switch())
+        .replace("__FF_MODES__", _mode_switch(view_only))
         .replace("__FF_DASH_NAME__", dash_name)
-        .replace("__FF_ROLES__", portal_mod.role_picker(_role_store().roles(), _users()))
-        .replace("__FF_PATHDD__", path_dropdown)
+        .replace("__FF_ROLES__", portal_mod.role_picker(_role_store().roles(), _users()) if view_as else "")
+        .replace("__FF_GROUP__", group)
         .replace("__FF_SAVE__", save)
         .replace("__FF_THEME__", theme)
         .replace("__FF_USER_MENU__", user_menu)
@@ -493,65 +519,217 @@ def render_editor_page(
     )
 
 
-# --- store selection (portal DB vs local paths) -----------------------------
-# Local *paths mode* is on when FIREFLYER_PATHS is set (a base dir; each host
-# folder mapped under it is a switchable "path"). A path's dashboards are files
-# in <path>/dashboards; its datasets are an isolated blob store. The active path
-# rides in a cookie.
+# --- groups: where a request is, and what its viewer may read -----------------
+# Every dashboard and dataset lives in a group, named in the URL:
+# `/d/<group>/<name>`, `/datasets/<group>/<name>`. Portal mode's groups are each
+# user's own (`_bob`) and the shared ones an admin makes (`RoleStore.groups`).
+# Local *paths mode* (FIREFLYER_PATHS, a base dir) has a group per host folder
+# mapped under it — its dashboards are files in <path>/dashboards, its datasets
+# an isolated blob store — and the plain single-dashboard editor has one,
+# `local`. Only portal mode has `group:dataset` references and access checks.
 PATHS_BASE = os.environ.get("FIREFLYER_PATHS", "")
 _DATA_BASE = os.environ.get("FIREFLYER_DATA", "data/datasets")
-_PATH_COOKIE = "ff_path"
-# Seeded on first run so a fresh paths-mode checkout opens on a working example.
+# The demo path: docker-compose maps the repo's demo/ folder in under it.
 DEMO_PATH = "demo"
+LOCAL_GROUP = "local"
 
 
 def _paths_mode() -> bool:
     return app.state.store is None and bool(PATHS_BASE)
 
 
-def _active_path(request: Request) -> str | None:
-    """The selected path (paths mode), validated against the real mapped-folder
-    list so a stale/forged cookie can't point outside the base. Defaults to the
-    first."""
-    paths = paths_mod.list_paths(PATHS_BASE)
-    want = request.cookies.get(_PATH_COOKIE)
-    if want in paths:
-        return want
-    return paths[0] if paths else None
+def _groups_on() -> bool:
+    """Portal mode: groups with people in them, references across them."""
+    return app.state.store is not None
 
 
-def _dash_store(request: Request):
-    """Dashboard store for this request: portal DB, or the active path's folder
-    store (None in paths mode when no path exists yet)."""
-    if app.state.store is not None:
-        return app.state.store
-    path = _active_path(request)
-    if not path:
+def _group_names() -> list[str]:
+    if _groups_on():
+        names = [g.name for g in _role_store().groups()]
+        # The admin's is always there: where a portal with no login works.
+        return names if groups.ADMIN_GROUP in names else [groups.ADMIN_GROUP, *names]
+    if _paths_mode():
+        return paths_mod.list_paths(PATHS_BASE)
+    return [LOCAL_GROUP]
+
+
+def _own_group(request: Request) -> str:
+    """Where a request starts: the signed-in user's own group — `_admin` for the
+    env login — in portal mode; the first path in paths mode."""
+    if _groups_on():
+        identity = auth_mod.current_user(request) or ""
+        if not identity or identity == auth_mod.admin_name():
+            return groups.ADMIN_GROUP
+        return groups.personal(identity)
+    names = _group_names()
+    return names[0] if names else LOCAL_GROUP
+
+
+def _request_group(request: Request) -> str:
+    """The group a request is in: the URL's, for a page; for the editor's
+    stateless routes (they take YAML, not an address), the open dashboard's —
+    `<group>/<name>` in its `X-FF-Dashboard` header — or a dataset page's
+    (`X-FF-Group`). Else the viewer's own."""
+    if "group" in request.path_params:
+        return groups.from_url(request.path_params["group"])
+    sent = request.headers.get(_DASHBOARD_HEADER)
+    group = unquote(sent).partition("/")[0] if sent else unquote(request.headers.get(_GROUP_HEADER, ""))
+    if group and group in _group_names():
+        return group
+    return _own_group(request)
+
+
+def _dashboards_in(group: str):
+    """Group `group`'s dashboard store: the portal DB's rows for it, or that
+    path's folder store (None in plain local mode, or for no such path)."""
+    if _groups_on():
+        return app.state.store.group(group)
+    if not _paths_mode() or group not in paths_mod.list_paths(PATHS_BASE):
         return None
     return paths_mod.PathDashboardStore(
-        f"{PATHS_BASE}/{path}", history=f"{_DATA_BASE}/{path}/history",
-        index=f"{_DATA_BASE}/{path}/uses.json",
+        f"{PATHS_BASE}/{group}", history=f"{_DATA_BASE}/{group}/history",
+        index=f"{_DATA_BASE}/{group}/uses.json",
     )
 
 
-def _dataset_store(request: Request):
-    """Dataset store for this request: portal singleton, or the active path's
-    isolated blob store."""
-    if not _paths_mode():
-        return app.state.datasets
-    path = _active_path(request)
-    if path is None:
-        return app.state.datasets
-    return DatasetStore(make_object_store({"base": f"{_DATA_BASE}/{path}"}))
+def _datasets_in(group: str) -> DatasetStore:
+    if _groups_on():
+        return app.state.datasets.group(group)
+    if _paths_mode() and group in paths_mod.list_paths(PATHS_BASE):
+        return DatasetStore(make_object_store({"base": f"{_DATA_BASE}/{group}"}))
+    return app.state.datasets
 
 
-@app.get("/path/{name}")
-def switch_path(name: str) -> RedirectResponse:
-    """Switch the active path (paths mode) — sets the cookie, back to the gallery."""
-    resp = RedirectResponse("/", status_code=303)
-    if name in paths_mod.list_paths(PATHS_BASE):
-        resp.set_cookie(_PATH_COOKIE, name, httponly=True, samesite="lax")
-    return resp
+def _dash_store(request: Request):
+    """The dashboard store of the request's group."""
+    return _dashboards_in(_request_group(request))
+
+
+def _dataset_store(request: Request) -> DatasetStore:
+    """The dataset store of the request's group."""
+    return _datasets_in(_request_group(request))
+
+
+def _known_group(request: Request) -> bool:
+    return _request_group(request) in _group_names()
+
+
+def _can_write(request: Request, group: str | None = None) -> bool:
+    """Whether the signed-in user may change `group` (the request's): an admin
+    any, anyone else only their own. Without a login, everyone everything."""
+    if not _groups_on() or not _users_on():
+        return True
+    group = _request_group(request) if group is None else group
+    return _is_admin(request) or group == _own_group(request)
+
+
+def _read_only(request: Request) -> HTMLResponse | None:
+    """The refusal for a change to a group the user may only read — or None."""
+    if not _known_group(request):
+        return HTMLResponse("No such group", status_code=404)
+    if not _can_write(request):
+        return HTMLResponse("Only its owner or an admin changes this group", status_code=403)
+    return None
+
+
+def _every_group_datasets() -> list[tuple[str, DatasetStore]]:
+    return [(g, _datasets_in(g)) for g in _group_names()]
+
+
+# What a viewer may read: (group, dataset) -> the rows, as filters ([] all of
+# them). None: everything — an admin, or where there are no logins. A user
+# reads all of their own group, and of another's what a role of theirs is
+# granted there (one role per dataset, `role_clashes`).
+Grants = dict[tuple[str, str], list] | None
+
+
+def _role_grants(roles: list[str], own: str = "") -> dict[tuple[str, str], list]:
+    out: dict[tuple[str, str], list] = {}
+    for group, store in _every_group_datasets():
+        for ds in store.list():
+            if group == own:
+                out[(group, ds.name)] = []
+                continue
+            try:
+                perms = store.permissions(ds.name)
+            except DatasetError:
+                continue
+            held = [r for r in roles if r in perms]
+            if held:
+                out[(group, ds.name)] = perms[held[0]]
+    return out
+
+
+def _grants_of(request: Request) -> Grants:
+    """The signed-in viewer's own grants, worked out once per request."""
+    if not _groups_on() or not _users_on() or _is_admin(request):
+        return None
+    if not hasattr(request.state, "grants"):
+        identity = auth_mod.current_user(request) or ""
+        held = _role_store().user(identity)
+        request.state.grants = _role_grants(held.roles if held else [], _own_group(request))
+    return request.state.grants
+
+
+class _Reader:
+    """The datasets a request reads, by reference from its group — `orders`
+    there, `sales:orders` elsewhere — and only as much of them as `grants`
+    allow: a dataset not in them can't be read (`NoAccess`), and a granted one
+    comes with its rows' filters, which every scan applies first
+    (`scan.scan`). What a dashboard is handed as `datasets` in portal mode."""
+
+    def __init__(self, home: str, grants: Grants):
+        self.home = home
+        self._grants = grants
+
+    def normalize(self, ref: str) -> str:
+        return groups.normal(ref, self.home)
+
+    def _store(self, group: str) -> DatasetStore:
+        if group not in _group_names():
+            raise DatasetError(f"there is no group {group!r}")
+        return _datasets_in(group)
+
+    def rows(self, ref: str) -> list | None:
+        """What of `ref` may be read: its filters, [] for all — None for none."""
+        key = groups.split(ref, self.home)
+        return [] if self._grants is None else self._grants.get(key)
+
+    def source(self, ref: str):
+        group, name = groups.split(ref, self.home)
+        rows = self.rows(ref)
+        if rows is None:
+            raise NoAccess(f"no access to {ref}")
+        uri, options = self._store(group).source(name)
+        return (uri, options, rows) if rows else (uri, options)
+
+    def get(self, ref: str):
+        group, name = groups.split(ref, self.home)
+        return self._store(group).get(name)
+
+    def list(self) -> list:
+        """Every dataset it may read, named as a reference from its group:
+        the group's own first, then the rest, `group:name`."""
+        out = []
+        for group, store in sorted(_every_group_datasets(), key=lambda gs: gs[0] != self.home):
+            for ds in store.list():
+                ref = groups.join(group, ds.name, self.home)
+                if self.rows(ref) is not None:
+                    out.append(dataclasses.replace(ds, name=ref))
+        return out
+
+    def grants_here(self) -> dict[str, list]:
+        """Its grants keyed by reference from its group — what `as_role` takes."""
+        return {groups.join(g, n, self.home): rows for (g, n), rows in (self._grants or {}).items()}
+
+
+def _reader(request: Request, grants: Grants | bool = True):
+    """What the editor's routes read datasets through: in portal mode a
+    `_Reader` (references across groups, the viewer's grants — or `grants`, a
+    view-as); elsewhere the group's own store."""
+    if not _groups_on():
+        return _dataset_store(request)
+    return _Reader(_request_group(request), _grants_of(request) if grants is True else grants)
 
 
 def _page_title() -> str:
@@ -559,20 +737,54 @@ def _page_title() -> str:
     return PORTAL_TITLE if app.state.store is not None else "Fireflyer"
 
 
-def _gallery_kwargs(request: Request) -> dict:
-    """Mode args for the gallery/datasets pages: the path list + active path in
-    paths mode, and whether to show an Author column — only with a login, since
-    without one (local mode) there's nobody to name."""
-    authors = {"authors": app.state.authenticator is not None}
-    if not _paths_mode():
-        return authors
-    return {
-        "paths": paths_mod.list_paths(PATHS_BASE),
-        "active_path": _active_path(request),
-        **authors,
-    }
+def _authors() -> bool:
+    """Whether lists show an Author column — only with a login: without one
+    (local mode) there's nobody to name."""
+    return app.state.authenticator is not None
 
 
+def _inactive_groups(request: Request) -> set[str]:
+    """The groups with nothing shared with the viewer — greyed in the picker,
+    still open to them."""
+    grants = _grants_of(request)
+    if grants is None:
+        return set()
+    shared = {g for g, _ in grants}
+    return {g for g in _group_names() if g not in shared and g != _own_group(request)}
+
+
+def _picker(request: Request, group: str, kind: str = "d") -> str:
+    """The topbar's group dropdown: portal mode's groups, or paths mode's
+    paths; nothing in plain local mode. `kind`: the list a pick opens."""
+    if _groups_on():
+        return portal_mod.group_picker(_role_store().groups(), group, _inactive_groups(request), kind)
+    if _paths_mode():
+        return portal_mod.path_dropdown(paths_mod.list_paths(PATHS_BASE), group, kind)
+    return ""
+
+
+def _group_label(group: str) -> str:
+    """An opened dashboard's or dataset's group (or path), where the lists have
+    the picker — read-only: back is the way to another; nothing in plain local
+    mode."""
+    if _groups_on():
+        return portal_mod.group_label(group, "Group")
+    if _paths_mode():
+        return portal_mod.group_label(group, "Path")
+    return ""
+
+
+def _writable_groups(request: Request) -> list[str]:
+    """Where the user may put things — a clone, say: every group for an admin
+    (or without a login), else their own."""
+    names = _group_names()
+    return [g for g in names if _can_write(request, g)]
+
+
+def _readable(request: Request, home: str, refs: list[str]) -> bool:
+    """Whether the viewer may read every dataset in `refs` (written in `home`)."""
+    grants = _grants_of(request)
+    return grants is None or all(groups.split(r, home) in grants for r in refs)
 
 
 def _user_menu(request: Request, extra: str = "") -> str:
@@ -634,22 +846,13 @@ async def logout(request: Request) -> RedirectResponse:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request) -> str:
-    # Portal: DB gallery. Paths mode: gallery of the active path's dashboards
-    # (with the path picker). Plain local: the single-dashboard editor.
-    _log(request, "open", "gallery", "dashboards")
-    if app.state.store is not None:
-        return portal_mod.render_gallery(
-            app.state.store.list(), PORTAL_TITLE, _user_menu(request),
-            datasets=_dataset_names(request), uses=_datasets_of(request), users=_users_tab(request),
-        )
-    if _paths_mode():
-        store = _dash_store(request)
-        return portal_mod.render_gallery(
-            store.list() if store else [], _page_title(), "",
-            datasets=_dataset_names(request), uses=_datasets_of(request),
-            **_gallery_kwargs(request),
-        )
+def index(request: Request):
+    """Portal and paths mode: the dashboards of your own group (the first
+    path). Plain local: the single-dashboard editor."""
+    if _groups_on() or _paths_mode():
+        if not _group_names():
+            return portal_mod.render_gallery([], _page_title(), _user_menu(request), can_write=False)
+        return RedirectResponse(f"/d/{groups.url_name(_own_group(request))}", status_code=303)
     # Plain local mode: no gallery to go back to, no save/profile; just the
     # editable name and theme switch.
     return render_editor_page(
@@ -659,13 +862,39 @@ def index(request: Request) -> str:
     )
 
 
+def _no_group() -> HTMLResponse:
+    return HTMLResponse("No such group", status_code=404)
+
+
+@app.get("/d/{group}", response_class=HTMLResponse)
+def dashboards_gallery(group: str, request: Request):
+    """A group's dashboards: the ones whose data is all shared with the viewer
+    first, then — greyed, still open to them — the rest."""
+    group = groups.from_url(group)
+    _log(request, "open", "gallery", "dashboards")
+    store = _dashboards_in(group)
+    if group not in _group_names() or store is None:
+        return _no_group()
+    reads = _datasets_of(store)
+    rows = store.list()
+    inactive = {r.id for r in rows if not _readable(request, group, reads.get(r.id, []))}
+    rows = [r for r in rows if r.id not in inactive] + [r for r in rows if r.id in inactive]
+    return portal_mod.render_gallery(
+        rows, _page_title(), _user_menu(request), picker=_picker(request, group),
+        authors=_authors(), datasets=_known_refs(group, reads), uses=reads,
+        users=_users_tab(request), group=group, inactive=inactive,
+        can_write=_can_write(request, group), clone_groups=_writable_groups(request),
+    )
+
+
 def _empty_yaml(name: str, description: str = "") -> str:
     """A blank but valid dashboard named `name` — no datasets, charts, or layout
     yet. The author fills it in the editor. json.dumps quotes the name (and the
-    description, when given) safely."""
-    about = f"description: {json.dumps(description)}\n" if description else ""
+    description, when given) safely — as written, not ASCII-escaped: YAML reads
+    the `\\ud83e\\udd81` pair JSON would write for 🦁 as two lone surrogates."""
+    about = f"description: {json.dumps(description, ensure_ascii=False)}\n" if description else ""
     return (
-        f"name: {json.dumps(name)}\n{about}\n"
+        f"name: {json.dumps(name, ensure_ascii=False)}\n{about}\n"
         "datasets: {}\n\ncharts: {}\n\nlayout: []\n"
     )
 
@@ -678,18 +907,22 @@ def _current_author(request: Request) -> str:
     return auth_mod.current_user(request) or ""
 
 
-@app.post("/new")
+@app.post("/d/{group}/new")
 async def portal_new(
-    request: Request, name: str = Form(""), description: str = Form("")
-) -> RedirectResponse:
+    group: str, request: Request, name: str = Form(""), description: str = Form("")
+):
+    if refused := _read_only(request):
+        return refused
     store = _dash_store(request)
+    if store is None:
+        return _no_group()
     wanted = name.strip() or _free_name(store, "Untitled dashboard")
     _log(request, "create", "dashboard", wanted, description=description.strip())
     try:
         new_id = store.create(_empty_yaml(wanted, description.strip()), _current_author(request))
     except DashboardError as exc:                  # the name is taken
         return _error(exc)
-    return RedirectResponse(f"/d/{quote(new_id)}", status_code=303)
+    return RedirectResponse(groups.dashboard_url(store.group_name, new_id), status_code=303)
 
 
 def _free_name(store, name: str) -> str:
@@ -697,57 +930,87 @@ def _free_name(store, name: str) -> str:
     return store.free_name(name)
 
 
-@app.post("/d/{dash_id}/clone")
-async def portal_clone(dash_id: str, request: Request, name: str = Form("")):
+def _dashboard_row(request: Request, dash: str):
+    """The request's dashboard — `dash` its URL segment — or None."""
     store = _dash_store(request)
-    row = store.get(dash_id)
+    return store.get(groups.from_url(dash)) if store is not None else None
+
+
+@app.post("/d/{group}/{dash}/clone")
+async def portal_clone(group: str, dash: str, request: Request, name: str = Form(""),
+                       to: str = Form("", alias="group")):
+    """A copy, under a new name, in a group the user may write — their own,
+    for anyone who can open it. Into another group, its bare references are
+    made `group:dataset`, so the copy reads the same data (`qualify_refs`)."""
+    row = _dashboard_row(request, dash)
+    source = _request_group(request)
+    target = to.strip() or source
     if row is None:
-        _log(request, "clone", "dashboard", name.strip(), source=dash_id)
+        _log(request, "clone", "dashboard", name.strip(), source=groups.from_url(dash))
         return HTMLResponse("Dashboard not found", status_code=404)
+    if target not in _group_names():
+        return _no_group()
+    if not _can_write(request, target):
+        return HTMLResponse("You can't add to that group", status_code=403)
+    store = _dashboards_in(target)
     new_name = name.strip() or _free_name(store, f"{row.name} (copy)")
-    _log(request, "clone", "dashboard", new_name, source=row.name)
+    _log(request, "clone", "dashboard", new_name, source=row.name, source_group=source)
+    text = portal_mod.set_yaml_name(row.yaml, new_name)
+    if _groups_on() and target != source:
+        text = qualify_refs(text, source, _inline_names(text))
     try:
-        new_id = store.create(portal_mod.set_yaml_name(row.yaml, new_name), _current_author(request))
+        new_id = store.create(text, _current_author(request))
     except DashboardError as exc:
         return _error(exc)
-    return RedirectResponse(f"/d/{quote(new_id)}", status_code=303)
+    return RedirectResponse(groups.dashboard_url(target, new_id), status_code=303)
 
 
-@app.get("/d/{dash_id}", response_class=HTMLResponse)
-def portal_open(dash_id: str, request: Request) -> HTMLResponse:
-    _log(request, "open", "dashboard", dash_id, **dict(request.query_params))
-    row = _dash_store(request).get(dash_id)
+def _inline_names(text: str) -> set[str]:
+    try:
+        return set(Dashboard.from_yaml(text)._inline_names)
+    except DashboardError:
+        return set()
+
+
+@app.get("/d/{group}/{dash}", response_class=HTMLResponse)
+def portal_open(group: str, dash: str, request: Request) -> HTMLResponse:
+    """The dashboard in the editor — for whoever may change its group. Anyone
+    else gets it to look at: view mode only, rendered from what's stored, and
+    its YAML never sent (`_yaml_for`)."""
+    group = groups.from_url(group)
+    _log(request, "open", "dashboard", groups.from_url(dash), **dict(request.query_params))
+    row = _dashboard_row(request, dash)
     if row is None:
         return HTMLResponse("Dashboard not found", status_code=404)
-    # The theme switch sits in the topbar always, beside the profile (portal).
-    user_menu, theme = _user_menu(request), _theme_switch()
-    # A selected item (like the dataset detail): back button + the editable name;
-    # no Dashboards|Datasets switch (that's for the lists). In local paths mode the
-    # path dropdown rides on the right.
-    nav, path_dd = _BACK_HTML, ""
-    if _paths_mode():
-        kw = _gallery_kwargs(request)
-        path_dd = portal_mod.path_dropdown(kw["paths"], kw["active_path"])
+    writer = _can_write(request, group)
+    url = groups.dashboard_url(group, row.id)
+    # A selected item (like the dataset detail): back button + the editable
+    # name; no Dashboards|Datasets switch, and the group read-only (the switch
+    # and the picker are for the lists, where back goes).
     page = render_editor_page(
-        row.yaml,
-        nav=nav,
+        row.yaml if writer else "",
+        nav=portal_mod.back_button(f"/d/{groups.url_name(group)}", "Back to dashboards"),
         dash_name=_dash_name_html(row.name, row.description),
-        path_dropdown=path_dd,
-        save=_save_html(row.id),
-        user_menu=user_menu,
-        theme=theme,
-        dash_id=row.id,
+        group=_group_label(group),
+        save=_save_html(url) if writer else "",
+        user_menu=_user_menu(request),
+        theme=_theme_switch(),
+        dash_id=f"{group}/{row.id}",
+        dash_url=url,
+        view_only=not writer,
+        view_as=_may_view_as(request),
     )
     return HTMLResponse(page)
 
 
-@app.post("/d/{dash_id}/save")
-async def portal_save(
-    dash_id: str, request: Request, yaml_text: str = Form("")
-) -> dict:
-    """`id` comes back: a changed `name:` renames a portal dashboard (its name
-    is its key), and the editor moves to the new address."""
+@app.post("/d/{group}/{dash}/save")
+async def portal_save(group: str, dash: str, request: Request, yaml_text: str = Form("")) -> dict:
+    """`id` and `url` come back: a changed `name:` renames a portal dashboard
+    (its name is its key), and the editor moves to the new address."""
+    if refused := _read_only(request):
+        return JSONResponse({"ok": False, "error": refused.body.decode()}, status_code=refused.status_code)
     store = _dash_store(request)
+    dash_id = groups.from_url(dash)
     try:
         saved = store.save(dash_id, yaml_text, author=_current_author(request)) or dash_id
     except DashboardError as exc:
@@ -756,110 +1019,147 @@ async def portal_save(
     versions = store.versions(saved)
     _log(request, "save", "dashboard", saved, renamed_from=dash_id if saved != dash_id else "",
          version=versions[0].version if versions else None)
-    return {"ok": True, "id": saved}
+    return {"ok": True, "id": f"{store.group_name}/{saved}", "url": groups.dashboard_url(store.group_name, saved)}
 
 
-@app.get("/d/{dash_id}/versions")
-def dashboard_versions(dash_id: str, request: Request):
+def _versions_refused(request: Request, dash: str):
+    """A version holds the whole YAML: only for whoever may change the group."""
+    if not _can_write(request) or _dashboard_row(request, dash) is None:
+        return JSONResponse({"error": "no such dashboard"}, status_code=404)
+    return None
+
+
+@app.get("/d/{group}/{dash}/versions")
+def dashboard_versions(group: str, dash: str, request: Request):
     """The dashboard's saved versions, newest first: number, Unix time, author.
     The compare view lists them; it fetches one's YAML when it's picked."""
-    _log(request, "versions", "dashboard", dash_id)
-    store = _dash_store(request)
-    if store is None or store.get(dash_id) is None:
-        return JSONResponse({"error": "no such dashboard"}, status_code=404)
+    _log(request, "versions", "dashboard", groups.from_url(dash))
+    if refused := _versions_refused(request, dash):
+        return refused
     return {"versions": [
         {"version": v.version, "created_at": v.created_at, "author": v.author}
-        for v in store.versions(dash_id)
+        for v in _dash_store(request).versions(groups.from_url(dash))
     ]}
 
 
-@app.get("/d/{dash_id}/versions/{number}")
-def dashboard_version(dash_id: str, number: int, request: Request):
-    _log(request, "version", "dashboard", dash_id, version=number)
-    store = _dash_store(request)
-    found = store.version(dash_id, number) if store is not None else None
+@app.get("/d/{group}/{dash}/versions/{number}")
+def dashboard_version(group: str, dash: str, number: int, request: Request):
+    _log(request, "version", "dashboard", groups.from_url(dash), version=number)
+    if refused := _versions_refused(request, dash):
+        return refused
+    found = _dash_store(request).version(groups.from_url(dash), number)
     if found is None:
         return JSONResponse({"error": "no such version"}, status_code=404)
     return {"version": found.version, "created_at": found.created_at,
             "author": found.author, "yaml": found.yaml}
 
 
-@app.post("/d/{dash_id}/delete")
-async def portal_delete(dash_id: str, request: Request) -> RedirectResponse:
-    _log(request, "delete", "dashboard", dash_id)
-    _dash_store(request).delete(dash_id)
-    return RedirectResponse("/", status_code=303)
+@app.post("/d/{group}/{dash}/delete")
+async def portal_delete(group: str, dash: str, request: Request):
+    _log(request, "delete", "dashboard", groups.from_url(dash))
+    if refused := _read_only(request):
+        return refused
+    _dash_store(request).delete(groups.from_url(dash))
+    return RedirectResponse(f"/d/{group}", status_code=303)
 
 
 # --- datasets (portal gallery tab) ------------------------------------------
 
 
-def _uses(request: Request) -> list:
-    """What every dashboard reads — the store's index (`Use` rows, written on
-    save), so the overviews below are lookups, not a parse of every dashboard.
-    Empty with no dashboard store (plain local mode)."""
-    store = _dash_store(request)
-    return store.uses() if store is not None else []
+def _datasets_of(store) -> dict[str, list[str]]:
+    """Dashboard id -> the datasets it reads, each a reference from its group
+    (`group:name` for another's) — the store's index, so the dashboards list
+    is a lookup, not a parse of every dashboard."""
+    out: dict[str, list[str]] = {}
+    for u in store.uses() if store is not None else []:
+        if not u.column:
+            ref = groups.join(u.dataset_group or u.group, u.dataset, u.group)
+            out.setdefault(u.dashboard_id, []).append(ref)
+    return out
 
 
-def _dashboards_using(request: Request, name: str) -> list[tuple[str, str]]:
-    """(id, name) of stored dashboards that reference dataset `name`."""
-    return list(dict.fromkeys(
-        (u.dashboard_id, u.dashboard_name) for u in _uses(request) if u.dataset == name
-    ))
+def _known_refs(group: str, reads: dict[str, list[str]]) -> set[str]:
+    """Which of the references in `reads` (written in `group`) name a dataset
+    that exists — the rest show as missing."""
+    names: dict[str, set[str]] = {}
+    known = set()
+    for ref in {r for refs in reads.values() for r in refs}:
+        where, name = groups.split(ref, group)
+        if where not in names:
+            names[where] = set(_datasets_in(where).names()) if where in _group_names() else set()
+        if name in names[where]:
+            known.add(ref)
+    return known
 
 
-def _columns_used_in(request: Request, name: str, columns: list[str]) -> dict[str, list[tuple[str, str]]]:
-    """Each column of dataset `name` -> the (id, name) of every dashboard whose
-    charts read it (a raw table, `*`, reads them all)."""
+def _readers(group: str, name: str = "") -> list:
+    """Every dashboard — of any group — reading group `group`'s datasets (just
+    `name`, given one): the `Use` rows of the stores' index."""
+    store = _dashboards_in(group)
+    if store is None:
+        return []
+    return [u for u in store.readers() if not name or u.dataset == name]
+
+
+def _use_link(use, home: str) -> tuple[str, str]:
+    """A dashboard reading a dataset of `home`: its address, and its name — with
+    a `group:` prefix when it's another group's."""
+    label = use.dashboard_name if use.group == home else f"{use.group}{groups.SEPARATOR}{use.dashboard_name}"
+    return groups.dashboard_url(use.group, use.dashboard_id), label
+
+
+def _dashboards_using(group: str, name: str) -> list[tuple[str, str]]:
+    return list(dict.fromkeys(_use_link(u, group) for u in _readers(group, name)))
+
+
+def _columns_used_in(group: str, name: str, columns: list[str]) -> dict[str, list[tuple[str, str]]]:
+    """Each column of dataset `name` -> the dashboards whose charts read it (a
+    raw table, `*`, reads them all)."""
     out: dict[str, list[tuple[str, str]]] = {}
-    for u in _uses(request):
-        if u.dataset != name or not u.column:
+    for u in _readers(group, name):
+        if not u.column:
             continue
         for column in columns if u.column == "*" else [u.column]:
-            if (u.dashboard_id, u.dashboard_name) not in out.setdefault(column, []):
-                out[column].append((u.dashboard_id, u.dashboard_name))
+            link = _use_link(u, group)
+            if link not in out.setdefault(column, []):
+                out[column].append(link)
     return out
 
 
 def _dataset_descriptions(request: Request) -> dict[str, str]:
-    """Name -> description of the uploaded datasets — what a chart form's
-    dataset field offers as you type."""
-    return {d.name: d.description for d in _dataset_store(request).list()}
+    """Reference -> description of the datasets a chart may read — what a
+    chart form's dataset field offers as you type (portal mode: the request
+    group's, then the others the viewer may read, `group:name`)."""
+    return {d.name: d.description for d in _reader(request).list()}
 
 
-def _dataset_names(request: Request) -> set[str]:
-    """The uploaded datasets' names, for the dashboards list's links."""
-    return {d.name for d in _dataset_store(request).list()}
+@app.get("/datasets")
+def datasets_home(request: Request):
+    return RedirectResponse(f"/datasets/{groups.url_name(_own_group(request))}", status_code=303)
 
 
-def _datasets_of(request: Request) -> dict[str, list[str]]:
-    """Dashboard id -> the datasets it reads, for the dashboards list."""
-    out: dict[str, list[str]] = {}
-    for u in _uses(request):
-        if not u.column:
-            out.setdefault(u.dashboard_id, []).append(u.dataset)
-    return out
-
-
-def _dataset_users(request: Request) -> dict[str, list[tuple[str, str]]] | None:
-    """Dataset name -> (id, name) of each dashboard reading it, for the datasets
-    list. None with no dashboard store (plain local mode)."""
-    if _dash_store(request) is None:
-        return None
-    users: dict[str, list[tuple[str, str]]] = {}
-    for u in _uses(request):
-        if not u.column:
-            users.setdefault(u.dataset, []).append((u.dashboard_id, u.dashboard_name))
-    return users
-
-
-@app.get("/datasets", response_class=HTMLResponse)
-def datasets_gallery(request: Request) -> str:
+@app.get("/datasets/{group}", response_class=HTMLResponse)
+def datasets_gallery(group: str, request: Request):
+    group = groups.from_url(group)
     _log(request, "open", "gallery", "datasets")
+    if group not in _group_names():
+        return _no_group()
+    datasets = _datasets_in(group).list()
+    grants = _grants_of(request)
+    inactive = set() if grants is None else {d.name for d in datasets if (group, d.name) not in grants}
+    datasets = [d for d in datasets if d.name not in inactive] + [d for d in datasets if d.name in inactive]
+    used_by = None
+    if _dashboards_in(group) is not None:
+        used_by = {}
+        for u in _readers(group):
+            if not u.column:
+                link = _use_link(u, group)
+                if link not in used_by.setdefault(u.dataset, []):
+                    used_by[u.dataset].append(link)
     return portal_mod.render_datasets(
-        _dataset_store(request).list(), _page_title(), _user_menu(request),
-        used_by=_dataset_users(request), users=_users_tab(request), **_gallery_kwargs(request),
+        datasets, _page_title(), _user_menu(request), picker=_picker(request, group, "datasets"),
+        authors=_authors(), used_by=used_by, users=_users_tab(request), group=group,
+        inactive=inactive, can_write=_can_write(request, group),
     )
 
 
@@ -867,7 +1167,11 @@ def datasets_gallery(request: Request) -> str:
 # In a database in every mode: the portal's, or a local sqlite file (shared by
 # every path) when there's no portal. Opened on first use, so importing the app
 # — as the tests do — creates no file. Tests set `app.state.roles`.
-app.state.roles = None
+# Portal mode opens it at once: a user whose name a group can't carry stops it
+# here, at start-up, rather than on someone's first request.
+app.state.roles = (
+    portal_mod.RoleStore(_DATABASE_URL, admin=auth_mod.admin_name()) if PORTAL_ENABLED else None
+)
 
 
 def _role_store():
@@ -880,37 +1184,39 @@ def _role_store():
 
 
 def _every_dataset_store() -> list[DatasetStore]:
-    """Every dataset store a role can be named in: the one, or each path's —
-    roles are shared by every path."""
-    if not _paths_mode():
-        return [app.state.datasets]
-    return [DatasetStore(make_object_store({"base": f"{_DATA_BASE}/{p}"}))
-            for p in paths_mod.list_paths(PATHS_BASE)]
+    """Every dataset store a role can be named in: each group's (each path's)
+    — roles are shared by every group."""
+    return [store for _, store in _every_group_datasets()]
+
+
+def _dataset_key(group: str, name: str) -> str:
+    """How a dataset is named where every group's are listed together — the
+    Access list, a clash between two roles: `group:name`, or just the name
+    where there's one group."""
+    return name if len(_group_names()) < 2 else f"{group}{groups.SEPARATOR}{name}"
 
 
 @app.get("/access", response_class=HTMLResponse)
 def access_gallery(request: Request) -> str:
     _log(request, "open", "gallery", "access")
-    kwargs = _gallery_kwargs(request)
     return portal_mod.render_access(
         _role_store().roles(), _page_title(), _user_menu(request),
-        paths=kwargs.get("paths"), active_path=kwargs.get("active_path"),
-        datasets=_datasets_by_role(request), users=_users_tab(request),
+        datasets=_datasets_by_role(), users=_users_tab(request),
     )
 
 
-def _datasets_by_role(request: Request) -> dict[str, list[str]]:
-    """Role name -> the datasets whose (published) permissions name it — the
-    Access list's Datasets column. This path's datasets, in paths mode."""
-    store = _dataset_store(request)
-    out: dict[str, list[str]] = {}
-    for ds in store.list():
-        try:
-            roles = store.permissions(ds.name)
-        except DatasetError:
-            continue
-        for role in roles:
-            out.setdefault(role, []).append(ds.name)
+def _datasets_by_role() -> dict[str, list[tuple[str, str]]]:
+    """Role name -> (href, label) of the datasets whose (published)
+    permissions name it, in every group — the Access list's Datasets column."""
+    out: dict[str, list[tuple[str, str]]] = {}
+    for group, store in _every_group_datasets():
+        for ds in store.list():
+            try:
+                roles = store.permissions(ds.name)
+            except DatasetError:
+                continue
+            for role in roles:
+                out.setdefault(role, []).append((groups.dataset_url(group, ds.name), _dataset_key(group, ds.name)))
     return out
 
 
@@ -993,13 +1299,14 @@ def _users() -> list:
 
 
 def _every_permission() -> dict[str, dict]:
-    """Dataset -> its role -> filters, over every dataset store (roles and
-    users are shared by every path) — what a user's roles are checked against."""
+    """Dataset (`_dataset_key`) -> its role -> filters, over every group's
+    datasets (roles and users are shared by every group) — what a user's roles
+    are checked against."""
     out: dict[str, dict] = {}
-    for store in _every_dataset_store():
+    for group, store in _every_group_datasets():
         for ds in store.list():
             try:
-                out[ds.name] = _with_admin(store.permissions(ds.name))
+                out[_dataset_key(group, ds.name)] = _with_admin(store.permissions(ds.name))
             except DatasetError:
                 continue
     return out
@@ -1021,12 +1328,12 @@ def _check_roles(user: str, roles: list[str]) -> None:
         raise portal_mod.clash_error(user.strip(), clashes)
 
 
-def _check_permissions(dataset: str, mapping: str) -> None:
+def _check_permissions(group: str, dataset: str, mapping: str) -> None:
     """RoleError when `mapping`'s permissions would give a user two roles on
-    `dataset` — the other side of `_check_roles`."""
+    group `group`'s `dataset` — the other side of `_check_roles`."""
     if not _users_on():
         return
-    perms = {dataset: _with_admin(column_map.permissions(mapping))}
+    perms = {_dataset_key(group, dataset): _with_admin(column_map.permissions(mapping))}
     for user in _role_store().users():
         clashes = portal_mod.role_clashes(user.roles, perms)
         if clashes:
@@ -1044,8 +1351,15 @@ def _is_admin(request: Request) -> bool:
 
 
 def _users_tab(request: Request) -> bool:
-    """The list pages' Users segment: portal mode, and only for an admin."""
+    """The list pages' Users and Groups segments: portal mode, and only for an
+    admin."""
     return _users_on() and _is_admin(request)
+
+
+def _may_view_as(request: Request) -> bool:
+    """Viewing a dashboard as a role or a user: an admin's preview — or
+    anyone's, where there are no logins."""
+    return not _users_on() or _is_admin(request)
 
 
 def _admins_only(request: Request) -> HTMLResponse | None:
@@ -1147,7 +1461,95 @@ async def users_delete(name: str, request: Request):
         _role_store().delete_user(name)
     except portal_mod.RoleError as exc:
         return _error(exc)
+    # Their group goes with them: every dashboard and dataset in it. Charts
+    # elsewhere that read those datasets lock.
+    _drop_group(groups.personal(name))
     return RedirectResponse("/users", status_code=303)
+
+
+def _drop_group(group: str) -> None:
+    if _groups_on():
+        app.state.store.drop_group(group)
+        app.state.datasets.drop_group(group)
+
+
+# --- groups -----------------------------------------------------------------------
+# Portal mode, admins only (`_admins_only`). A shared group is added, renamed —
+# every `old:<dataset>` reference in every group follows — and removed, with
+# what's in it. A personal group comes and goes with its user.
+
+
+@app.get("/groups", response_class=HTMLResponse)
+def groups_gallery(request: Request):
+    _log(request, "open", "gallery", "groups")
+    if refused := _admins_only(request):
+        return refused
+    counts = {}
+    for g in _role_store().groups():
+        readers = {(u.group, u.dashboard_id) for u in _readers(g.name) if u.group != g.name}
+        counts[g.name] = (len(_dashboards_in(g.name).list()), len(_datasets_in(g.name).names()), len(readers))
+    return portal_mod.render_groups(_role_store().groups(), _page_title(), _user_menu(request), counts)
+
+
+@app.post("/groups/new")
+async def groups_new(request: Request, name: str = Form(""), description: str = Form("")):
+    _log(request, "create", "group", name.strip(), description=description.strip())
+    if refused := _admins_only(request):
+        return refused
+    try:
+        _role_store().create_group(name, description)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
+    return RedirectResponse("/groups", status_code=303)
+
+
+@app.post("/groups/{group}/rename")
+async def groups_rename(group: str, request: Request, name: str = Form(""),
+                        description: str | None = Form(None)):
+    old = groups.from_url(group)
+    _log(request, "rename", "group", name.strip(), renamed_from=old if old != name.strip() else "",
+         description=description)
+    if refused := _admins_only(request):
+        return refused
+    try:
+        new = _role_store().rename_group(old, name, description)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
+    if new != old:
+        app.state.store.rename_group(old, new)
+        app.state.datasets.rename_group(old, new)
+        _cascade(lambda home, text: rename_group_ref(text, old, new), _current_author(request))
+    return RedirectResponse("/groups", status_code=303)
+
+
+@app.post("/groups/{group}/delete")
+async def groups_delete(group: str, request: Request):
+    name = groups.from_url(group)
+    _log(request, "delete", "group", name)
+    if refused := _admins_only(request):
+        return refused
+    try:
+        _role_store().delete_group(name)
+    except portal_mod.RoleError as exc:
+        return _error(exc)
+    _drop_group(name)
+    return RedirectResponse("/groups", status_code=303)
+
+
+def _cascade(change, author: str, group: str = "") -> None:
+    """`change(group, yaml)` applied to every dashboard that can read group
+    `group`'s datasets — in portal mode every group's; elsewhere (each path is
+    isolated) just that group's — saved as a new version where it changed
+    anything."""
+    if _groups_on():
+        rows = [(r, _dashboards_in(r.group)) for r in app.state.store.every()]
+    else:
+        store = _dashboards_in(group)
+        rows = [(r, store) for r in (store.list() if store is not None else [])]
+    for row, store in rows:
+        text = change(row.group or group, row.yaml)
+        if text != row.yaml:
+            store.save(row.id, text, author=author)
 
 
 # --- dataset builds --------------------------------------------------------------
@@ -1160,12 +1562,13 @@ _build_lock = threading.Lock()
 _building: set[str] = set()
 
 
-def _build_key(request: Request, name: str) -> str:
-    # Per path in paths mode: each path's datasets are their own.
-    return f"{_active_path(request) if _paths_mode() else ''}:{name}"
+def _build_key(group: str, name: str) -> str:
+    # Per group: each group's datasets are their own.
+    return f"{group}:{name}"
 
 
-def _build(key: str, datasets: DatasetStore, dashboards, name: str, author: str) -> None:
+def _build(group: str, datasets: DatasetStore, name: str, author: str) -> None:
+    key = _build_key(group, name)
     with _build_lock:
         _building.add(key)
         try:
@@ -1177,13 +1580,25 @@ def _build(key: str, datasets: DatasetStore, dashboards, name: str, author: str)
             _building.discard(key)
     built = datasets.get(name)
     _log_build(author, name, version=built.version if built else None, error=built.error if built else None)
-    # Renamed columns: rewrite the dashboards that use them, as a dataset
-    # rename rewrites its name.
-    if renames and dashboards is not None:
-        for row in dashboards.list():
-            text = rename_column_refs(row.yaml, name, renames)
-            if text != row.yaml:
-                dashboards.save(row.id, text, author=author)
+    # Renamed columns: rewrite the dashboards that use them — in any group —
+    # as a dataset rename rewrites its name.
+    if renames:
+        _cascade(lambda home, text: _rename_columns(text, home, group, name, renames), author, group)
+
+
+def _spellings(home: str, group: str, name: str) -> list[str]:
+    """How a dashboard in `home` may write group `group`'s dataset `name` —
+    where there are no groups, just as its name."""
+    if not _groups_on():
+        return [name]
+    qualified = groups.join(group, name, "")
+    return [name, qualified] if home == group else [qualified]
+
+
+def _rename_columns(text: str, home: str, group: str, name: str, renames: dict[str, str]) -> str:
+    for ref in _spellings(home, group, name):
+        text = rename_column_refs(text, ref, renames)
+    return text
 
 
 def _log_build(author: str, name: str, version=None, error=None) -> None:
@@ -1197,8 +1612,7 @@ def _log_build(author: str, name: str, version=None, error=None) -> None:
 
 def _build_later(background: BackgroundTasks, request: Request, name: str) -> None:
     background.add_task(
-        _build, _build_key(request, name), _dataset_store(request), _dash_store(request),
-        name, _current_author(request),
+        _build, _request_group(request), _dataset_store(request), name, _current_author(request),
     )
 
 
@@ -1206,8 +1620,17 @@ def _error(exc: Exception, status: int = 400) -> HTMLResponse:
     return HTMLResponse(f'<pre class="error">{escape(str(exc))}</pre>', status_code=status)
 
 
-@app.post("/datasets/new")
+def _json_refused(refused: HTMLResponse) -> JSONResponse:
+    return JSONResponse({"error": refused.body.decode()}, status_code=refused.status_code)
+
+
+def _ds_url(request: Request, name: str) -> str:
+    return groups.dataset_url(_request_group(request), name)
+
+
+@app.post("/datasets/{group}/new")
 async def datasets_new(
+    group: str,
     request: Request,
     background: BackgroundTasks,
     name: str = Form(""),
@@ -1218,6 +1641,8 @@ async def datasets_new(
     content = await file.read()
     _log(request, "upload", "dataset", name.strip(), file=file.filename, bytes=len(content),
          description=description, delimiter=delimiter)
+    if refused := _read_only(request):
+        return refused
     try:
         ds = _dataset_store(request).create(
             name,
@@ -1232,41 +1657,61 @@ async def datasets_new(
     except Exception as exc:  # object-store errors (S3/Garage unreachable, bad creds)
         return _error(f"Storage error: {exc}", 502)
     _build_later(background, request, ds.name)
-    return RedirectResponse(f"/datasets/{quote(ds.name)}", status_code=303)
+    return RedirectResponse(_ds_url(request, ds.name), status_code=303)
 
 
-@app.get("/datasets/{name}", response_class=HTMLResponse)
-def dataset_detail(name: str, request: Request):
+@app.get("/datasets/{group}/{ds}", response_class=HTMLResponse)
+def dataset_detail(group: str, ds: str, request: Request):
+    name = groups.from_url(ds)
+    group = groups.from_url(group)
     _log(request, "open", "dataset", name)
+    if group not in _group_names():
+        return _no_group()
     datasets = _dataset_store(request)
-    ds = datasets.get(name)
-    if ds is None:
+    found = datasets.get(name)
+    if found is None:
         return HTMLResponse("Dataset not found", status_code=404)
+    readers = _readers(group, name)
+    writer = _can_write(request, group)
+    grants = _grants_of(request)
+    if writer or grants is None:
+        examples = datasets.examples(name)
+    else:
+        # Someone else's: the values their role lets them see — none, unshared.
+        seen = grants.get((group, name))
+        examples = {} if seen is None else datasets.examples(name, rows=seen)
     return HTMLResponse(
         portal_mod.render_dataset_detail(
-            ds, _page_title(), _user_menu(request),
-            used_by=_dashboards_using(request, name),
+            found, _page_title(), _user_menu(request),
+            used_by=list(dict.fromkeys(_use_link(u, group) for u in readers if u.group == group)),
+            elsewhere=list(dict.fromkeys(_use_link(u, group) for u in readers if u.group != group)),
             mapping=datasets.mapping(name),
             versions=datasets.versions(name),
-            examples=datasets.examples(name),
-            used_in=_columns_used_in(request, name, [c.name for c in ds.columns]),
-            **_gallery_kwargs(request),
+            examples=examples,
+            used_in=_columns_used_in(group, name, [c.name for c in found.columns]),
+            group_label=_group_label(group),
+            authors=_authors(), group=group, readonly=not writer,
+            ref=groups.join(group, name, "") if _groups_on() else name,
         )
     )
 
 
-@app.post("/datasets/{name}/replace")
+@app.post("/datasets/{group}/{ds}/replace")
 async def dataset_replace(
-    name: str,
+    group: str,
+    ds: str,
     request: Request,
     background: BackgroundTasks,
     description: str = Form(""),
     delimiter: str = Form(","),
     file: UploadFile = File(...),
 ):
+    name = groups.from_url(ds)
     content = await file.read()
     _log(request, "replace", "dataset", name, file=file.filename, bytes=len(content),
          description=description, delimiter=delimiter)
+    if refused := _read_only(request):
+        return refused
     try:
         _dataset_store(request).replace(
             name, content,
@@ -1276,33 +1721,38 @@ async def dataset_replace(
     except DatasetError as exc:
         return _error(exc)
     _build_later(background, request, name)
-    return RedirectResponse(f"/datasets/{quote(name)}", status_code=303)
+    return RedirectResponse(_ds_url(request, name), status_code=303)
 
 
-@app.post("/datasets/{name}/mapping")
+@app.post("/datasets/{group}/{ds}/mapping")
 async def dataset_mapping(
-    name: str, request: Request, background: BackgroundTasks, mapping: str = Form("")
+    group: str, ds: str, request: Request, background: BackgroundTasks, mapping: str = Form("")
 ) -> JSONResponse:
     """A new column mapping (the YAML) — the next minor, built in the background."""
+    name = groups.from_url(ds)
     _log(request, "mapping", "dataset", name, mapping=mapping)
+    if refused := _read_only(request):
+        return _json_refused(refused)
     try:
-        _check_permissions(name, mapping)
-        ds = _dataset_store(request).remap(
+        _check_permissions(_request_group(request), name, mapping)
+        found = _dataset_store(request).remap(
             name, mapping, author=_current_author(request), build=False
         )
     except (DatasetError, column_map.MappingError, portal_mod.RoleError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     _build_later(background, request, name)
-    return JSONResponse({"building": ds.building})
+    return JSONResponse({"building": found.building})
 
 
-@app.post("/datasets/{name}/mapping/check")
-async def dataset_mapping_check(name: str, request: Request, mapping: str = Form("")) -> JSONResponse:
+@app.post("/datasets/{group}/{ds}/mapping/check")
+async def dataset_mapping_check(group: str, ds: str, request: Request, mapping: str = Form("")) -> JSONResponse:
     """Read a mapping's YAML without saving it — the page's form shows what the
     code editor says. 400 with the reason when it doesn't read or fit."""
+    if refused := _read_only(request):
+        return _json_refused(refused)
     datasets = _dataset_store(request)
     try:
-        sources = datasets.versions(name)[0].sources
+        sources = datasets.versions(groups.from_url(ds))[0].sources
         rules = column_map.parse(mapping, sources)
     except (DatasetError, column_map.MappingError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1311,21 +1761,24 @@ async def dataset_mapping_check(name: str, request: Request, mapping: str = Form
     ]})
 
 
-@app.get("/datasets/{name}/status")
-def dataset_status(name: str, request: Request, background: BackgroundTasks) -> JSONResponse:
+@app.get("/datasets/{group}/{ds}/status")
+def dataset_status(group: str, ds: str, request: Request, background: BackgroundTasks) -> JSONResponse:
     """What the page polls while a version builds."""
-    datasets = _dataset_store(request)
-    ds = datasets.get(name)
-    if ds is None:
+    name = groups.from_url(ds)
+    found = _dataset_store(request).get(name) if _known_group(request) else None
+    if found is None:
         return JSONResponse({"error": "unknown dataset"}, status_code=404)
-    if ds.building and _build_key(request, name) not in _building:
+    if found.building and _build_key(_request_group(request), name) not in _building:
         _build_later(background, request, name)
-    return JSONResponse({"version": ds.version, "building": ds.building, "error": ds.error})
+    return JSONResponse({"version": found.version, "building": found.building, "error": found.error})
 
 
-@app.get("/datasets/{name}/versions")
-def dataset_versions(name: str, request: Request) -> JSONResponse:
+@app.get("/datasets/{group}/{ds}/versions")
+def dataset_versions(group: str, ds: str, request: Request) -> JSONResponse:
+    name = groups.from_url(ds)
     _log(request, "versions", "dataset", name)
+    if refused := _read_only(request):
+        return _json_refused(refused)
     try:
         versions = _dataset_store(request).versions(name)
     except DatasetError as exc:
@@ -1337,9 +1790,12 @@ def dataset_versions(name: str, request: Request) -> JSONResponse:
     ]})
 
 
-@app.get("/datasets/{name}/versions/{label}")
-def dataset_version(name: str, label: str, request: Request) -> JSONResponse:
+@app.get("/datasets/{group}/{ds}/versions/{label}")
+def dataset_version(group: str, ds: str, label: str, request: Request) -> JSONResponse:
+    name = groups.from_url(ds)
     _log(request, "version", "dataset", name, version=label)
+    if refused := _read_only(request):
+        return _json_refused(refused)
     try:
         v = _dataset_store(request).version(name, label)
     except DatasetError:
@@ -1350,66 +1806,86 @@ def dataset_version(name: str, label: str, request: Request) -> JSONResponse:
                          "status": v.status, "rows": v.rows, "mapping": v.mapping})
 
 
-@app.get("/datasets/{name}/versions/{label}/restore")
-def dataset_version_restore(name: str, label: str, request: Request) -> JSONResponse:
+@app.get("/datasets/{group}/{ds}/versions/{label}/restore")
+def dataset_version_restore(group: str, ds: str, label: str, request: Request) -> JSONResponse:
     """A version's mapping fitted to the latest upload — for the compare view's
     restore, which loads it as an unsaved edit (saving builds it anew)."""
+    name = groups.from_url(ds)
     _log(request, "restore", "dataset", name, version=label)
+    if refused := _read_only(request):
+        return _json_refused(refused)
     try:
         return JSONResponse({"mapping": _dataset_store(request).restored(name, label)})
     except DatasetError as exc:
         return JSONResponse({"error": str(exc)}, status_code=404)
 
 
-@app.post("/datasets/{name}/versions/{major}/delete")
-def dataset_delete_major(name: str, major: int, request: Request):
+@app.post("/datasets/{group}/{ds}/versions/{major}/delete")
+def dataset_delete_major(group: str, ds: str, major: int, request: Request):
+    name = groups.from_url(ds)
     _log(request, "delete_version", "dataset", name, version=major)
+    if refused := _read_only(request):
+        return refused
     try:
         _dataset_store(request).delete_major(name, major)
     except DatasetError as exc:
         return _error(exc)
-    return RedirectResponse(f"/datasets/{quote(name)}", status_code=303)
+    return RedirectResponse(_ds_url(request, name), status_code=303)
 
 
-@app.post("/datasets/{old_name}/rename")
+@app.post("/datasets/{group}/{ds}/rename")
 async def dataset_rename(
-    old_name: str, request: Request, name: str = Form(""), description: str = Form(""),
+    group: str, ds: str, request: Request, name: str = Form(""), description: str = Form(""),
     next: str = Form(""),
 ):
     """Rename and/or re-describe a dataset. From the dataset's own page
     (`next=detail`, its title card) back to that page, at the new name;
-    otherwise to the list."""
+    otherwise to the list. A new name reaches every dashboard reading it, in
+    every group."""
+    old_name = groups.from_url(ds)
     new = name.strip()
     _log(request, "rename", "dataset", new, renamed_from=old_name if new != old_name else "",
          description=description)
+    if refused := _read_only(request):
+        return refused
     try:
         _dataset_store(request).rename(old_name, new, description=description)
     except DatasetError as exc:
         return HTMLResponse(f'<pre class="error">{escape(str(exc))}</pre>', status_code=400)
-    # Cascade: rewrite every dashboard that referenced the old name.
-    store = _dash_store(request)
-    if store is not None and new != old_name:
-        for row in store.list():
-            if old_name in Dashboard.dataset_names(row.yaml):
-                store.save(
-                    row.id, rename_dataset_ref(row.yaml, old_name, new),
-                    author=_current_author(request),
-                )
-    back = f"/datasets/{quote(new)}" if next == "detail" else "/datasets"
+    home = _request_group(request)
+    if new != old_name:
+        _cascade(lambda where, text: _rename_dataset(text, where, home, old_name, new),
+                 _current_author(request), home)
+    back = _ds_url(request, new) if next == "detail" else f"/datasets/{groups.url_name(home)}"
     return RedirectResponse(back, status_code=303)
 
 
-@app.post("/datasets/{name}/access/form", response_class=HTMLResponse)
-async def dataset_access(name: str, request: Request, mapping: str = Form("")):
+def _rename_dataset(text: str, where: str, group: str, old: str, new: str) -> str:
+    """A dashboard in `where`, with group `group`'s dataset `old` renamed `new`."""
+    for before, after in zip(_spellings(where, group, old), _spellings(where, group, new)):
+        text = rename_dataset_ref(text, before, after)
+    return text
+
+
+def _filter_context(request: Request, name: str):
+    """The columns of the dataset a page's filter rows are about."""
+    return config_edit.dataset_context(name, _dataset_store(request).source)
+
+
+@app.post("/datasets/{group}/{ds}/access/form", response_class=HTMLResponse)
+async def dataset_access(group: str, ds: str, request: Request, mapping: str = Form("")):
     """The dataset page's permissions mode: the roles the posted mapping's
     `permissions:` name, as a form, with a + for the rest — built from the YAML
     being edited, so it shows exactly what Save would keep."""
+    name = groups.from_url(ds)
+    if refused := _read_only(request):
+        return refused
     store = _dataset_store(request)
     try:
         access = column_map.permissions(mapping)
     except column_map.MappingError as exc:
         return _error(exc)
-    context = config_edit.dataset_context(name, store.source)
+    context = _filter_context(request, name)
     draft = portal_mod.access_draft(builder_fields(context.columns, types=context.column_types))
     counts = {}
     for role, filters in access.items():
@@ -1423,40 +1899,47 @@ async def dataset_access(name: str, request: Request, mapping: str = Form("")):
     )
 
 
-@app.post("/datasets/{name}/access/rows")
-async def dataset_access_rows(name: str, request: Request) -> JSONResponse:
+@app.post("/datasets/{group}/{ds}/access/rows")
+async def dataset_access_rows(group: str, ds: str, request: Request) -> JSONResponse:
     """How many rows a role with the posted filters would see — the Rows
     column, recounted as its filters change."""
+    if refused := _read_only(request):
+        return _json_refused(refused)
     try:
-        count = _dataset_store(request).rows_seen(name, parse_filters(await request.form()))
+        count = _dataset_store(request).rows_seen(groups.from_url(ds), parse_filters(await request.form()))
     except (filters_mod.FilterError, DatasetError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"rows": count})
 
 
-@app.post("/datasets/{name}/access/yaml")
-async def dataset_access_yaml(name: str, request: Request) -> JSONResponse:
+@app.post("/datasets/{group}/{ds}/access/yaml")
+async def dataset_access_yaml(group: str, ds: str, request: Request) -> JSONResponse:
     """The permissions form, written into the posted mapping's `permissions:` —
     the YAML Save then keeps as the next version. Only roles that exist, and
     never two that one user holds."""
+    name = groups.from_url(ds)
     form = await request.form()
     _log(request, "permissions", "dataset", name, **_form_detail(form))
+    if refused := _read_only(request):
+        return _json_refused(refused)
     known = {r.name for r in _assignable(_role_store().roles())}
     try:
         grants = portal_mod.parse_access_form(form)
         mapping = column_map.with_permissions(
             form.get("mapping", ""), {r: fs for r, fs in grants.items() if r in known},
         )
-        _check_permissions(name, mapping)
+        _check_permissions(_request_group(request), name, mapping)
     except (filters_mod.FilterError, column_map.MappingError, portal_mod.RoleError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"mapping": mapping})
 
 
-@app.post("/datasets/{name}/access/filter", response_class=HTMLResponse)
-async def dataset_access_filter(name: str, request: Request):
+@app.post("/datasets/{group}/{ds}/access/filter", response_class=HTMLResponse)
+async def dataset_access_filter(group: str, ds: str, request: Request):
     """The filter built in a role's draft row, as the compact row its list
     shows — or why it isn't a filter yet."""
+    if refused := _read_only(request):
+        return refused
     rows = parse_filters(await request.form())
     try:
         filters_mod.normalize(rows[:1])
@@ -1464,20 +1947,26 @@ async def dataset_access_filter(name: str, request: Request):
         return _error(exc)
     if not rows:
         return _error(ValueError("pick a column and its values"))
-    context = config_edit.dataset_context(name, _dataset_store(request).source)
+    context = _filter_context(request, groups.from_url(ds))
     return portal_mod.access_filter_row(rows[0], context.column_types)
 
 
-@app.post("/datasets/{name}/delete")
-async def dataset_delete(name: str, request: Request):
+@app.post("/datasets/{group}/{ds}/delete")
+async def dataset_delete(group: str, ds: str, request: Request):
+    """Guarded while a dashboard of its own group reads it. Other groups'
+    dashboards don't hold it: their charts on it lock (the page warned)."""
+    name = groups.from_url(ds)
     _log(request, "delete", "dataset", name)
-    used = _dashboards_using(request, name)
+    if refused := _read_only(request):
+        return refused
+    home = _request_group(request)
+    used = list(dict.fromkeys(u.dashboard_name for u in _readers(home, name) if u.group == home))
     if used:  # guard: don't orphan dashboards
-        names = ", ".join(n for _, n in used)
+        names = ", ".join(used)
         msg = f"Cannot remove {name!r}: still used by {len(used)} dashboard(s): {names}"
         return HTMLResponse(f'<pre class="error">{escape(msg)}</pre>', status_code=409)
     _dataset_store(request).delete(name)
-    return RedirectResponse("/datasets", status_code=303)
+    return RedirectResponse(f"/datasets/{groups.url_name(home)}", status_code=303)
 
 
 # What the editor does without a request of its own — put the last save back,
@@ -1492,7 +1981,9 @@ async def client_activity(request: Request) -> Response:
     if action not in _CLIENT_ACTIONS:
         return Response(status_code=400)
     detail = {k: v for k, v in _form_detail(form).items() if k not in ("action", "dashboard")}
-    _log(request, action, "dashboard", form.get("dashboard", ""), **detail)
+    # A beacon carries no headers: the dashboard, `<group>/<name>`, is a field.
+    group, _, name = form.get("dashboard", "").partition("/")
+    _log(request, action, "dashboard", name, group=group, **detail)
     return Response(status_code=204)
 
 
@@ -1502,12 +1993,15 @@ async def execute(request: Request, active_tab: int = 0, f: str = "", role: str 
     """`f` is the page URL's filter state (see `filters.encode_state`): the
     editor passes it on every render, so a reload, a shared link, or a YAML edit
     all keep the filters in play."""
-    body = (await request.body()).decode("utf-8")
+    posted = (await request.body()).decode("utf-8")
+    body = _yaml_for(request, posted)
     # Every render: opening, ↻, an edit applied, a role picked, a tab clicked.
     seen = dict(tab=active_tab or None, filters=filters_mod.decode_state(f), role=role, user=user)
     _log(request, "refresh", "dashboard", _dash_of(request, body), **seen)
     try:
-        dashboard = _as_role(request, Dashboard.from_yaml(body, datasets=_dataset_store(request)), role, user)
+        dashboard, role, user = _dashboard_for(request, body, role, user)
+        if body is not posted:
+            dashboard.yaml_source = ""          # a view-only page never holds the YAML
         # The response is a skeleton — each cell fetches itself via htmx so
         # charts render in parallel and slow charts don't block fast ones.
         # editing=True adds the editor-only row resize handles. `active_tab`
@@ -1535,12 +2029,59 @@ async def execute(request: Request, active_tab: int = 0, f: str = "", role: str 
         }
 
 
+def _yaml_for(request: Request, posted: str) -> str:
+    """The YAML a render is of: what the editor posted — or, from a view-only
+    page (which holds none), the stored dashboard its `X-FF-Dashboard` header
+    names."""
+    sent = request.headers.get(_DASHBOARD_HEADER)
+    if posted.strip() or not sent:
+        return posted
+    group, _, name = unquote(sent).partition("/")
+    store = _dashboards_in(group) if group in _group_names() else None
+    row = store.get(name) if store is not None else None
+    return row.yaml if row is not None else posted
+
+
+def _dashboard_for(request: Request, yaml_text: str, role: str = "", user: str = ""):
+    """`yaml_text` parsed for a render, and the role and user it's viewed as.
+    In portal mode it reads through its viewer's grants — or, for an admin
+    viewing as one, a role's or a user's (`_may_view_as`; anyone else's `role`
+    and `user` are dropped). Locally, view-as is the only narrowing."""
+    if not _may_view_as(request):
+        role = user = ""
+    if not _groups_on():
+        dashboard = Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request))
+        return _as_role(request, dashboard, role, user), role, user
+    if user:
+        grants, name = _user_grants(user), user
+    elif role:
+        grants, name = (None if role == portal_mod.ADMIN else _role_grants([role])), role
+    else:
+        grants, name = _grants_of(request), auth_mod.current_user(request) or ""
+    reader = _reader(request, grants)
+    dashboard = Dashboard.from_yaml(yaml_text, datasets=reader)
+    if grants is not None:
+        dashboard.as_role(name, reader.grants_here())
+    return dashboard, role, user
+
+
+def _user_grants(user: str) -> Grants:
+    """What `user` reads: all of their own group, and their roles' grants."""
+    held = _role_store().user(user)
+    if held is None:
+        return {}
+    if held.builtin or portal_mod.ADMIN in held.roles:
+        return None
+    return _role_grants(held.roles, groups.personal(user))
+
+
 def _as_role(request: Request, dashboard: Dashboard, role: str, user: str = "") -> Dashboard:
-    """`dashboard` as `role` (a name) sees it — the editor's view-as picker —
-    from the `permissions:` of this path's datasets. A role no dataset names
-    sees no managed dataset at all. Or as `user` sees it: each dataset through
-    the one role of theirs that may read it (`role_clashes` keeps it one); a
-    user with no such role — or one since removed — sees none of it."""
+    """Locally (no groups): `dashboard` as `role` (a name) sees it — the
+    editor's view-as picker — from the `permissions:` of this path's datasets.
+    A role no dataset names sees no managed dataset at all. Or as `user` sees
+    it: each dataset through the one role of theirs that may read it
+    (`role_clashes` keeps it one); a user with no such role — or one since
+    removed — sees none of it."""
     datasets = _dataset_store(request)
     if user:
         held = _role_store().user(user) if _users_on() else None
@@ -1557,7 +2098,7 @@ def _grants(datasets: DatasetStore, role: str) -> dict[str, list]:
     """Dataset -> `role`'s filters on it — every dataset, in full, for the
     built-in admin role."""
     if _users_on() and role == portal_mod.ADMIN:
-        return {ds.name: [] for ds in datasets.list()}
+        return {name: [] for name in datasets.names()}
     return datasets.grants(role)
 
 
@@ -1606,7 +2147,7 @@ def _dataset_schemas(request: Request) -> list[dict]:
                 "name": d.name,
                 "columns": [{"name": c.name, "dtype": c.dtype} for c in d.columns],
             }
-            for d in _dataset_store(request).list()
+            for d in _reader(request).list()
         ]
     except Exception:
         return []
@@ -1633,7 +2174,7 @@ def chart_map(
         zoom=zoom,
         filters=parsed,
     )
-    chart._resolve = _dataset_store(request).source  # dataset name -> Parquet source
+    chart._resolve = _reader(request).source  # dataset name -> Parquet source
     return chart.to_html()
 
 
@@ -1666,7 +2207,7 @@ def chart_table(
         pagination=pagination,
         filters=parsed,
     )
-    chart._resolve = _dataset_store(request).source  # dataset name -> Parquet source
+    chart._resolve = _reader(request).source  # dataset name -> Parquet source
     return chart.to_html(page=page, query=q)
 
 
@@ -1731,12 +2272,15 @@ async def dashboard_render(
     handles and per-chart edit buttons after a crossfilter click.
     """
     added = parse_filters(await request.form())
+    posted, yaml_text = yaml_text, _yaml_for(request, yaml_text)
     _log_dashboard(request, yaml_text, list(cf), toggle, remove, replace, added, set_grain, active_tab,
                    role=role, user=user)
     try:
-        dashboard = Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request))
+        dashboard, role, user = _dashboard_for(request, yaml_text, role, user)
     except DashboardError as exc:
         return f'<pre class="error">{escape(str(exc))}</pre>'
+    if yaml_text is not posted:
+        dashboard.yaml_source = ""
     new_tokens = filters_mod.toggle_token(list(cf), toggle) if toggle else list(cf)
     # A filter panel row's ✕: every token behind that row.
     new_tokens = [t for t in new_tokens if t not in remove]
@@ -1815,6 +2359,7 @@ async def dashboard_cell(
     rather than the whole dashboard. The page-level grain state rides back as an
     out-of-band swap, since a cell response doesn't otherwise touch it."""
     grains = set_grain_token(list(grain), set_grain) if set_grain else list(grain)
+    yaml_text = _yaml_for(request, yaml_text)
     # A render fans out into a cell request per chart — logged as its one
     # `refresh`. A cell's own row is a viewer paging, searching or re-graining it.
     if set_grain or legend_page or table_page > 1 or table_q:
@@ -1822,7 +2367,7 @@ async def dashboard_cell(
              _dash_of(request, yaml_text), chart=cid, q=table_q, page=table_page if table_page > 1 else None,
              legend_page=legend_page, grain=set_grain, filters=list(cf), role=role, user=user)
     try:
-        dashboard = _as_role(request, Dashboard.from_yaml(yaml_text, datasets=_dataset_store(request)), role, user)
+        dashboard, role, user = _dashboard_for(request, yaml_text, role, user)
         html = dashboard.render_cell(
             cid,
             cf_tokens=list(cf),
@@ -1850,12 +2395,12 @@ async def filter_fields(request: Request) -> str:
     rows = parse_filters(form) or [{}]
     row = rows[0]
     return config_edit.filter_fields_for(
-        form.get("yaml_text", ""),
+        _yaml_for(request, form.get("yaml_text", "")),
         form.get("filter_dataset", ""),
         column=(form.get("filter_column") or "").strip(),
         op=form.get("filter_op") or "in",
         values=row.get("values", []),
-        resolve=_dataset_store(request).source,
+        resolve=_reader(request).source,
         live=bool(form.get("live")),
     )
 
@@ -1869,7 +2414,7 @@ async def yaml_assist_route(request: Request, req: AssistRequest) -> dict:
     """The YAML editor's question, asked after each pause in typing: what's
     wrong with this dashboard, and where (`problems`); and what can complete
     here (`schema`). One request for both, since both need the current text."""
-    store = _dataset_store(request)
+    store = _reader(request)
     return {
         "problems": yaml_assist.lint(req.yaml, datasets=store),
         "schema": yaml_assist.schema(req.yaml, store),
@@ -1889,8 +2434,8 @@ async def filter_edit(request: Request) -> str:
         _, f = found[0]
         column, op, values = f.column, f.op, list(f.values)
     fields = config_edit.filter_fields_for(
-        form.get("yaml_text", ""), dataset, column=column, op=op, values=values,
-        resolve=_dataset_store(request).source, live=True,
+        _yaml_for(request, form.get("yaml_text", "")), dataset, column=column, op=op, values=values,
+        resolve=_reader(request).source, live=True,
     )
     return filter_add_body(
         form.get("cid", ""), dataset, fields, replace=token if found else ""
@@ -1905,12 +2450,12 @@ async def filter_values(request: Request) -> str:
     (editor JS) alike."""
     form = await request.form()
     return config_edit.filter_values_for(
-        form.get("yaml_text", ""),
+        _yaml_for(request, form.get("yaml_text", "")),
         form.get("filter_dataset", ""),
         (form.get("filter_column") or "").strip(),
         query=(form.get("filter_q") or "").strip(),
         selected=form.getlist("filter_value"),
-        resolve=_dataset_store(request).source,
+        resolve=_reader(request).source,
     )
 
 
@@ -1961,8 +2506,9 @@ async def chart_config_form(
     try:
         return config_edit.build_form(
             yaml_text, cid, type_override=type_override,
-            resolve=_dataset_store(request).source,
+            resolve=_reader(request).source,
             datasets=_dataset_descriptions(request), dataset_override=dataset.strip(),
+            group=_request_group(request) if _groups_on() else "",
         )
     except (config_edit.ConfigEditError, DashboardError) as exc:
         return f'<div class="ff-modal-error" role="alert">{escape(str(exc))}</div>'
@@ -1984,8 +2530,8 @@ async def chart_config_add_form(
     try:
         return config_edit.build_add_form(
             yaml_text, add_type, add_mode, add_index,
-            dataset=dataset.strip(), title=title, resolve=_dataset_store(request).source,
-            datasets=_dataset_descriptions(request),
+            dataset=dataset.strip(), title=title, resolve=_reader(request).source,
+            datasets=_dataset_descriptions(request), group=_request_group(request) if _groups_on() else "",
         )
     except (config_edit.ConfigEditError, DashboardError) as exc:
         return f'<div class="ff-modal-error" role="alert">{escape(str(exc))}</div>'
@@ -2191,7 +2737,7 @@ async def calcs_form(
     key: str = Form(""),
 ) -> str:
     """The add/edit calc form (prefilled when `key` names an existing one)."""
-    source = _dataset_store(request).source
+    source = _reader(request).source
     columns = config_edit._columns(dataset, source)
     return calcs_edit.render_form(
         yaml_text, dataset, key, columns=columns,
@@ -2225,3 +2771,33 @@ async def calcs_delete(request: Request) -> dict:
     return _edited(request, "calc_delete", yaml_text, lambda: calcs_edit.delete_calc(
         yaml_text, form.get("dataset", ""), form.get("key", ""),
     ), **_form_detail(form))
+
+
+# --- moving into groups ---------------------------------------------------------------
+# Portal mode, at start-up: what's from before groups goes into the admin's —
+# the dashboards' and datasets' rows did as their stores opened; the datasets'
+# files move here — and a dataset whose name the rule refuses gets the nearest
+# one it allows, every dashboard reading it following.
+
+
+def _move_into_groups() -> None:
+    app.state.datasets.move_into_group(groups.ADMIN_GROUP)
+    store = app.state.datasets.group(groups.ADMIN_GROUP)
+    taken = set(store.names())
+    for name in sorted(taken):
+        try:
+            groups.check_name(name, "dataset")
+            continue
+        except groups.GroupError:
+            pass
+        new, n = fit_name(name), 2
+        while new in taken:
+            new, n = f"{fit_name(name)}-{n}", n + 1
+        store.rename(name, new)
+        taken = (taken - {name}) | {new}
+        _cascade(lambda where, text: _rename_dataset(text, where, groups.ADMIN_GROUP, name, new),
+                 auth_mod.admin_name())                  # no one asked: the admin login did
+
+
+if PORTAL_ENABLED:
+    _move_into_groups()

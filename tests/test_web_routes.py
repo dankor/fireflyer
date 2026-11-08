@@ -537,14 +537,14 @@ def test_renaming_from_the_dataset_page_returns_to_it(client, tmp_path, monkeypa
 
     store = DatasetStore(make_object_store({"base": str(tmp_path)}))
     store.create("sales", b"a,b\n1,2\n")
-    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: store)
-    r = client.post("/datasets/sales/rename", data={"name": "revenue", "description": "Hi", "next": "detail"},
+    monkeypatch.setattr(app_mod, "_datasets_in", lambda group: store)
+    r = client.post("/datasets/local/sales/rename", data={"name": "revenue", "description": "Hi", "next": "detail"},
                     follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/datasets/revenue"
+    assert r.status_code == 303 and r.headers["location"] == "/datasets/local/revenue"
     assert store.get("revenue").description == "Hi"
-    r = client.post("/datasets/revenue/rename", data={"name": "revenue", "description": "Yo"},
+    r = client.post("/datasets/local/revenue/rename", data={"name": "revenue", "description": "Yo"},
                     follow_redirects=False)
-    assert r.headers["location"] == "/datasets"
+    assert r.headers["location"] == "/datasets/local"
 
 
 def test_a_number_column_offers_a_range_over_its_values(client):
@@ -591,15 +591,17 @@ def test_the_versions_routes_list_and_fetch(client):
     id = store.save(id, "name: B\ncharts: {}\nlayout: []\n", author="sam")
     app_mod.app.state.store, saved = store, app_mod.app.state.store
     try:
-        listed = client.get(f"/d/{id}/versions").json()["versions"]
+        listed = client.get(f"/d/_admin/{id}/versions").json()["versions"]
         assert [(v["version"], v["author"]) for v in listed] == [(2, "sam"), (1, "dana")]
         assert isinstance(listed[0]["created_at"], int)
-        one = client.get(f"/d/{id}/versions/1").json()
+        one = client.get(f"/d/_admin/{id}/versions/1").json()
         assert one["yaml"].startswith("name: A") and one["author"] == "dana"
-        assert client.get(f"/d/{id}/versions/9").status_code == 404
-        assert client.get("/d/nope/versions").status_code == 404
-        # The editor page names its dashboard, for the history and its draft.
-        assert f'<body data-dash-id="{id}">' in client.get(f"/d/{id}").text
+        assert client.get(f"/d/_admin/{id}/versions/9").status_code == 404
+        assert client.get("/d/_admin/nope/versions").status_code == 404
+        # The editor page names its dashboard — group and name — for the history
+        # and its draft, and gives its address.
+        assert (f'<body data-dash-id="_admin/{id}" data-dash-url="/d/_admin/{id}" data-view-only="">'
+                in client.get(f"/d/_admin/{id}").text)
     finally:
         app_mod.app.state.store = saved
 
@@ -613,8 +615,9 @@ def test_saving_records_who_saved(client, monkeypatch):
     monkeypatch.setattr(app_mod, "_current_author", lambda request: "sam")
     app_mod.app.state.store, saved = store, app_mod.app.state.store
     try:
-        saved_as = client.post(f"/d/{id}/save", data={"yaml_text": "name: B\ncharts: {}\nlayout: []\n"}).json()
-        assert saved_as == {"ok": True, "id": "B"}     # renamed: the name is the id
+        saved_as = client.post(f"/d/_admin/{id}/save", data={"yaml_text": "name: B\ncharts: {}\nlayout: []\n"}).json()
+        # Renamed: the name is the id, and the address follows it.
+        assert saved_as == {"ok": True, "id": "_admin/B", "url": "/d/_admin/B"}
         assert store.versions("B")[0].author == "sam"
     finally:
         app_mod.app.state.store = saved
@@ -643,55 +646,55 @@ def versioned(client, tmp_path, monkeypatch):
 
     datasets = DatasetStore(make_object_store({"base": str(tmp_path)}))
     datasets.create("sales", b"id,status,amount\n1,paid,10\n2,open,5\n")
-    dashboards = SqlStore(":memory:")
+    dashboards = SqlStore(":memory:").group("local")
     dash_id = dashboards.create(
         "name: S\ncharts:\n  p: {type: pie, dataset: sales, title: status, column: status}\n"
         'layout:\n  - ["@30", "p"]\n', "dana",
     )
-    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: datasets)
-    monkeypatch.setattr(app_mod, "_dash_store", lambda request: dashboards)
+    monkeypatch.setattr(app_mod, "_datasets_in", lambda group: datasets)
+    monkeypatch.setattr(app_mod, "_dashboards_in", lambda group: dashboards)
     return datasets, dashboards, dash_id
 
 
 def test_a_new_mapping_builds_and_renames_through_dashboards(client, versioned):
     datasets, dashboards, dash_id = versioned
     mapping = "columns:\n  id: to_number(id)\n  state: status\n  amount: to_number(amount)\n"
-    r = client.post("/datasets/sales/mapping", data={"mapping": mapping})
+    r = client.post("/datasets/local/sales/mapping", data={"mapping": mapping})
     assert r.json() == {"building": "1.1"}
     # The background build ran (TestClient runs it before returning).
-    assert client.get("/datasets/sales/status").json() == {"version": "1.1", "building": "", "error": ""}
+    assert client.get("/datasets/local/sales/status").json() == {"version": "1.1", "building": "", "error": ""}
     assert "column: state" in dashboards.get(dash_id).yaml
     assert "title: status" in dashboards.get(dash_id).yaml          # a title, not a column
 
 
 def test_a_mapping_that_does_not_fit_is_refused_at_once(client, versioned):
-    r = client.post("/datasets/sales/mapping", data={"mapping": "columns:\n  x: nope\n"})
+    r = client.post("/datasets/local/sales/mapping", data={"mapping": "columns:\n  x: nope\n"})
     assert r.status_code == 400 and "no column 'nope'" in r.json()["error"]
-    r = client.post("/datasets/sales/mapping/check", data={"mapping": "columns:\n  id: to_number(id)\n"})
+    r = client.post("/datasets/local/sales/mapping/check", data={"mapping": "columns:\n  id: to_number(id)\n"})
     assert r.json()["rules"] == [{"name": "id", "formula": "to_number(id)", "service": False}]
 
 
 def test_a_cast_that_fails_reports_and_keeps_the_version(client, versioned):
-    client.post("/datasets/sales/mapping", data={"mapping": "columns:\n  status: to_number(status)\n"})
-    status = client.get("/datasets/sales/status").json()
+    client.post("/datasets/local/sales/mapping", data={"mapping": "columns:\n  status: to_number(status)\n"})
+    status = client.get("/datasets/local/sales/status").json()
     assert status["version"] == "1.0" and "'status'" in status["error"]
 
 
 def test_versions_list_fetch_and_delete(client, versioned):
     datasets, _, _ = versioned
-    client.post("/datasets/sales/mapping", data={"mapping": "columns:\n  id: to_number(id)\n"})
-    client.post("/datasets/sales/replace", files={"file": ("x.csv", b"id,status,amount\n3,paid,1\n")})
-    listed = client.get("/datasets/sales/versions").json()["versions"]
+    client.post("/datasets/local/sales/mapping", data={"mapping": "columns:\n  id: to_number(id)\n"})
+    client.post("/datasets/local/sales/replace", files={"file": ("x.csv", b"id,status,amount\n3,paid,1\n")})
+    listed = client.get("/datasets/local/sales/versions").json()["versions"]
     assert [v["version"] for v in listed] == ["2.1", "1.1", "1.0"]
-    assert client.get("/datasets/sales/versions/1.1").json()["mapping"] == "columns:\n  id:\n    formula: to_number(id)\n"
-    assert client.get("/datasets/sales/versions/9.9").status_code == 404
-    assert client.post("/datasets/sales/versions/2/delete").status_code == 400     # in use
-    client.post("/datasets/sales/versions/1/delete")
+    assert client.get("/datasets/local/sales/versions/1.1").json()["mapping"] == "columns:\n  id:\n    formula: to_number(id)\n"
+    assert client.get("/datasets/local/sales/versions/9.9").status_code == 404
+    assert client.post("/datasets/local/sales/versions/2/delete").status_code == 400     # in use
+    client.post("/datasets/local/sales/versions/1/delete")
     assert [v.label for v in datasets.versions("sales")] == ["2.1"]
 
 
 def test_the_dataset_page_has_the_column_modes_and_history(client, versioned):
-    page = client.get("/datasets/sales").text
+    page = client.get("/datasets/local/sales").text
     assert re.findall(r'data-mode="(\w+)"', page[page.index('id="ds-modes"'):])[:4] == ["view", "edit", "code", "compare"]
     assert '<summary title="Versions">v1.0</summary>' in page
     assert '"fireflyer/yaml-look"' in page and "dataset-columns.js" in page
@@ -704,17 +707,17 @@ def test_the_dataset_page_has_the_column_modes_and_history(client, versioned):
 
 
 def test_a_version_can_be_fetched_for_restoring(client, versioned):
-    client.post("/datasets/sales/mapping", data={"mapping": "columns:\n  id: to_number(id)\n"})
-    r = client.get("/datasets/sales/versions/1.0/restore").json()
+    client.post("/datasets/local/sales/mapping", data={"mapping": "columns:\n  id: to_number(id)\n"})
+    r = client.get("/datasets/local/sales/versions/1.0/restore").json()
     assert r["mapping"] == (
         "columns:\n  id:\n    formula: id\n  status:\n    formula: status\n  amount:\n    formula: amount\n"
     )
-    assert client.get("/datasets/sales/versions/7.0/restore").status_code == 404
+    assert client.get("/datasets/local/sales/versions/7.0/restore").status_code == 404
 
 
 def test_the_dataset_page_says_which_dashboards_use_each_column(client, versioned):
     _, _, dash_id = versioned                      # a pie on `status`
-    page = client.get("/datasets/sales").text
+    page = client.get("/datasets/local/sales").text
     data = json.loads(re.search(r'<script type="application/json" id="ds-data">(.*?)</script>', page, re.S).group(1))
-    assert data["usedIn"] == {"status": [[dash_id, "S"]]}
-    assert "<th>Dashboards</th>" in page and f'href="/d/{dash_id}"' in page
+    assert data["usedIn"] == {"status": [[f"/d/local/{dash_id}", "S"]]}
+    assert "<th>Dashboards</th>" in page and f'href="/d/local/{dash_id}"' in page

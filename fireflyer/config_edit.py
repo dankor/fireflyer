@@ -329,7 +329,8 @@ def _type_select(current: str) -> str:
 
 
 def build_form(text: str, cid: str, type_override: str = "", resolve=None,
-               datasets: dict[str, str] | None = None, dataset_override: str = "") -> str:
+               datasets: dict[str, str] | None = None, dataset_override: str = "",
+               group: str = "") -> str:
     """Render the edit-modal form for chart `cid` against the current YAML.
 
     `type_override` (set when the user changes the type dropdown) builds the form
@@ -339,7 +340,8 @@ def build_form(text: str, cid: str, type_override: str = "", resolve=None,
     dataset, so its columns and calcs are offered. `resolve` (the app's dataset
     store) turns the chart's dataset name into its Parquet so the column
     dropdown can list its columns; `datasets` (name -> description, the
-    uploaded ones) is what the dataset field offers, with the inline ones."""
+    uploaded ones) is what the dataset field offers, with the inline ones;
+    `group`, the dashboard's (portal mode), what the field's group pick starts at."""
     config = _load(text)
     cfg = dict(_chart_config(config, cid))
     if dataset_override:
@@ -351,6 +353,7 @@ def build_form(text: str, cid: str, type_override: str = "", resolve=None,
 
     ctx = _context(config, cfg, resolve)
     ctx.datasets = _dataset_choices(config, datasets)
+    ctx.group = group
     # A key the YAML leaves out shows the chart's own default — a pie's total
     # is on — or saving the form would write the opposite of what's drawn.
     defaults = _defaults(cls)
@@ -602,7 +605,7 @@ def _defaults(cls) -> dict:
 
 def build_add_form(text: str, ctype: str, add_mode: str, add_index: str,
                    dataset: str = "", title: str = "", resolve=None,
-                   datasets: dict[str, str] | None = None) -> str:
+                   datasets: dict[str, str] | None = None, group: str = "") -> str:
     """Render the create-chart modal for a fresh chart of type `ctype`. Carries
     the placement (`add_mode`/`add_index`) as hidden inputs so the save knows
     where to drop the chart.
@@ -621,6 +624,7 @@ def build_add_form(text: str, ctype: str, add_mode: str, add_index: str,
     else:
         ctx = ParamContext(datasets={}, dataset_id=None, columns=[])
     ctx.datasets = _dataset_choices(config, datasets)
+    ctx.group = group
     values = _defaults(cls)
     values["dataset"] = dataset
     # A title that's only another type's default ("Table") follows the type.

@@ -34,6 +34,7 @@ status, amount and day.
   - [Set dataset permissions](#set-dataset-permissions)
 - [Access](#access)
   - [Add users and their roles](#add-users-and-their-roles)
+  - [Share across groups](#share-across-groups)
 - [End-to-end](#end-to-end)
   - [Prototype a dashboard with AI and sample data](#prototype-a-dashboard-with-ai-and-sample-data)
   - [Let the AI discover your dataset and build the dashboard](#let-the-ai-discover-your-dataset-and-build-the-dashboard)
@@ -213,6 +214,18 @@ a dataset another of theirs reads is struck out. The admin user (your login)
 and the `admin` role, which reads everything, are built in and locked.
 
 ![Adding a user and their roles, then viewing the dashboard as them](../media/users-roles.webp)
+
+### Share across groups
+
+Everyone works in a group of their own, and an admin can add shared ones; the
+group picker in the top right switches between them. Another group's dashboards
+and datasets are listed too, greyed where nothing is shared with you. When its
+owner grants a dataset to one of your roles, you see that data — only the rows
+the grant lets through — and can open their dashboard to look at it. Clone it
+into your own group to make it yours: the copy keeps reading their data, now
+named `_alice:orders`.
+
+![Opening another group's shared dashboard and cloning it into your own](../media/groups.webp)
 
 ## End-to-end
 
