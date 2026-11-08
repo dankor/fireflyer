@@ -58,8 +58,11 @@ class PathDashboardStore:
     versions under `history` (a folder; None keeps no history), and what they
     read in `index` (a JSON file; None works it out on every read)."""
 
-    def __init__(self, root: str, history: str | None = None, index: str | None = None):
+    def __init__(self, root: str, history: str | None = None, index: str | None = None,
+                 group: str = ""):
         self._dir = Path(root) / "dashboards"
+        # The path's name: a path is a group in the URL (`/d/<path>/<stem>`).
+        self.group_name = group or Path(root).name
         self._history = Path(history) if history else None
         self._index_file = Path(index) if index else None
 
@@ -76,7 +79,8 @@ class PathDashboardStore:
         except DashboardError:
             name = path.stem
         return DashboardRow(
-            id=path.stem, name=name, author="", yaml=text, updated_at=_mtime(path)
+            id=path.stem, name=name, author="", yaml=text, updated_at=_mtime(path),
+            group=self.group_name,
         )
 
     def list(self) -> list[DashboardRow]:
@@ -148,10 +152,15 @@ class PathDashboardStore:
         if changed or set(fresh) != set(kept):
             self._save_index(fresh)
         return [
-            Use(stem, entry["name"], dataset, column)
+            Use(stem, entry["name"], dataset, column, self.group_name, self.group_name)
             for stem, entry in sorted(fresh.items(), key=lambda e: e[1]["name"])
             for dataset, column in entry["uses"]
         ]
+
+    def readers(self) -> list[Use]:
+        """The dashboards reading this path's datasets: its own — paths are
+        isolated."""
+        return self.uses()
 
     def _load_index(self) -> dict:
         try:

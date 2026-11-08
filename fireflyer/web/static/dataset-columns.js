@@ -42,7 +42,17 @@ const saveBtn = document.getElementById('ds-save');
 const discardBtn = document.getElementById('ds-discard');
 const statusEl = document.getElementById('ds-status');
 const toastEl = document.getElementById('ds-toast');
-const base = `/datasets/${encodeURIComponent(data.name)}`;
+const base = data.url;
+// The filter rows' requests (/filter/fields, /filter/values) aren't under the
+// dataset's address: they say which group they're in, as the editor's say which
+// dashboard (`X-FF-Group`).
+const pageFetch = window.fetch;
+window.fetch = (url, options) => {
+  if (new URL(url, location.href).origin !== location.origin) return pageFetch(url, options);
+  const headers = new Headers((options && options.headers) || {});
+  headers.set('X-FF-Group', encodeURIComponent(data.group));
+  return pageFetch(url, Object.assign({}, options, {headers}));
+};
 const look = [yaml(), syntaxHighlighting(yamlStyle), scalarColours, editorTheme];
 
 let rules = data.rules.map(r => ({...r}));
@@ -272,7 +282,7 @@ function closeValue() {
 // The dashboards whose charts read the column, as links (the server works it
 // out from what each chart declares it reads).
 function usedIn(column) {
-  const links = (data.usedIn[column] || []).map(([id, name]) => el('a', {class: 'ref', href: `/d/${encodeURIComponent(id)}`, title: name}, name));
+  const links = (data.usedIn[column] || []).map(([href, name]) => el('a', {class: 'ref', href, title: name}, name));
   return links.length ? el('span', {class: 'refs'}, ...links) : el('span', {class: 'muted'}, '—');
 }
 
@@ -585,7 +595,7 @@ function syncAccess() {
 // script, filter-builder.js: here it only needs telling that a row's data is
 // this dataset's, with no dashboard behind it.
 if (window.ffFilterBuilder) {
-  window.ffFilterBuilder.context = () => ({yaml_text: '', filter_dataset: data.name});
+  window.ffFilterBuilder.context = () => ({yaml_text: '', filter_dataset: data.ref});
 }
 
 function wireAccess(form) {
@@ -670,7 +680,7 @@ function wireAccess(form) {
     row.classList.add('is-editing');
     const fd = new FormData();
     fd.append('yaml_text', '');
-    fd.append('filter_dataset', data.name);
+    fd.append('filter_dataset', data.ref);
     for (const el of row.querySelectorAll('input[name]')) fd.append(el.name, el.value);
     const res = await fetch('/filter/fields', {method: 'POST', body: fd});
     if (!res.ok) return;

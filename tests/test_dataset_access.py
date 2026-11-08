@@ -236,8 +236,7 @@ layout:
 
 @pytest.fixture
 def client(monkeypatch, datasets):
-    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: datasets)
-    monkeypatch.setattr(app_mod, "_every_dataset_store", lambda: [datasets])
+    monkeypatch.setattr(app_mod, "_datasets_in", lambda group: datasets)
     return TestClient(app_mod.app)
 
 
@@ -245,26 +244,26 @@ def test_the_permissions_form_reads_and_writes_the_posted_mapping(client, datase
     app_mod.app.state.roles.create_role("viewer")
     base = datasets.mapping("orders")
     form = {"mapping": base, "role": "viewer", "filter_column": "status", "filter_op": "in", "filter_value": "paid"}
-    written = client.post("/datasets/orders/access/yaml", data=form).json()["mapping"]
+    written = client.post("/datasets/local/orders/access/yaml", data=form).json()["mapping"]
     assert column_map.permissions(written) == {"viewer": PAID}
     assert written.startswith(base.rstrip("\n"))                 # the columns as they were
 
-    page = client.post("/datasets/orders/access/form", data={"mapping": written}).text
+    page = client.post("/datasets/local/orders/access/form", data={"mapping": written}).text
     assert 'class="ds-filter"' in page and '<input type="hidden" name="filter_value" value="paid">' in page
     assert "ds-draft-row" in page and "<th>Role</th>" in page
 
-    full = client.post("/datasets/orders/access/yaml", data={"mapping": written, "role": "viewer"}).json()
+    full = client.post("/datasets/local/orders/access/yaml", data={"mapping": written, "role": "viewer"}).json()
     assert column_map.permissions(full["mapping"]) == {"viewer": []}   # no filters: full
     # A role that doesn't exist isn't written.
-    ghost = client.post("/datasets/orders/access/yaml", data={"mapping": written, "role": "ghost"}).json()
+    ghost = client.post("/datasets/local/orders/access/yaml", data={"mapping": written, "role": "ghost"}).json()
     assert column_map.permissions(ghost["mapping"]) == {}
 
 
 def test_a_built_filter_comes_back_as_its_compact_row(client):
-    row = client.post("/datasets/orders/access/filter",
+    row = client.post("/datasets/local/orders/access/filter",
                       data={"filter_column": "status", "filter_op": "in", "filter_value": "paid"})
     assert row.status_code == 200 and '<tr class="ds-filter">' in row.text
-    assert client.post("/datasets/orders/access/filter", data={"filter_column": "status"}).status_code == 400
+    assert client.post("/datasets/local/orders/access/filter", data={"filter_column": "status"}).status_code == 400
 
 
 def test_renaming_or_removing_a_role_reaches_the_datasets(client, datasets):
@@ -290,7 +289,7 @@ def test_the_skeleton_carries_the_role_to_every_cell(client):
 
 
 def test_the_dataset_page_has_a_permissions_mode(client):
-    assert 'data-mode="access"' in client.get("/datasets/orders").text
+    assert 'data-mode="access"' in client.get("/datasets/local/orders").text
 
 
 # --- rows a role sees ----------------------------------------------------------------------
@@ -310,11 +309,11 @@ def test_rows_seen_counts_what_the_filters_let_through(datasets, orders_parquet)
 def test_the_rows_column_and_its_recount(client, datasets):
     app_mod.app.state.roles.create_role("viewer")
     grant(datasets, "orders", {"viewer": PAID})
-    page = client.post("/datasets/orders/access/form", data={"mapping": datasets.mapping("orders")}).text
+    page = client.post("/datasets/local/orders/access/form", data={"mapping": datasets.mapping("orders")}).text
     paid = datasets.rows_seen("orders", PAID)
     assert '<th class="ds-access-rows">Rows</th>' in page
     assert f'<td class="ds-access-rows" title="Rows this role sees">{paid}</td>' in page
-    recount = client.post("/datasets/orders/access/rows",
+    recount = client.post("/datasets/local/orders/access/rows",
                           data={"filter_column": "status", "filter_op": "in", "filter_value": "paid"})
     assert recount.json() == {"rows": paid}
 

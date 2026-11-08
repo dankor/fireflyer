@@ -131,7 +131,7 @@ def test_the_dataset_page_edits_its_name_and_description_from_its_title():
     assert "contenteditable" not in topbar
     assert re.search(r'<span class="thead" id="ds-title-head" role="button"', topbar)
     assert 'id="ds-title-sub">Q3 orders<' in topbar
-    assert 'data-action="/datasets/orders/rename"' in name
+    assert 'data-action="/datasets/local/orders/rename"' in name
     assert 'id="ds-title-about" role="dialog"' in topbar
     assert 'id="ds-title-name-input"' in topbar and "<textarea" in topbar
     assert 'title="Edit"' not in topbar and "openDsRename" not in page

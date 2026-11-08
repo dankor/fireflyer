@@ -21,10 +21,33 @@ from __future__ import annotations
 import polars as pl
 
 
+class NoAccess(Exception):
+    """The reader may not see this dataset — a resolver says so, and a
+    dashboard shows a lock in place of the chart."""
+
+
 def scan(dataset: str, resolve=None, calcs=None) -> pl.LazyFrame:
-    uri, storage_options = resolve(dataset) if resolve else (dataset, None)
+    """A resolver may hand back a third item: the rows the reader may see, as
+    filters (a role's, in portal mode). They're applied here, first, so every
+    read — a chart, a filter's value list, a column's type — sees only those
+    rows. One on a column the data lacks can't be applied, so nothing is read."""
+    resolved = resolve(dataset) if resolve else (dataset, None)
+    uri, storage_options = resolved[:2]
     lf = pl.scan_parquet(uri, storage_options=storage_options)
+    if len(resolved) > 2:
+        lf = narrow(lf, resolved[2])
     return calcs.attach(lf) if calcs is not None else lf
+
+
+def narrow(lf: pl.LazyFrame, rows: list[dict]) -> pl.LazyFrame:
+    from fireflyer import filters as filters_mod
+
+    wanted = filters_mod.normalize(rows)
+    names = lf.collect_schema().names()
+    if any(f.column not in names for f in wanted):
+        raise NoAccess("a permission names a column the data lacks")
+    preds = filters_mod.predicates(wanted, names)
+    return lf.filter(*preds) if preds else lf
 
 
 def scan_chart(chart) -> pl.LazyFrame:

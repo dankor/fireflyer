@@ -29,14 +29,15 @@
 function openAdd(){ document.getElementById('add-dialog').showModal(); }
 function openClone(btn){
   var d = document.getElementById('clone-dialog');
-  document.getElementById('clone-form').action = '/d/' + encodeURIComponent(btn.dataset.id) + '/clone';
+  document.getElementById('clone-form').action = btn.dataset.url + '/clone';
   var input = document.getElementById('clone-name');
   input.value = btn.dataset.name + ' (copy)';
   d.showModal(); input.select();
 }
 function openRename(btn){
   var d = document.getElementById('rename-dialog');
-  document.getElementById('rename-form').action = '/access/' + encodeURIComponent(btn.dataset.name) + '/rename';
+  document.getElementById('rename-form').action = btn.dataset.action
+    || '/access/' + encodeURIComponent(btn.dataset.name) + '/rename';
   var input = document.getElementById('rename-form-name');
   input.value = btn.dataset.name;
   var about = document.querySelector('#rename-form textarea[name=description]');
@@ -58,6 +59,8 @@ function openUser(btn){
   form.elements.email.value = btn ? btn.dataset.email : '';
   userPassword(form, btn ? 'hasPassword' in btn.dataset : false);
   userSource(form, btn ? btn.dataset.source || '' : '');
+  // A name never changes once made: their group, `_<name>`, carries it.
+  form.elements.name.readOnly = !!btn;
   form.querySelectorAll('input[name=role]').forEach(function (box) {
     box.checked = held.indexOf(box.dataset.name) >= 0;
   });
@@ -102,7 +105,6 @@ document.addEventListener('click', function (e) {
 // credentials, so the name is read-only and there's no password — only who
 // they sign in through. The roles are still managed here.
 function userSource(form, source){
-  form.elements.name.readOnly = !!source;
   form.querySelector('.ff-password').hidden = !!source;
   var external = form.querySelector('.ff-external');
   external.hidden = !source;
@@ -140,7 +142,8 @@ function openUpload(){ document.getElementById('upload-dialog').showModal(); }
 // parse time the title it wires doesn't exist yet.
 document.addEventListener('DOMContentLoaded', function dsTitle() {
   var title = document.getElementById('ds-title');
-  if (!title) return;
+  // A dataset of a group you only read: its title is just a title.
+  if (!title || title.dataset.readonly) return;
   var head = document.getElementById('ds-title-head');
   var name = document.getElementById('ds-title-name');
   var sub = document.getElementById('ds-title-sub');

@@ -28,11 +28,34 @@ def test_users_are_created_with_roles_listed_edited_and_deleted(store):
     assert [(u.name, u.roles) for u in store.users()] == [("alice", []), ("bob", ["viewer"])]
     assert store.user("bob").about == "Bob Smith · bob@x.com" and store.user("alice").about == ""
 
-    store.edit_user(bob, "robert", [admin, viewer, "no-such-role"], email="rob@x.com")
-    assert store.user("robert").roles == ["admin", "viewer"]
-    assert store.user("robert").about == "rob@x.com"                 # what's left out is cleared
-    store.delete_user("robert")
-    assert [u.name for u in store.users()] == ["alice"]
+    store.edit_user(bob, "bob", [admin, viewer, "no-such-role"], email="rob@x.com")
+    assert store.user("bob").roles == ["admin", "viewer"]
+    assert store.user("bob").about == "rob@x.com"                 # what's left out is cleared
+    with pytest.raises(RoleError, match="can't change"):          # their group carries the name
+        store.edit_user(bob, "robert")
+    assert {g.name for g in store.groups()} == {"_alice", "_bob"}  # each user's own
+    store.delete_user("bob")
+    assert [u.name for u in store.users()] == ["alice"] and [g.name for g in store.groups()] == ["_alice"]
+
+
+@pytest.mark.parametrize("bad", ["Bob", "bob.smith", "dana@corp", "_x", "1st", "bøb"])
+def test_a_user_name_is_lowercase_latin_letters_then_digits(store, bad):
+    with pytest.raises(RoleError, match="lowercase latin"):
+        store.create_user(bad)
+    assert store.create_user("bob2") == "bob2"
+
+
+def test_users_from_before_the_rule_stop_the_portal(tmp_path):
+    """Their group would carry the name: they're named, not renamed."""
+    import sqlite3
+
+    path = str(tmp_path / "roles.db")
+    RoleStore(path)                                           # the tables
+    db = sqlite3.connect(path)
+    db.execute("INSERT INTO users (name, created_at, updated_at) VALUES ('Bob Smith', 'c', 'u')")
+    db.commit()
+    with pytest.raises(SystemExit, match="Bob Smith"):
+        RoleStore(path, admin="root")
 
 
 def test_a_user_name_is_required_and_unique(store):
@@ -65,14 +88,14 @@ def test_two_roles_clash_only_where_both_may_read_a_dataset():
 
 def test_the_users_page_lists_users_escaped_with_their_roles(store):
     rid = store.create_role("viewer")
-    store.create_user("<bob>", roles=[rid], first_name="Bob", last_name="<Smith>")
+    store.create_user("bob", roles=[rid], first_name="Bob", last_name="<Smith>")
     html = render_users(store.users(), store.roles(), reads={"viewer": ["orders"]})
     # Full name (and email) under the name, as a role's description; the Edit
     # button carries each for the dialog.
     assert '<span class="sub" title="Bob &lt;Smith&gt;">Bob &lt;Smith&gt;</span>' in html
     assert 'data-first-name="Bob" data-last-name="&lt;Smith&gt;" data-email=""' in html
     assert '<a class="ff-switch-seg active" href="/users">Users</a>' in html
-    assert "&lt;bob&gt;" in html and "<bob>" not in html
+    assert "<Smith>" not in html
     assert 'href="/access" title="viewer">viewer</a>' in html
     # The dialog's box for the role carries what it reads, for the clash hints.
     assert (f'value="{rid}" data-label="viewer" data-name="viewer" data-reads="[&quot;orders&quot;]"'
@@ -124,15 +147,14 @@ def test_the_picker_switches_between_roles_and_users(store):
 
 @pytest.fixture
 def client(monkeypatch, datasets):  # noqa: F811
-    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: datasets)
-    monkeypatch.setattr(app_mod, "_every_dataset_store", lambda: [datasets])
+    monkeypatch.setattr(app_mod, "_datasets_in", lambda group: datasets)
     monkeypatch.setattr(app_mod, "_users_on", lambda: True)
     monkeypatch.setattr(app_mod, "_is_admin", lambda request: True)   # signed in as an admin
     return TestClient(app_mod.app)
 
 
 def test_the_users_routes_need_portal_mode(datasets, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: datasets)
+    monkeypatch.setattr(app_mod, "_datasets_in", lambda group: datasets)
     c = TestClient(app_mod.app)
     assert c.get("/users").status_code == 404
     assert c.post("/users/new", data={"name": "bob"}).status_code == 404
@@ -144,9 +166,10 @@ def test_users_are_added_edited_and_removed_through_the_routes(client):
     client.post("/users/new", data={"name": "bob", "role": [viewer], "last_name": "Smith", "email": "b@x.io"})
     bob = roles.user("bob")
     assert bob.roles == ["viewer"] and bob.about == "Smith · b@x.io" and "bob" in client.get("/users").text
-    client.post(f"/users/{bob.name}/edit", data={"name": "robert"})
-    assert roles.user("robert").roles == [] and roles.user("bob") is None
-    client.post("/users/robert/delete")
+    assert client.post(f"/users/{bob.name}/edit", data={"name": "robert"}).status_code == 400
+    client.post(f"/users/{bob.name}/edit", data={"name": "bob"})
+    assert roles.user("bob").roles == []
+    client.post("/users/bob/delete")
     assert roles.users() == []
 
 
@@ -165,11 +188,11 @@ def test_a_dataset_cant_give_one_users_two_roles_access(client, datasets):  # no
     roles.create_user("bob", roles=[viewer, admin])
     grant(datasets, "orders", {"viewer": PAID})
     form = {"mapping": datasets.mapping("orders"), "role": ["viewer", "admin"]}
-    refused = client.post("/datasets/orders/access/yaml", data=form)
+    refused = client.post("/datasets/local/orders/access/yaml", data=form)
     assert refused.status_code == 400 and "bob" in refused.json()["error"]
     # Nor through the YAML itself (code mode), on Save.
     both = column_map.with_permissions(datasets.mapping("orders"), {"viewer": PAID, "admin": []})
-    assert client.post("/datasets/orders/mapping", data={"mapping": both}).status_code == 400
+    assert client.post("/datasets/local/orders/mapping", data={"mapping": both}).status_code == 400
     assert datasets.permissions("orders") == {"viewer": PAID}
 
 
@@ -233,9 +256,9 @@ def test_the_admin_role_reads_every_dataset_and_no_permissions_name_it(client, d
     cell = lambda **who: client.post("/dashboard/cell", data={"yaml_text": _YAML, "cid": "rows", **who}).text
     assert len(_statuses(cell(role="admin"))) > 1 and len(_statuses(cell(user="root"))) > 1
     # The permissions form neither lists nor writes it.
-    form = client.post("/datasets/orders/access/form", data={"mapping": datasets.mapping("orders")}).text
+    form = client.post("/datasets/local/orders/access/form", data={"mapping": datasets.mapping("orders")}).text
     assert 'data-role="admin"' not in form
-    written = client.post("/datasets/orders/access/yaml",
+    written = client.post("/datasets/local/orders/access/yaml",
                           data={"mapping": datasets.mapping("orders"), "role": "admin"}).json()["mapping"]
     assert column_map.permissions(written) == {}
     # It reads every dataset, so it clashes with any role that reads one.
@@ -319,9 +342,9 @@ def test_an_admin_sets_a_password_and_the_user_signs_in_with_it(portal, portal_r
     bob = TestClient(app_mod.app)
     assert "Invalid" in _login(bob, "bob", "wrong-pass").text
     assert _login(bob, "bob", "bobs-pass-1").status_code == 303
-    assert bob.get("/datasets", follow_redirects=False).status_code == 200
+    assert bob.get("/access", follow_redirects=False).status_code == 200
     # Not an admin: no Users tab, and its routes refuse.
-    assert 'href="/users"' not in bob.get("/datasets").text
+    assert 'href="/users"' not in bob.get("/access").text
     assert bob.get("/users").status_code == 403
     assert bob.post("/users/new", data={"name": "eve"}).status_code == 403
     assert bob.post("/access/new", data={"name": "boss"}).status_code == 403
@@ -331,10 +354,10 @@ def test_an_admin_sets_a_password_and_the_user_signs_in_with_it(portal, portal_r
     portal.post(f"/users/{uid}/edit", data={"name": "bob"})
     assert portal_roles.verify("bob", "bobs-pass-1") == "bob"
     portal.post(f"/users/{uid}/edit", data={"name": "bob", "password": "bobs-pass-2"})
-    assert bob.get("/datasets", follow_redirects=False).headers["location"] == "/login"
+    assert bob.get("/access", follow_redirects=False).headers["location"] == "/login"
     assert _login(bob, "bob", "bobs-pass-2").status_code == 303
     portal.post(f"/users/{uid}/edit", data={"name": "bob", "clear_password": "1"})
-    assert bob.get("/datasets", follow_redirects=False).status_code == 303   # removed: signed out
+    assert bob.get("/access", follow_redirects=False).status_code == 303   # removed: signed out
     assert "Invalid" in _login(bob, "bob", "bobs-pass-2").text
 
 
@@ -350,12 +373,16 @@ def test_a_user_holding_admin_manages_users(portal, portal_roles):
 
 
 def test_another_system_provisions_its_users_the_first_time_and_refreshes_them(portal_roles):
-    key = portal_roles.provision("dana@corp", "sso", first_name="Dana", email="dana@corp")
-    dana = portal_roles.user("dana@corp")
+    key = portal_roles.provision("dana", "sso", first_name="Dana", email="dana@corp")
+    dana = portal_roles.user("dana")
     assert (dana.source, dana.external, dana.roles, dana.has_password) == ("sso", True, [], False)
-    assert key and portal_roles.session_key("dana@corp") == key
-    assert portal_roles.provision("dana@corp", "sso", last_name="Kim") == key      # same session key
-    assert portal_roles.user("dana@corp").about == "Dana Kim · dana@corp"
+    assert key and portal_roles.session_key("dana") == key
+    assert portal_roles.provision("dana", "sso", last_name="Kim") == key      # same session key
+    assert portal_roles.user("dana").about == "Dana Kim · dana@corp"
+    assert portal_roles.group("_dana").personal                                # their group, at once
+    # A name a group can't carry is refused, until SSO names people that way.
+    with pytest.raises(RoleError, match="lowercase latin"):
+        portal_roles.provision("sam@corp", "sso")
 
 
 def test_no_system_signs_in_as_anothers_user(portal_roles):
@@ -401,10 +428,10 @@ def test_an_authenticator_with_a_source_signs_its_users_in(portal, portal_roles,
     client = TestClient(app_mod.app)
     assert _login(client, "lee", "ldap-pass").status_code == 303
     assert portal_roles.user("lee").source == "ldap"
-    assert client.get("/datasets", follow_redirects=False).status_code == 200
+    assert client.get("/access", follow_redirects=False).status_code == 200
     # Deleting them signs them out; signing in again makes them anew, with no roles.
     portal_roles.delete_user(portal_roles.user("lee").name)
-    assert client.get("/datasets", follow_redirects=False).status_code == 303
+    assert client.get("/access", follow_redirects=False).status_code == 303
     portal_roles.create_user("bob")
     assert "Invalid" in _login(client, "bob", "ldap-pass").text              # not LDAP's to sign in
 
@@ -416,19 +443,19 @@ def test_an_sso_callback_signs_in_through_sign_in(portal, portal_roles):
 
     @app_mod.app.get("/auth/test-sso/callback")
     def callback(request: Request):                      # what a provider's callback does, once it trusts who it is
-        resp = RedirectResponse("/datasets", status_code=303)
-        app_mod.sign_in(request, resp, "sam@corp", "sso", first_name="Sam")
+        resp = RedirectResponse("/access", status_code=303)
+        app_mod.sign_in(request, resp, "sam", "sso", first_name="Sam")
         return resp
 
     try:
         client = TestClient(app_mod.app)
         assert client.get("/auth/test-sso/callback").status_code == 200     # open, then signed in
-        assert portal_roles.user("sam@corp").source == "sso" and portal_roles.user("sam@corp").about == "Sam"
-        assert client.get("/datasets", follow_redirects=False).status_code == 200
+        assert portal_roles.user("sam").source == "sso" and portal_roles.user("sam").about == "Sam"
+        assert client.get("/access", follow_redirects=False).status_code == 200
         # A cookie signed without the user's key — never one sign_in made — is refused.
         bare = TestClient(app_mod.app)
-        bare.cookies.set("ff_session", auth._sign("sam@corp"))
-        assert bare.get("/datasets", follow_redirects=False).status_code == 303
+        bare.cookies.set("ff_session", auth._sign("sam"))
+        assert bare.get("/access", follow_redirects=False).status_code == 303
     finally:
         app_mod.app.router.routes[:] = [r for r in app_mod.app.router.routes
                                         if getattr(r, "path", "") != "/auth/test-sso/callback"]

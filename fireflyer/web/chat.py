@@ -61,6 +61,11 @@ and their column schemas (each column's name and type, no data) are listed in
 every message. Never invent a managed dataset, file path, or column name — if a
 request needs a column that isn't listed, say so instead of guessing.
 
+Datasets live in **groups**. A bare name (`dataset: orders`) is one of the
+dashboard's own group; another group's is written `group:name` (`dataset:
+sales:orders`), exactly as it is listed. Write each one as listed, and key its
+calcs the same way (`calcs: {sales:orders: {...}}`).
+
 **Inline datasets** are CSV written into the dashboard itself, under an OPTIONAL
 top-level `datasets:` block. The first line is the header; the rest is ordinary
 CSV. Put this block LAST in the file, after `layout:`, so the readable parts

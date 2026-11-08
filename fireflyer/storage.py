@@ -50,6 +50,15 @@ class LocalObjectStore:
         p = self._path(key)
         if p.exists():
             p.unlink()
+        self._prune(p.parent)
+
+    def _prune(self, folder: Path) -> None:
+        """Drop the folders a delete left empty, up to the base: an object store
+        has no folders, so a renamed or deleted dataset leaves none behind."""
+        while (folder != self._base and folder.is_relative_to(self._base) and folder.is_dir()
+               and not any(folder.iterdir())):
+            folder.rmdir()
+            folder = folder.parent
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
@@ -137,6 +146,42 @@ class S3ObjectStore:
             "aws_virtual_hosted_style_request": "false",
         }
         return f"s3://{self._bucket}/{key}", opts
+
+
+class PrefixedStore:
+    """One folder of another store, as a store of its own: a group's datasets
+    are `groups/<group>/…` of the one bucket, and read as if they were all
+    there is."""
+
+    def __init__(self, store: ObjectStore, prefix: str):
+        self._store = store
+        self._prefix = prefix
+
+    def put(self, key: str, data: bytes) -> None:
+        self._store.put(self._prefix + key, data)
+
+    def get(self, key: str) -> bytes:
+        return self._store.get(self._prefix + key)
+
+    def delete(self, key: str) -> None:
+        self._store.delete(self._prefix + key)
+
+    def exists(self, key: str) -> bool:
+        return self._store.exists(self._prefix + key)
+
+    def list_keys(self) -> list[str]:
+        return [k[len(self._prefix):] for k in self._store.list_keys() if k.startswith(self._prefix)]
+
+    def source(self, key: str) -> tuple[str, dict | None]:
+        return self._store.source(self._prefix + key)
+
+
+def move_keys(store: ObjectStore, old: str, new: str) -> None:
+    """Every key under prefix `old` moved under `new` — object stores have no
+    rename, so each is copied, then deleted."""
+    for key in [k for k in store.list_keys() if k.startswith(old)]:
+        store.put(new + key[len(old):], store.get(key))
+        store.delete(key)
 
 
 def make_object_store(config: dict) -> ObjectStore:

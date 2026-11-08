@@ -10,9 +10,10 @@ import yaml
 
 from fireflyer import filters as filters_mod
 from fireflyer import calcs as calcs_mod
+from fireflyer import groups
 from fireflyer import inline_data
 from fireflyer.params import FILTER_OPS, OP_WORDS, column_type, filter_fields, type_glyph
-from fireflyer.scan import scan
+from fireflyer.scan import NoAccess, scan
 from fireflyer.chart.bar.chart import Bar
 from fireflyer.chart.map.chart import Map
 from fireflyer.chart.number.chart import Number
@@ -284,6 +285,7 @@ class Dashboard:
             calc_sets = calcs_mod.parse_block(config.get("calcs"))
         except calcs_mod.CalcError as exc:
             raise DashboardError(str(exc)) from exc
+        calc_sets = _normal_refs(chart_configs, calc_sets, datasets, inline)
         _validate_calc_refs(chart_configs, calc_sets)
 
         raw_layout = config["layout"]
@@ -309,17 +311,19 @@ class Dashboard:
         return dash
 
     @staticmethod
-    def dataset_names(text: str) -> set[str]:
+    def dataset_names(text: str, group: str = "") -> set[str]:
         """The **managed** dataset names a dashboard references (its charts'
         `dataset:` values). Best-effort — empty set if the YAML doesn't parse.
-        Powers the portal's delete-guard and cascade-rename.
+        Powers the portal's delete-guard and cascade-rename. `group`, the
+        dashboard's own: each comes back in its normal form (`groups.normal`),
+        bare for that group's, `group:name` for another's.
 
         Names defined by the dashboard's own inline `datasets:` block are
         excluded: those charts read data carried in the file, so they neither
         pin a stored dataset against deletion nor want renaming when one moves.
         """
         try:
-            dash = Dashboard.from_yaml(text)
+            dash = Dashboard.from_yaml(text, datasets=_Normalizer(group) if group else None)
             inline = inline_data.parse_block(yaml.safe_load(text).get("datasets"))
         except (DashboardError, inline_data.InlineDataError, AttributeError,
                 yaml.YAMLError):
@@ -331,21 +335,22 @@ class Dashboard:
         }
 
     @staticmethod
-    def uses(text: str) -> list[tuple[str, str]]:
+    def uses(text: str, group: str = "") -> list[tuple[str, str]]:
         """What this dashboard reads, as `(dataset, column)` pairs — what the
         dashboard stores index on save, so the datasets/dashboards overviews
         needn't parse every dashboard to draw. Per managed dataset one `(name,
         "")` for the dataset itself, then a pair per column its charts read, or
-        `(name, "*")` when one reads every column (a raw table)."""
+        `(name, "*")` when one reads every column (a raw table). Names in their
+        normal form for `group`, as `dataset_names` gives them."""
         out: list[tuple[str, str]] = []
-        for dataset in sorted(Dashboard.dataset_names(text)):
-            columns = Dashboard.columns_used(text, dataset)
+        for dataset in sorted(Dashboard.dataset_names(text, group)):
+            columns = Dashboard.columns_used(text, dataset, group)
             out.append((dataset, ""))
             out += [(dataset, "*")] if columns is None else [(dataset, c) for c in sorted(columns)]
         return out
 
     @staticmethod
-    def columns_used(text: str, dataset: str) -> set[str] | None:
+    def columns_used(text: str, dataset: str, group: str = "") -> set[str] | None:
         """The columns of managed `dataset` this dashboard's charts read — from
         what each chart's params declare (`params.columns_read`, the same set the
         chart is handed, so it's exact), with column calcs traced to the dataset
@@ -353,9 +358,9 @@ class Dashboard:
         empty when no chart uses the dataset."""
         from fireflyer.params import columns_read
 
-        if dataset not in Dashboard.dataset_names(text):
+        if dataset not in Dashboard.dataset_names(text, group):
             return set()
-        dash = Dashboard.from_yaml(text)
+        dash = Dashboard.from_yaml(text, datasets=_Normalizer(group) if group else None)
         calcs = dash.calc_sets.get(dataset)
         used: set[str] = set()
         for cfg in dash.chart_configs.values():
@@ -809,6 +814,9 @@ class Dashboard:
                 )
             else:
                 chart_html = chart.to_html()
+        except NoAccess:
+            # The reader's own check (the resolver): what `as_role` didn't catch.
+            return {"html": _no_access_html(cid, self._role_name), "panel": ""}
         except Exception as exc:
             # A chart that cannot read its data must not take the page down with
             # it. The cell arrives by htmx, which only swaps a 2xx response, so an
@@ -1081,14 +1089,62 @@ def _validate_unique_placements(items: list) -> None:
 
 
 def rename_dataset_ref(text: str, old: str, new: str) -> str:
-    """Rewrite chart `dataset: <old>` references to `<new>` in a dashboard's
-    YAML text (cascade-rename). Word-boundary lookahead so `orders` doesn't
-    match `orders_2`; leaves unrelated text (comments, layout) untouched."""
-    return re.sub(
-        r"(dataset:[ \t]*)" + re.escape(old) + r"(?=[\s,}])",
-        r"\g<1>" + new,
-        text,
+    """Rewrite references to dataset `old` — charts' `dataset: <old>` and the
+    `calcs:` key — to `<new>` in a dashboard's YAML text (cascade-rename).
+    Whole names only, so `orders` doesn't match `orders_2` or `orders:x`;
+    leaves unrelated text (comments, layout) untouched."""
+    return _rewrite_refs(text, lambda ref: new if ref == old else None)
+
+
+def rename_group_ref(text: str, old: str, new: str) -> str:
+    """A group renamed: every `old:<dataset>` reference becomes `new:<dataset>`."""
+    def change(ref: str) -> str | None:
+        group, name = groups.split(ref, "")
+        return groups.join(new, name, "") if groups.is_qualified(ref) and group == old else None
+    return _rewrite_refs(text, change)
+
+
+def qualify_refs(text: str, group: str, inline: set[str] = frozenset()) -> str:
+    """Bare references made `group:<dataset>` — a dashboard cloned out of
+    `group` keeps reading that group's datasets. Not the ones it carries
+    inline: they move with it."""
+    return _rewrite_refs(
+        text, lambda ref: None if groups.is_qualified(ref) or ref in inline else groups.join(group, ref, "")
     )
+
+
+# A chart's `dataset:` value, plain or quoted, up to the end of its value — a
+# name from before the naming rule may hold a space.
+_DATASET_VALUE = re.compile(r"(\bdataset:[ \t]*)(['\"]?)([^\n,}'\"#]*?[^\s,}'\"#])\2(?=[ \t]*(?:[,}#]|$))", re.M)
+
+
+def _rewrite_refs(text: str, change) -> str:
+    """Each dataset reference in `text` — a chart's `dataset:`, a key of the
+    `calcs:` block — put through `change(ref)`: the new reference, or None to
+    leave it."""
+    def value(m: re.Match) -> str:
+        new = change(m.group(3))
+        return m.group(0) if new is None else f"{m.group(1)}{m.group(2)}{new}{m.group(2)}"
+
+    lines = _DATASET_VALUE.sub(value, text).split("\n")
+    start = next((i for i, l in enumerate(lines) if re.match(r"calcs[ \t]*:[ \t]*(#.*)?$", l)), None)
+    if start is None:
+        return "\n".join(lines)
+    indent = None
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        depth = len(line) - len(line.lstrip())
+        if depth == 0:
+            break
+        indent = depth if indent is None else indent
+        key = re.match(r"([ \t]*)(['\"]?)([^\n'\"#]+?)\2([ \t]*:(?:[ \t]|$).*)", line)
+        if depth == indent and key:
+            new = change(key.group(3))
+            if new is not None:
+                lines[i] = f"{key.group(1)}{key.group(2)}{new}{key.group(2)}{key.group(4)}"
+    return "\n".join(lines)
 
 
 def rename_column_refs(text: str, dataset: str, renames: dict[str, str]) -> str:
@@ -1171,6 +1227,53 @@ def _rename_columns_in(block: list[str], renames: dict[str, str]) -> list[str]:
             line = _FLOW_LIST.sub(lambda m: m.group(1) + ",".join(one_item(i) for i in m.group(2).split(",")) + m.group(3), line)
             line = _FORMULA.sub(formula, line)
         out.append(line)
+    return out
+
+
+class _Normalizer:
+    """References in their normal form for a dashboard in group `home`, and no
+    data — for reading what a dashboard names (the uses index, renames)."""
+
+    def __init__(self, home: str):
+        self.home = home
+
+    def normalize(self, ref: str) -> str:
+        return groups.normal(ref, self.home)
+
+    def __call__(self, ref: str):
+        raise DashboardError(f"dataset {ref!r} isn't read here")
+
+
+def _normal_refs(chart_configs: dict, calc_sets: dict, datasets, inline: dict) -> dict:
+    """Charts' `dataset:` and the `calcs:` keys in their normal form, when
+    `datasets` knows the dashboard's group (it has `normalize`) — so `orders`
+    and `sales:orders` are one dataset to calcs and crossfilters. A qualified
+    name whose bare form an inline dataset has stays qualified: inline data
+    shadows a bare name only. Returns the calc sets, re-keyed.
+
+    A store with no groups (local mode) has no `group:` references to give."""
+    normalize = getattr(datasets, "normalize", None)
+    if normalize is None:
+        if datasets is not None and hasattr(datasets, "source"):
+            for cid, cfg in chart_configs.items():
+                ref = str(cfg.kwargs.get("dataset") or "")
+                if groups.is_qualified(ref) and ref not in inline:
+                    raise DashboardError(f"chart {cid!r}: {ref!r} names a group — there are no groups here")
+        return calc_sets
+
+    def norm(ref: str) -> str:
+        bare = normalize(ref)
+        return ref if bare in inline and groups.is_qualified(ref) else bare
+
+    for cfg in chart_configs.values():
+        if cfg.kwargs.get("dataset"):
+            cfg.kwargs["dataset"] = norm(str(cfg.kwargs["dataset"]))
+    out = {}
+    for ref, calc_set in calc_sets.items():
+        key = norm(ref)
+        if key in out:
+            raise DashboardError(f"calcs: {ref!r} names a dataset another key names too")
+        out[key] = calc_set
     return out
 
 

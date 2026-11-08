@@ -185,7 +185,29 @@ def users_roles(clip: Clip) -> None:
     clip.press("Enter", settle=2.4)
 
 
-SCENES = {"users-roles": users_roles}
+def groups(clip: Clip) -> None:
+    """docs/use-cases.md → "Share across groups" (portal mode), signed in as
+    bob (FIREFLYER_USER=bob). Needs alice's dashboard "Alice report" on her
+    `orders`, shared with a role bob holds through filters; makes bob's "My
+    copy"."""
+    page = clip.page
+    page.request.post(f"{clip.base}/d/_bob/My%20copy/delete")
+
+    clip.goto("/d/_bob")
+    clip.hold(1.2)
+    clip.click("#ff-group summary", settle=0.6)
+    clip.click("#ff-group .ff-group-kinds button[data-kind=personal]", settle=0.5)  # opens on shared
+    clip.click("#ff-group a[href='/d/_alice']", settle=1.0)
+    clip.click(".dash-table a.name:has-text('Alice report')", settle=2.6)   # view-only, his rows
+    clip.click(".ff-back", settle=0.8)
+    clip.click("button[title=Clone][data-name='Alice report']", settle=0.4)
+    page.fill("#clone-name", "")
+    clip.type("My copy")
+    clip.click("#clone-form button.ok", settle=2.0)                         # his own, to edit
+    clip.click("#ff-modes button[data-mode=code]", settle=2.4)               # reading `_alice:orders`
+
+
+SCENES = {"users-roles": users_roles, "groups": groups}
 
 
 def main() -> None:

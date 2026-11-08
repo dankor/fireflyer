@@ -389,6 +389,23 @@ chart's `dataset` is taken as a Parquet path/URI directly.
 inline data neither pins a stored dataset against deletion nor wants renaming
 when one moves, so the portal's delete-guard and cascade-rename skip it.
 
+**Groups.** In portal mode every managed dataset lives in a **group** (see
+**Portal mode → Groups**), and a name is unique only inside its group. A chart
+names a dataset by **reference**: bare — `dataset: orders` — for one of its
+dashboard's own group, `group:name` — `dataset: sales:orders` — for another's.
+A bare name always means the dashboard's group, whoever views it. YAML from
+before groups stays valid: no name had a `:`. A reference is kept in its
+**normal form** wherever two are compared (`groups.normal`): bare in its own
+group, qualified elsewhere — `Dashboard.from_yaml` normalizes every chart's
+`dataset:` and every `calcs:` key when its `datasets` knows the dashboard's
+group (has `normalize`), so `orders` and `sales:orders` are one dataset to
+calcs, crossfilters, the uses index and the editor's pickers (two keys naming
+one dataset is an error). An inline dataset shadows a **bare** name only, never
+a qualified one. Outside portal mode there are no groups: a `group:` reference
+is a validation error ("there are no groups here"), shown by the YAML lint like
+any other. Group and dataset names are `[A-Za-z0-9_-]`; `fireflyer/groups.py`
+holds the rules, the reference helpers and the URL escaping.
+
 A managed dataset's files live in an `ObjectStore` — a local folder for
 dev/tests, S3-compatible **Garage** for portal runtime — and are managed in the
 **Datasets** gallery tab (upload / column mapping / versions /
@@ -1135,8 +1152,8 @@ Portal mode is an **opt-in** way to store many dashboards in a database and
 browse them from a gallery, instead of hand-editing one YAML file. It is an
 **owner-approved exception** to the "no persistence / no multiple dashboards"
 anti-goal, and — like the editor and the AI assistant — it is **editor-only**,
-scoped to `web/`. It is not part of the Fireflyer core. It does not add
-authentication, multiple *users*, or caching; those stay out of scope.
+scoped to `web/`. It is not part of the Fireflyer core. Its login, users and
+**groups** (below) are scoped to it too; caching stays out of scope.
 
 ## Enabling it
 
@@ -1183,28 +1200,119 @@ The editor is already **stateless**: every edit route (`/execute`,
 and returns new YAML — nothing is persisted server-side. Portal mode only wraps
 this with a persistence and listing layer, so **no existing edit logic changes**.
 
-New routes, all gated behind the portal flag and addressing dashboards by
-their **name** — unique, and the dashboard's key (URL-encoded in a path):
+New routes, all addressing a dashboard by its **group** and its **name** —
+unique in its group, and the dashboard's key: `/d/<group>/<name>`. The name is
+free text, so it's escaped for the URL (`groups.url_name`: `~`, `/` and `\` as
+`~7E` `~2F` `~5C`, a leading dot as `~2E` — routing decodes `%2F` back into `/`
+before it matches — then percent-encoded; `groups.from_url` reverses it).
 
-* `GET /` — the gallery: a **table** of stored dashboards (name, author, last
-  updated) with per-row **Clone / Remove** actions (the name opens it) and a **+ New
-  dashboard** button. New and Clone each prompt for a name in a small modal
-  (native `<dialog>`).
-* `POST /new` — create a **blank** dashboard with the given name (a valid but
-  empty YAML: no datasets, charts, or layout) and open it.
-* `POST /d/{id}/clone` — copy an existing dashboard under a new name and open
-  the copy.
-* `GET /d/{id}` — the normal editor page, seeded with that dashboard's stored
-  YAML and given a **Save** button (and a link back to the gallery).
-* `POST /d/{id}/save` — validate and persist the edited YAML; returns
-  `{ok, id}` — a changed `name:` renames the dashboard (history and all), and
-  the editor moves to `/d/<new name>` (`moveTo`: the address, the save URL, the
-  conversation kept in the browser). A name another dashboard has is refused.
-* `POST /d/{id}/delete` — remove it (and its version history).
-* `GET /d/{id}/versions` — the dashboard's saved versions, newest first
-  (`version`, `created_at`, `author`; no YAML); `GET /d/{id}/versions/{n}` —
-  one version with its YAML. They feed the editor's compare view (see
-  **Version history**).
+* `GET /` — your own group's dashboards (a redirect to `/d/<group>`); `GET
+  /d/{group}` — a group's **table** of dashboards (name, group, author, last
+  updated, datasets) with per-row **Clone / Remove** actions (the name opens it)
+  and a **+ New dashboard** button. New and Clone each prompt for a name in a
+  small modal (native `<dialog>`); Clone also for the group it goes to.
+* `POST /d/{group}/new` — create a **blank** dashboard with the given name (a
+  valid but empty YAML: no datasets, charts, or layout) and open it.
+* `POST /d/{group}/{name}/clone` — copy it under a new name, into a group the
+  user may write (form field `group`), and open the copy.
+* `GET /d/{group}/{name}` — the normal editor page, seeded with that dashboard's
+  stored YAML and given a **Save** button (and a link back to its group) — or,
+  for someone who may only read the group, view-only (see **Groups**).
+* `POST /d/{group}/{name}/save` — validate and persist the edited YAML; returns
+  `{ok, id, url}` — `id` is `<group>/<name>`; a changed `name:` renames the
+  dashboard (history and all), and the editor moves to its new `url`
+  (`moveTo`: the address, the save URL, the conversation kept in the browser). A
+  name another dashboard of the group has is refused.
+* `POST /d/{group}/{name}/delete` — remove it (and its version history).
+* `GET /d/{group}/{name}/versions` — the dashboard's saved versions, newest
+  first (`version`, `created_at`, `author`; no YAML); `…/versions/{n}` — one
+  version with its YAML. They feed the editor's compare view (see **Version
+  history**); like save and delete, only for whoever may change the group.
+
+## Groups
+
+Every dataset and dashboard lives in a **group**; names are unique only inside
+one. Each user has a **personal** group, `_<name>` (the env login's is
+`_admin`, whatever `FIREFLYER_USER` says), made with them — an SSO user's on
+their first sign-in — and removed with them. An admin makes **shared** groups
+(`sales`; no leading `_`). The groups are a `portal_groups` table beside the
+roles and users (`RoleStore.groups`, `create_group`, `rename_group`,
+`delete_group`; a personal one can't be renamed or removed on its own). Roles,
+users and the Access tab stay **global**. URLs carry the group:
+`/d/<group>/<name>`, `/datasets/<group>/<name>`; a request's group is its
+URL's, or — for the editor's stateless routes — the open dashboard's
+(`X-FF-Dashboard`).
+
+**Who writes.** An admin writes every group; anyone else their own (`_can_write`
+— a change elsewhere is a 403). Shared groups are an admin's for now:
+membership comes later.
+
+**Who reads what** — enforced, not a preview. A viewer reads all of their own
+group and, of another's datasets, what a role of theirs is granted there (the
+dataset's `permissions:`; one role per dataset, keyed by `(group, dataset)`). An
+admin reads everything. Sharing is through roles: a dataset's owner grants it
+to an existing role in its access mode; an admin makes the roles and hands them
+out. It's applied in **one place**: in portal mode a dashboard is handed a
+`_Reader` (`app.py`) as its `datasets` — it resolves a reference from the
+dashboard's group, raises `scan.NoAccess` for one the viewer can't read, and
+hands back a granted one's `(uri, options, rows)`: `scan.scan` applies `rows`
+(the grant's filters, the same filter model as every other) **first**, on every
+read — a chart, a filter's value list, a column's types — so nothing reads past
+them; one on a column the data lacks reads nothing. The dashboard also gets
+`as_role(viewer, grants)`, so a locked chart shows the lock
+(`_no_access_html`) and the panel shows the grant's filters as `access` rows.
+Every route that renders or reads goes through it (`_dashboard_for`, `_reader`):
+`/execute`, `/dashboard`, `/dashboard/cell`, `/filter/*`, `/chart/config/*`,
+`/chart/table`, `/chart/map`, `/calcs/form`, `/yaml/assist`, `/chat` — no route
+checks access on its own.
+
+* **Lists.** Every group is in the topbar's **group picker** — shared | personal
+  behind a switch at its head, one list at a time (`group_picker`,
+  `static/group-picker.js`), opening on the shared ones (on the personal ones
+  only while there's no shared group; on the list pages only — an opened
+  dashboard or dataset shows its group read-only, `group_label`) — a group with
+  nothing shared with you greyed. A
+  group's lists show **every** dashboard and dataset, with a **Group** column;
+  one whose data isn't all shared with you is **inactive** — greyed, at the end
+  — and still opens. A dashboard that reads only inline data, or nothing, is
+  active for everyone.
+* **View-only.** A dashboard you can't write opens to look at: view mode only,
+  no Save, no view-as, and **its YAML is never sent** — the page holds none
+  (`data-view-only`), `/execute` and the cells render the stored dashboard the
+  header names (`_yaml_for`), and the skeleton's hidden `yaml_text` is empty.
+  Its versions are a 404. Someone else's **dataset** shows its columns and
+  types and the example values its grant lets through — no service columns,
+  versions, permissions or editing; none at all if it isn't shared.
+* **View-as** (a role or a user) is an **admin's** preview; anyone else's
+  `role` / `user` is dropped.
+* **The assistant** is given the datasets the viewer may read: the group's own,
+  then the others, `group:name`.
+* **The chart form** names another group's dataset `group:name`; its dataset
+  field gets a **group pick** beside the search, starting at the dashboard's
+  group (`DatasetParam`, `ParamContext.group`).
+* **Clone** into another group rewrites each bare managed reference to
+  `<source group>:<name>` (`qualify_refs`), so the copy reads the same data;
+  inline data comes along. Anyone who can open a dashboard can clone it into a
+  group they write. There's no move.
+
+**Renames and deletes cascade** (`app._cascade`, every group's dashboards, a new
+version each): a dataset's rename and a build's column renames
+(`rename_dataset_ref`, `rename_column_refs`, both spellings in its own group);
+a shared group's rename rewrites every `old:` reference (`rename_group_ref`) and
+moves its rows and files. Removing a shared group — on the admins' **Groups**
+tab (`/groups`, `/groups/new`, `/groups/{name}/rename|delete`: name, counts,
+personal ones locked) — removes what's in it, after a confirm that counts the
+other groups' dashboards that will lock; removing a user does the same for
+their group.
+
+**Storage.** Dashboards: `(group_name, name)` (above). Datasets: the catalog
+keyed by `(group_name, name)` (`SqlCatalog.scoped(group)`), the files under
+`groups/<group>/datasets/<name>/` (`DatasetStore.group(name)`, over a
+`storage.PrefixedStore`). **Moving in**: on start-up the portal moves
+everything from before groups into `_admin` — the rows as their stores open,
+the dataset files in `app._move_into_groups`, which also gives a dataset whose
+name the rule refuses the nearest one it allows (`datasets.fit_name`), every
+dashboard reading it following. Bare references stay as they are.
 
 ## Storage model
 
@@ -1214,9 +1322,9 @@ break the surgical, comment-preserving block edits `config_edit.py` relies on.
 On every write the backend validates the YAML with `Dashboard.from_yaml`; an
 invalid dashboard is rejected and nothing is stored.
 
-The dashboard's **name** is its key — **unique**, like a dataset's, and like
-it never holding `/` or `\` or starting with a dot, since it sits in the URL —
-and is the source-of-truth top-level `name:` key (see **File shape**): the store
+The dashboard's **name** is its key within its **group** — **unique** there,
+like a dataset's, and free text (emoji, Cyrillic, spaces, `:`, even `/`: the URL
+escapes what it must) — and is the source-of-truth top-level `name:` key (see **File shape**): the store
 re-derives it from the YAML on every save, so renaming is just editing the
 `name:` key in the editor, and New/Clone write the modal-provided name into the
 YAML (a taken one is refused with 400; the defaults — "Untitled dashboard",
@@ -1229,19 +1337,23 @@ charts reference them by name and they live in the dataset store (see the
 
 ## Two stores, one schema
 
-The store is `SqlStore` in `fireflyer/web/portal.py`: one small table (`name`
-primary key, `author, yaml, created_at, updated_at`; `dashboard_versions` and
-`dashboard_uses` keyed by the `dashboard` name) in **Postgres** (`psycopg`).
+The store is `SqlStore` in `fireflyer/web/portal.py`: one small table
+(`(group_name, name)` primary key, `author, yaml, created_at, updated_at`;
+`dashboard_versions` and `dashboard_uses` keyed by `(group_name, dashboard)`) in
+**Postgres** (`psycopg`). A `SqlStore` reads one group's dashboards —
+`store.group(name)` gives another's over the same connection, and a new one
+reads `_admin`'s; `every()`, `rename_group` and `drop_group` reach all of them.
 **Portal mode runs on Postgres only**: `portal.database_url()` reads
 `DATABASE_URL` (or `portal.yaml`'s `database_url`) and, without a
 `postgresql://` one, stops the portal before it serves anything, saying what to
 set. Its dashboards, roles and users, dataset catalog and activity log all live
 there. sqlite stays for local mode's roles file and the test suite (in-memory).
 
-Dashboards were once keyed by a UUID and could share a name: on open, the store
-rebuilds such tables keyed by name (`_migrate_ids`), a repeated name made unique
-("Sales 2") in its row and YAML, versions carried over, the uses index rebuilt on
-first read.
+Dashboards were once keyed by a UUID and could share a name, and later by name
+alone: on open, the store rebuilds such tables keyed by group and name
+(`_migrate_ids`, `_migrate_groups`) — everything into the admin's group,
+`_admin` — a repeated name made unique ("Sales 2") in its row and YAML, versions
+carried over, the uses index rebuilt on first read.
 
 The Postgres driver is an optional `.[portal]` extra and is imported lazily, so
 the core install and `pip install -e ".[test]"` never require a database. Store
@@ -1262,9 +1374,15 @@ pair for the dataset itself, then one per column, or `(name, "*")` when a chart
 reads every column (a raw table). Inline datasets aren't listed: they're part of
 the dashboard, not something it depends on.
 
-* **Portal**: a `dashboard_uses (dashboard, dataset, column_name)` table. Each indexed dashboard also has a `('', '')` row, so a
-  dashboard that reads nothing is told apart from one not indexed yet; one from
-  before the index is indexed the first time the index is read.
+* **Portal**: a `dashboard_uses (group_name, dashboard, dataset_group, dataset,
+  column_name)` table — a reference split into the dataset's group and name, so
+  a dashboard reading another group's dataset is found from either side
+  (`store.uses()`: what this group's dashboards read; `store.readers()`: every
+  dashboard reading this group's datasets). Each indexed dashboard also has a
+  `('', '', '')` row, so a dashboard that reads nothing is told apart from one
+  not indexed yet; one from before the index is indexed the first time the index
+  is read. Wherever a dependency is shown, another group's item carries a
+  `group:` prefix.
 * **Local paths mode**: `<FIREFLYER_DATA>/<path>/uses.json`. The dashboard files
   are yours and change outside the app (an edit, a `git pull`), so each entry
   keeps its file's modification time: a changed or new file is indexed again
@@ -1286,8 +1404,8 @@ compare directly.
   first change always has something to compare against.
 * Deleting a dashboard deletes its history.
 * Portal stores keep versions in a second table, `dashboard_versions
-  (dashboard_id, version, yaml, author, created_at)`, keyed by
-  `(dashboard_id, version)`. Local paths mode keeps them as JSON files — see
+  (group_name, dashboard, version, yaml, author, created_at)`, keyed by
+  `(group_name, dashboard, version)`. Local paths mode keeps them as JSON files — see
   **Local paths mode**.
 
 **Compare.** The editor's **compare** mode (in the mode switch, right after
@@ -1307,7 +1425,8 @@ comparison; with unsaved edits — which no link could show — or no history, t
 parameter is dropped, as it is on leaving compare.
 
 **Unsaved work lives in the browser.** Unsaved edits are kept in
-`localStorage` (keyed by the dashboard id, or the page path when there is none)
+`localStorage` (keyed by the dashboard's `<group>/<name>`, or the page path when
+there is none)
 on every change, together with the saved text they were based on, and dropped
 once saved. Reopening the dashboard after the window was closed restores them,
 with a short note — which points to compare when the saved dashboard has
@@ -1318,10 +1437,10 @@ browser's own state, per viewer and per device; the server stores only saves.
 
 The gallery's overview pages lead with a **Dashboards | Datasets | Access**
 switch (Access: see below). A
-selected dataset is a **detail** page led by a **back button** (no switch — that's
-for the list pages); in local paths mode it, like the dashboard editor, carries
-the path dropdown on the right, so the selected-item pages are consistent (portal
-detail is back-only).
+selected dataset is a **detail** page led by a **back button** — no switch, and
+its group (or path) shown **read-only** where the list pages have the group
+picker or path dropdown (`group_label`; back is the way to another); the
+dashboard editor is the same, so the selected-item pages are consistent.
 The Datasets tab manages datasets (see the
 **Datasets** section above, and **Versions and column mapping**): upload a CSV
 (name, description, delimiter) → version 1.0, built in the background; the list
@@ -1342,9 +1461,14 @@ mapping revisions side by side, with restore and step older/newer) and
 **version chip** opens the history,
 grouped by upload: a check marks the version in use, a version opens the
 comparison, and an upload not in use can be deleted. A dataset **can't be
-removed** while a dashboard references it (the trash shows the count and lists
-those dashboards), and **renaming cascades** — every dashboard's `dataset:`
-refs are rewritten (`Dashboard.dataset_names()` + `rename_dataset_ref()`). The
+removed** while a dashboard of **its own group** references it (the trash shows
+the count and lists those dashboards); other groups' dashboards don't hold it —
+the confirm lists them, and their charts on it lock. **Renaming cascades** —
+every dashboard's references are rewritten, in every group, including ones the
+renamer can't otherwise write, a new version each, authored by the renamer
+(`rename_dataset_ref()`: a chart's `dataset:` and the `calcs:` key, bare and
+qualified). Its address is `/datasets/<group>/<name>`, every sub-route under it.
+The
 `DatasetStore` (`datasets.py`) sits over an `ObjectStore` (`storage.py`): a
 local folder for dev/tests, S3-compatible **Garage** at runtime
 (`FIREFLYER_S3_ENDPOINT`, `boto3` in the `.[portal]` extra, imported lazily).
@@ -1389,7 +1513,10 @@ one. Local mode has no built-ins.
 ## Users tab
 
 Portal mode only — it has a login, so there are people. The fourth list page
-lists **users**: a name each (trimmed, unique, required), an optional **first
+lists **users**: a name each (unique, required, and **lowercase latin letters,
+then letters or digits** — `[a-z][a-z0-9]*` — since their group, `_<name>`,
+carries it; and so it **never changes**: the dialog's name is read-only once
+made), an optional **first
 name**, **surname** and **email** (shown as the small line under the name —
 "Bob Smith · bob@example.com" — as a role's description is; an email needs an
 `@`), and the **roles** they hold. **+** adds one, a pencil edits, the trash
@@ -1404,8 +1531,12 @@ clash, is a 400.
 Users live in the roles' database: a `users` table keyed by `name`
 (`first_name`, `last_name`, `email`, the password hash, `source`,
 `session_key`, `created_at`, `updated_at`) and `user_roles` (`user_name`,
-`role_name`) — renaming a role or a user rewrites its holdings, so a renamed
-role stays held; a removed one is dropped.
+`role_name`) — renaming a role rewrites its holdings, so a renamed role stays
+held; a removed one is dropped. Making a user makes their group; **removing a
+user removes their group** with every dashboard and dataset in it (the confirm
+says so; charts elsewhere on those datasets lock). Users from before the name
+rule stop the portal at start-up, listed — renaming someone changes how they
+sign in, so that's for an admin to do.
 
 **A user holds at most one role per dataset**, so what they see of a dataset is
 one role's filters, never two to choose between. It's checked both ways, against
@@ -1439,9 +1570,9 @@ one can sign in (a key beside their name in the list), one without can't.
   (`type=password`, `autocomplete=new-password`), with a show/hide toggle; on an
   edit, empty keeps the current one and the trash in the field removes it.
 - **Only admins manage users** — the env login, or a user holding `admin`. For
-  anyone else the Users tab is hidden and its routes, and the Access tab's
-  role changes, answer 403. Signing in as a user is not yet *enforced* on the
-  data: dashboards still show everything; view-as is how to preview a user.
+  anyone else the Users and Groups tabs are hidden and their routes, and the
+  Access tab's role changes, answer 403. What a signed-in user reads is
+  **enforced** — see **Groups → Who reads what**.
 
 ## Authentication
 
@@ -1487,7 +1618,8 @@ first time with that source, no roles and no password; their `first_name` /
 their session key, so they're signed out like anyone else when an admin deletes
 them (and come back with no roles if they sign in again). A name a local user,
 the admin, or another provider holds is refused: one system can't sign in as
-another's user.
+another's user — and so is a name the user-name rule refuses
+(`sam@corp`), until a provider names people that way.
 
 Their name and credentials belong to the provider, so the Users tab shows the
 provider (an arrow-out-of-a-box beside the name, "Signs in through sso" on
@@ -1531,6 +1663,7 @@ for the tests):
 | `status_code` | the HTTP status that came back — a refusal (400, 401, 403, 409) or a crash (500) is logged too |
 | `detail` | JSON: the action's own parameters |
 | `ip`, `user_agent` | unmasked |
+| `group_name` | the group the thing acted on is in — "" for what's global (roles, users, the login); a log from before groups gets the column, empty |
 
 Indexed on `at`, `(actor, at)` and `(object_type, object_name, at)`. Rows older
 than `FIREFLYER_ACTIVITY_DAYS` (default **365**; 0 keeps all) are dropped when
@@ -1573,13 +1706,16 @@ record the file name and size.
   `delete` (409 when a dashboard still uses it), `delete_version`, `versions`,
   `version`, `restore`, and `build` — written when the background build ends,
   as whoever asked for it (500 when it failed).
-* **Roles / users** — `create`, `rename` / `edit` (roles by name,
+* **Roles / users / groups** — `create`, `rename` / `edit` (by name,
   `renamed_from`), `delete`.
 
 **Which dashboard.** The editor's routes take YAML, not an id, so `editor.js`
-sends the open dashboard's name on every request it makes — fetch and htmx — as
-`X-FF-Dashboard` (URL-encoded: a header is Latin-1); without it, the posted
-YAML's `name:`. Not logged: static files, `/yaml/assist`, and requests that only
+sends the open dashboard on every request it makes — fetch and htmx — as
+`X-FF-Dashboard: <group>/<name>` (URL-encoded: a header is Latin-1); without it,
+the posted YAML's `name:`. The same header tells those routes which group's
+datasets a bare name means. A dataset page's own requests outside its address
+(its filter rows) send `X-FF-Group`. The beacon, which can't send headers,
+posts `dashboard: <group>/<name>`. Not logged: static files, `/yaml/assist`, and requests that only
 build a form or a picker (`/chart/config/form`, `/filter/*`, `/calcs/form`, the
 access form's pieces, a dataset's build-status poll).
 
@@ -1596,16 +1732,19 @@ YAML works locally and remotely.
 
 Turn it on with **`FIREFLYER_PATHS`** — a base directory inside the container.
 **Each host folder you Docker-map under that base is a switchable "path"** — a
-labelled **path dropdown** on the **right** of the topbar, present on the gallery,
-the dataset detail, and the dashboard editor (the Dashboards | Datasets | Access switch is
-on the left, but **only on the list pages** — selected items lead with just a
-back button); there is no
+labelled **path dropdown** on the **right** of the topbar of the list pages (the
+Dashboards | Datasets | Access switch is on the left of them; a selected
+dataset or dashboard leads with just a back button and shows its path
+read-only); there is no
 filesystem browser and no in-app path management — you add / remove / repoint a
 path by **editing the compose volume mappings and restarting** (deliberately the
 only mechanism — it keeps the mapping explicit and host-controlled). Unset → `/`
 stays the single-dashboard editor; set → `/` and `/datasets` become the same
-gallery and editor as portal, minus auth. The active path rides in an `ff_path` cookie
-(`GET /path/{name}` sets it, validated against the mapped-folder list).
+gallery and editor as portal, minus auth. **A path takes the group's place in
+the URL** — `/d/<path>/<name>`, `/datasets/<path>/<name>` — and the dropdown
+links there; nothing else of groups applies: paths stay isolated (no `path:`
+references), with no users and no access checks. The plain single-dashboard
+editor's one group is `local` (`/datasets/local`).
 
 * A path's **dashboards are `<path>/dashboards/*.yaml`** — files you own and
   commit — via `PathDashboardStore`, which mirrors the portal store surface
@@ -1626,9 +1765,10 @@ gallery and editor as portal, minus auth. The active path rides in an `ff_path` 
   non-destructive — the dashboard is written only when the path is brand new, so
   it never clobbers your edits.
 
-`app.py` stays mode-agnostic through request-scoped `_dash_store(request)` /
-`_dataset_store(request)` helpers: portal → the DB store / dataset singleton;
-paths mode → the active path's `PathDashboardStore` / per-path blob store.
+`app.py` stays mode-agnostic through `_dashboards_in(group)` /
+`_datasets_in(group)` and their request-scoped `_dash_store(request)` /
+`_dataset_store(request)`: portal → the group's view of the DB store / dataset
+store; paths mode → the path's `PathDashboardStore` / per-path blob store.
 `paths.py` logic is unit-tested without the web stack (`tests/test_paths.py`).
 
 ---

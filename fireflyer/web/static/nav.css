@@ -56,6 +56,20 @@
 .ff-role .ff-role-none { display:block; padding:8px 10px; color:var(--muted); font-size:13px; }
 .ff-role .ff-role-none[hidden] { display:none; }
 
+/* The group picker: personal | shared at the menu's head, the role picker's
+   switch; a group with nothing shared with you greyed — it still opens. */
+.topbar .ff-group .ff-group-kinds { display:flex; margin:0 0 4px; }
+.topbar .ff-group .ff-group-kinds button { flex:1; display:flex; justify-content:center; width:auto;
+  padding:6px 0; border-radius:0; }
+.topbar .ff-group .ff-group-kinds button svg { width:15px; height:15px; }
+.ff-group .ff-group-list[hidden] { display:none; }
+.ff-group .ff-pathdd-menu a.is-inactive { opacity:.45; }
+.ff-group .ff-role-none { display:block; padding:8px 10px; color:var(--muted); font-size:13px; }
+/* An opened dashboard's or dataset's group: the picker's box, read-only —
+   no chevron, no hover. */
+.ff-group-label { display:inline-flex; align-items:center; padding:5px 10px;
+  border:1px solid var(--border); border-radius:7px; font-size:13px; color:var(--muted); cursor:default; }
+
 /* A segmented icon control — the theme switch (Auto / Light / Dark) on every
    page, and the editor's mode switch. */
 .topbar .ff-theme { display: inline-flex; border: 1px solid var(--border);

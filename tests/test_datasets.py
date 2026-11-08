@@ -6,7 +6,7 @@ majors, mappings as minors, builds, and both catalogs."""
 import pytest
 
 from fireflyer.datasets import DatasetError, DatasetStore
-from fireflyer.storage import LocalObjectStore
+from fireflyer.storage import LocalObjectStore, make_object_store
 
 CSV = b"id,status,amount\n1,paid,11\n2,paid,178\n3,refunded,13\n"
 
@@ -265,10 +265,51 @@ def test_a_dataset_from_before_versions_becomes_1_0_with_its_types(tmp_path):
     assert not objects.exists("old.parquet")
 
 
-@pytest.mark.parametrize("bad", ["a/b", "../x", ".hidden", "a\\b"])
-def test_a_name_that_would_leave_its_folder_is_refused(store, bad):
-    with pytest.raises(DatasetError, match="can't contain"):
+@pytest.mark.parametrize("bad", ["a/b", "../x", ".hidden", "a\\b", "sales:orders", "my data", "zoo🦁"])
+def test_a_dataset_name_is_letters_digits_underscore_and_dash(store, bad):
+    """Plain ASCII: no path can leave its folder, and `:` joins a group to it."""
+    with pytest.raises(DatasetError, match="only letters, digits, _ and -"):
         store.create(bad, CSV)
+    assert store.create("orders_2-b", CSV).name == "orders_2-b"
+
+
+def test_each_group_is_a_store_of_its_own(tmp_path):
+    from fireflyer.datasets import SqlCatalog
+
+    objects = make_object_store({"base": str(tmp_path)})
+    root = DatasetStore(objects, SqlCatalog(":memory:"))
+    root.group("sales").create("orders", CSV)
+    root.group("mkt").create("orders", CSV.replace(b"paid", b"open"))
+    assert [d.name for d in root.group("sales").list()] == ["orders"]
+    assert root.group("sales").source("orders") != root.group("mkt").source("orders")
+    assert any(k.startswith("groups/sales/datasets/orders/") for k in objects.list_keys())
+
+    root.rename_group("sales", "revenue")
+    assert root.group("sales").list() == [] and root.group("revenue").get("orders") is not None
+    root.drop_group("revenue")
+    assert root.group("revenue").list() == []
+    assert not any(k.startswith("groups/revenue/") for k in objects.list_keys())
+    assert root.group("mkt").get("orders") is not None
+
+
+def test_datasets_from_before_groups_move_into_the_admins(tmp_path):
+    """Keyed by name alone, their files at the top: into `_admin`, files and rows."""
+    import sqlite3
+
+    from fireflyer.datasets import SqlCatalog
+
+    objects = make_object_store({"base": str(tmp_path / "o")})
+    DatasetStore(objects).create("orders", CSV)              # files as they were, at the top
+    db = str(tmp_path / "p.db")
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE datasets (name TEXT PRIMARY KEY, doc TEXT NOT NULL)")
+    conn.execute("INSERT INTO datasets (name, doc) VALUES (?, ?)",
+                 ("orders", objects.get("datasets/orders/dataset.yaml").decode()))
+    conn.commit()
+    root = DatasetStore(objects, SqlCatalog(db))
+    root.move_into_group("_admin")
+    assert root.group("_admin").get("orders").rows == 3
+    assert not any(k.startswith("datasets/") for k in objects.list_keys())
 
 
 def test_examples_come_from_the_data_charts_read(store):

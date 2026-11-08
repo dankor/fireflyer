@@ -88,7 +88,7 @@ def test_the_access_page_links_the_datasets_naming_each_role():
     store = RoleStore(":memory:")
     store.create_role("viewer")
     store.create_role("guest")
-    html = render_access(store.roles(), datasets={"viewer": ["orders", "users"]})
+    html = render_access(store.roles(), datasets={"viewer": [("/datasets/orders", "orders"), ("/datasets/users", "users")]})
     assert "<th>Datasets</th>" in html
     viewer = html[html.index(">viewer<"):html.index(">guest<")] if html.index(">viewer<") < html.index(">guest<") \
         else html[html.index(">viewer<"):]

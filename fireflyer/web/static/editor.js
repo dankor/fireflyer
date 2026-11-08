@@ -111,7 +111,12 @@ if (discardBtn) {
 // Storage may be off (a private window); then nothing is kept, nothing breaks.
 // `let`: a portal dashboard's name is its id, so a save that renames it moves
 // it (`moveTo`).
-let dashId = document.body.dataset.dashId || '';
+let dashId = document.body.dataset.dashId || '';          // `<group>/<name>`
+let dashUrl = document.body.dataset.dashUrl || '';        // its address
+// Someone who may only look: the page holds no YAML — every render is of the
+// stored dashboard (the server reads it by the header below) — and the only
+// mode is view.
+const viewOnly = document.body.dataset.viewOnly === '1';
 let DRAFT_KEY = 'ff-draft:' + (dashId || location.pathname);
 
 // The activity log (portal): the editor's routes take YAML, not an id, so each
@@ -162,6 +167,7 @@ if (typeof MutationObserver !== 'undefined') {
 }
 
 (function restoreDraft() {
+  if (viewOnly) return;
   let draft = null;
   try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { return; }
   if (!draft || typeof draft.yaml !== 'string' || draft.yaml === codeEl.value) return;
@@ -178,6 +184,8 @@ if (typeof MutationObserver !== 'undefined') {
 // dashboard, and a way to set the text — as an outside edit would, unsaved.
 window.ffEditor = {
   get dashId() { return dashId; },
+  get dashUrl() { return dashUrl; },
+  viewOnly,
   get yaml() { return codeEl.value; },
   get savedYaml() { return savedYaml; },
   setYaml(text) { codeEl.value = text; run(); },
@@ -357,7 +365,7 @@ function syncTitleEditable() {
   headEl.setAttribute('aria-label', view ? 'Dashboard description' : 'Rename or describe the dashboard');
 }
 function syncNameFromYaml() {
-  if (nameEl && !before) nameEl.textContent = yamlName(codeEl.value);
+  if (nameEl && !before && !viewOnly) nameEl.textContent = yamlName(codeEl.value);
 }
 
 // A manual YAML edit greys out the (now stale) preview and reveals the refresh
@@ -383,7 +391,7 @@ async function doSave() {
     saved = !!data.ok;
     if (saved) {
       savedYaml = codeEl.value; keepDraft(); saveBtn.innerHTML = SAVED_ICON;
-      if (data.id && data.id !== dashId) moveTo(data.id);
+      if (data.id && data.id !== dashId) moveTo(data.id, data.url);
     }
     else flash('Save failed: ' + (data.error || 'unknown error'), 8000);
   } catch (e) { flash('Save failed: ' + e, 8000); }
@@ -397,18 +405,18 @@ async function doSave() {
 // A save renamed the dashboard: it lives at its new name now — the address,
 // the save URL, and the conversation kept under it follow (the draft was just
 // dropped by the save).
-function moveTo(id) {
+function moveTo(id, url) {
   const oldChat = CHAT_KEY;
   dashId = id;
+  dashUrl = url;
   DRAFT_KEY = 'ff-draft:' + id;
   CHAT_KEY = 'ff-chat:' + id;
   try {
     const kept = localStorage.getItem(oldChat);
     if (kept !== null) { localStorage.setItem(CHAT_KEY, kept); localStorage.removeItem(oldChat); }
   } catch (e) { /* storage off: nothing kept to move */ }
-  const path = '/d/' + encodeURIComponent(id);
-  saveBtn.dataset.saveUrl = path + '/save';
-  window.history.replaceState(window.history.state, '', path + location.search + location.hash);
+  saveBtn.dataset.saveUrl = url + '/save';
+  window.history.replaceState(window.history.state, '', url + location.search + location.hash);
 }
 
 if (saveBtn) {
@@ -1715,11 +1723,16 @@ function comboShow(combo, open) {
   combo.querySelector('.ff-combo-list').hidden = !open;
   combo.querySelector('input').setAttribute('aria-expanded', String(open));
 }
+// Portal mode: a pick of group beside it (`.ff-combo-group`) — the list shows
+// that group's datasets, each named as the dashboard writes it (`sales:orders`
+// for another group's).
 function comboFilter(combo) {
   const q = combo.querySelector('input').value.trim().toLowerCase();
+  const group = combo.querySelector('.ff-combo-group');
   let first = null;
   for (const item of combo.querySelectorAll('.ff-combo-item')) {
-    const hit = !q || item.textContent.toLowerCase().includes(q);
+    const mine = !group || item.dataset.group === group.value;
+    const hit = mine && (!q || item.textContent.toLowerCase().includes(q));
     item.hidden = !hit;
     item.classList.remove('is-active');
     if (hit && !first) first = item;
@@ -1734,7 +1747,17 @@ function comboPick(combo, item) {
   const form = combo.closest('form');
   if (form && input.value !== (form.dataset.loadedFor || '')) refetchChartForm(form, form.elements.type.value);
 }
-modalBox.addEventListener('focusin', e => { const c = comboOf(e.target); if (c) comboFilter(c); });
+modalBox.addEventListener('focusin', e => {
+  const c = comboOf(e.target);
+  if (c && !e.target.classList.contains('ff-combo-group')) comboFilter(c);
+});
+modalBox.addEventListener('change', e => {
+  if (!e.target.classList.contains('ff-combo-group')) return;
+  const c = comboOf(e.target);
+  const input = c.querySelector('input');
+  input.value = '';
+  input.focus();                                 // the group's datasets, listed
+});
 modalBox.addEventListener('input', e => { const c = comboOf(e.target); if (c) comboFilter(c); });
 modalBox.addEventListener('mousedown', e => {
   const item = e.target.closest('.ff-combo-item');

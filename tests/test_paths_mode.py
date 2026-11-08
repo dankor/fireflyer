@@ -20,10 +20,13 @@ layout:
 
 
 class _Req:
-    """Just enough of a request for the store helpers — they only read cookies."""
+    """Just enough of a request for the store helpers: the group in its URL
+    (`/d/<path>/…`), and its headers."""
 
-    def __init__(self, cookies=None):
-        self.cookies = cookies or {}
+    def __init__(self, group=None, headers=None):
+        self.path_params = {"group": group} if group else {}
+        self.headers = headers or {}
+        self.cookies = {}
 
 
 @pytest.fixture
@@ -44,43 +47,51 @@ def test_paths_mode_on_only_when_base_set_and_no_portal(paths_mode, monkeypatch)
     assert app_mod._paths_mode() is False
 
 
-def test_active_path_defaults_to_first_and_honours_cookie(paths_mode):
+def test_a_path_is_the_group_in_the_url(paths_mode):
+    """A page's from its address; the editor's stateless routes' from the open
+    dashboard's header; else the first path."""
     (paths_mode / "alpha").mkdir()
     (paths_mode / "beta").mkdir()
-    assert app_mod._active_path(_Req()) == "alpha"  # sorted, first
-    assert app_mod._active_path(_Req({"ff_path": "beta"})) == "beta"
-    # A stale/forged cookie pointing outside the mapped folders falls back.
-    assert app_mod._active_path(_Req({"ff_path": "../secret"})) == "alpha"
+    assert app_mod._request_group(_Req()) == "alpha"  # sorted, first
+    assert app_mod._request_group(_Req("beta")) == "beta"
+    assert app_mod._request_group(_Req(headers={"X-FF-Dashboard": "beta/sales"})) == "beta"
+    # A forged header pointing outside the mapped folders falls back.
+    assert app_mod._request_group(_Req(headers={"X-FF-Dashboard": "../secret/x"})) == "alpha"
 
 
 def test_dash_store_is_per_path(paths_mode):
     (paths_mode / "alpha").mkdir()
     (paths_mode / "beta").mkdir()
-    app_mod._dash_store(_Req({"ff_path": "alpha"})).create(YAML)
-    assert [r.name for r in app_mod._dash_store(_Req({"ff_path": "alpha"})).list()] == ["Sales"]
-    assert app_mod._dash_store(_Req({"ff_path": "beta"})).list() == []
+    app_mod._dash_store(_Req("alpha")).create(YAML)
+    assert [r.name for r in app_mod._dash_store(_Req("alpha")).list()] == ["Sales"]
+    assert [r.group for r in app_mod._dash_store(_Req("alpha")).list()] == ["alpha"]
+    assert app_mod._dash_store(_Req("beta")).list() == []
 
 
 def test_dataset_store_is_isolated_per_path(paths_mode, tmp_path):
     (paths_mode / "alpha").mkdir()
     (paths_mode / "beta").mkdir()
     csv = b"city,n\nNY,1\nLA,2\n"
-    app_mod._dataset_store(_Req({"ff_path": "alpha"})).create("cities", csv)
-    assert app_mod._dataset_store(_Req({"ff_path": "alpha"})).get("cities") is not None
-    assert app_mod._dataset_store(_Req({"ff_path": "beta"})).get("cities") is None
+    app_mod._dataset_store(_Req("alpha")).create("cities", csv)
+    assert app_mod._dataset_store(_Req("alpha")).get("cities") is not None
+    assert app_mod._dataset_store(_Req("beta")).get("cities") is None
 
 
-def test_gallery_kwargs_lists_paths_and_active(paths_mode):
+def test_the_picker_lists_the_paths(paths_mode):
     (paths_mode / "alpha").mkdir()
     (paths_mode / "beta").mkdir()
-    kw = app_mod._gallery_kwargs(_Req({"ff_path": "beta"}))
-    # No login in paths mode, so no Author column.
-    assert kw == {"paths": ["alpha", "beta"], "active_path": "beta", "authors": False}
+    html = app_mod._picker(_Req("beta"), "beta", "datasets")
+    assert '<a href="/datasets/alpha">alpha</a>' in html and '<a href="/datasets/beta" class="active">beta</a>' in html
 
 
-def test_gallery_kwargs_have_no_paths_outside_paths_mode(paths_mode, monkeypatch):
-    monkeypatch.setattr(app_mod, "PATHS_BASE", "")
-    assert app_mod._gallery_kwargs(_Req()) == {"authors": False}
+def test_a_group_reference_is_an_error_in_paths_mode(paths_mode):
+    """Paths stay isolated: there's no `demo:orders`."""
+    from fireflyer.dashboard import Dashboard, DashboardError
+
+    (paths_mode / "alpha").mkdir()
+    with pytest.raises(DashboardError, match="there are no groups here"):
+        Dashboard.from_yaml(YAML.replace("dataset: orders", "dataset: beta:orders"),
+                            datasets=app_mod._dataset_store(_Req("alpha")))
 
 
 def test_the_demo_folder_is_a_usable_path():

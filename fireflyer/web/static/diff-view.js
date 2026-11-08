@@ -134,7 +134,7 @@ export function initDiff(look) {
   async function listVersions() {
     if (!editor.dashId) return [];
     try {
-      const res = await fetch(`/d/${encodeURIComponent(editor.dashId)}/versions`);
+      const res = await fetch(`${editor.dashUrl}/versions`);
       return res.ok ? (await res.json()).versions : [];
     } catch (e) { return []; }
   }
@@ -143,7 +143,7 @@ export function initDiff(look) {
     if (value === 'now') return editor.yaml;
     if (value === 'saved') return editor.savedYaml;
     if (!texts.has(value)) {
-      const res = await fetch(`/d/${encodeURIComponent(editor.dashId)}/versions/${value.slice(1)}`);
+      const res = await fetch(`${editor.dashUrl}/versions/${value.slice(1)}`);
       texts.set(value, res.ok ? (await res.json()).yaml : '');
     }
     return texts.get(value);
