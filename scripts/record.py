@@ -207,7 +207,51 @@ def groups(clip: Clip) -> None:
     clip.click("#ff-modes button[data-mode=code]", settle=2.4)               # reading `_alice:orders`
 
 
-SCENES = {"users-roles": users_roles, "groups": groups}
+def edit_chart(clip: Clip) -> None:
+    """docs/use-cases.md → "Edit a chart with UI" (local paths mode, the `demo`
+    path's "Orders overview", its Orders tab): the "big orders" table's form
+    beside its preview, which follows every change — a new title and
+    description, a column dragged to the front and one removed — and is live:
+    its filter button shows the description and the chart's filter. Cancels
+    at the end, so the file in git is untouched."""
+    page = clip.page
+    clip.goto("/d/demo/orders-overview")
+    clip.hold(0.8)
+    clip.click("#ff-modes button[data-mode=edit]", settle=0.5)
+    clip.click(".fireflyer-tab[data-tab-name=Orders]", settle=1.4)
+    # The pencil shows on hover: a click where the cursor is, as a hand makes
+    # it (a locator's click checks the spot first, before the hover lit it).
+    cell = ".fireflyer-dashboard-cell[data-cid=big_orders]"
+    clip.move(cell)
+    clip.hold(0.3)
+    clip.move(f"{cell} .fireflyer-edit-btn")
+    page.mouse.click(*clip.at)
+    page.wait_for_selector(".ff-modal-preview .ff-preview-board")
+    clip.hold(1.4)
+
+    clip.click("#ff-modal-form input[name=title]", settle=0.2)
+    page.keyboard.press("ControlOrMeta+A")
+    clip.type("Big orders")
+    clip.click("#ff-modal-form input[name=description]", settle=0.2)
+    clip.type("Orders worth 150 to 450, the biggest first.", per_key=0.04)
+    clip.hold(1.2)                                                    # the title follows
+
+    columns = ".ff-list[data-name=columns]"
+    page.locator(f"{columns} .ff-list-item[data-value=channel]").scroll_into_view_if_needed()
+    clip.hold(0.6)
+    clip.move(f"{columns} .ff-list-item[data-value=amount] .ff-list-grip")   # amount to the front
+    page.mouse.down()
+    clip.move(f"{columns} .ff-list-item[data-value=order_day] .ff-list-name", steps=18)
+    page.mouse.up()
+    clip.hold(1.6)
+    clip.click(f"{columns} .ff-list-item[data-value=channel] .ff-list-del", settle=1.6)
+
+    clip.click(".ff-modal-preview .fireflyer-filter-indicator summary", settle=3.0)  # it's live
+    clip.click(".ff-modal-preview .fireflyer-filter-indicator summary", settle=0.4)
+    clip.click("#ff-modal-form .ff-cancel", settle=0.8)
+
+
+SCENES = {"users-roles": users_roles, "groups": groups, "edit-chart": edit_chart}
 
 
 def main() -> None:

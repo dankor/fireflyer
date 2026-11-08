@@ -347,6 +347,41 @@ pre.error { color: var(--error); white-space: pre-wrap; font-size: 12px; }
 .ff-combo-name { flex: none; }
 .ff-combo-about { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--muted); font-size: 12px; }
+/* An ordered list (`params.ListParam`, static/list-builder.js): a table's
+   columns, measures and sort — a row each, dragged by its grip, ✕ to drop,
+   (sort) an arrow for its direction; the + opens the column picker's list,
+   inline like it, with a search on top. */
+.ff-list { display: flex; flex-direction: column; gap: 6px; }
+.ff-list-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ff-list-items:empty { display: none; }
+.ff-list-item {
+  display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 4px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg); font-size: 13px;
+}
+.ff-list-item.is-dragging { opacity: .4; }
+.ff-list-grip { display: flex; color: var(--muted); cursor: grab; }
+.ff-list-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ff-list-dir, .ff-list-del {
+  display: flex; padding: 3px; border: 0; border-radius: 3px; background: none;
+  color: var(--muted); cursor: pointer;
+}
+.ff-list-dir:hover, .ff-list-del:hover { color: var(--text); background: var(--panel); }
+.ff-list-del:hover { color: var(--error); }
+.ff-list-dir:not(.is-desc) svg { transform: rotate(180deg); }     /* the icon points down */
+.ff-list-empty { display: none; font-size: 12px; color: var(--muted); }
+.ff-list:not(:has(.ff-list-items > .ff-list-item)) > .ff-list-empty { display: block; }
+.ff-list-add { align-self: stretch; }
+.ff-list-add[hidden] { display: none; }
+.ff-list-add-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+  list-style: none; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); cursor: pointer;
+}
+.ff-list-add-btn::-webkit-details-marker { display: none; }
+.ff-list-add[open] > .ff-list-add-btn { border-color: var(--accent); color: var(--accent); }
+.ff-list-search { margin-bottom: 4px; }
+.ff-list-option[hidden] { display: none; }
+.ff-list-none { padding: 5px 8px; color: var(--muted); font-size: 12px; }
 /* The picked type as the closed field shows it: the same icon + name row as
    the options — `selectedcontent` is its own box inside the button. */
 .ff-type-select selectedcontent { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -358,6 +393,39 @@ pre.error { color: var(--error); white-space: pre-wrap; font-size: 12px; }
 .ff-modal-foot {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 16px; border-top: 1px solid var(--border);
+}
+/* The chart modal: its fields on the left, the chart as they'd draw it on the
+   right (`.ff-modal-preview`, editor.js), as tall as the chart is on the
+   dashboard. The preview is outside the <form> (its chart has fields of its
+   own), so the grid is the modal's and the form lends it its parts
+   (`display: contents`). Stacked on a narrow screen. */
+.ff-modal:has(.ff-modal-preview) {
+  width: 1080px; display: grid; grid-template-columns: 400px minmax(0, 1fr);
+  grid-template-areas: "head head" "body preview" "error error" "foot foot";
+}
+.ff-modal:has(.ff-modal-preview) > #ff-modal-form { display: contents; }
+#ff-modal-form > .ff-modal-head { grid-area: head; }
+#ff-modal-form > .ff-modal-body { grid-area: body; }
+#ff-modal-form > .ff-modal-error { grid-area: error; margin-bottom: 12px; }
+#ff-modal-form > .ff-modal-foot { grid-area: foot; }
+.ff-modal-preview {
+  grid-area: preview; align-self: start; margin: 14px 16px 14px 0; max-height: 60vh;
+  border: 1px dashed var(--border); border-radius: 6px; padding: 8px;
+  transition: opacity .15s;
+}
+.ff-modal-preview.is-loading { opacity: .6; }
+.ff-preview-board, .ff-preview-board > .fireflyer-dashboard-row { height: 100%; margin: 0; }
+.ff-preview-error { padding: 4px; color: var(--muted); font-size: 12px; }
+/* A look, not the dashboard: no adding a global filter or crossfiltering from
+   it (editor.js drops those requests), so nothing offers to. */
+.ff-modal-preview .fireflyer-filter-add { display: none; }
+.ff-modal-preview [hx-post="/dashboard"] { cursor: default; }
+@media (max-width: 860px) {
+  .ff-modal:has(.ff-modal-preview) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "head" "body" "preview" "error" "foot";
+  }
+  .ff-modal-preview { margin: 0 16px 14px; }
 }
 .ff-btn {
   border: 1px solid var(--border); background: var(--bg); color: var(--text);

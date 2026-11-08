@@ -721,3 +721,51 @@ def test_the_dataset_page_says_which_dashboards_use_each_column(client, versione
     data = json.loads(re.search(r'<script type="application/json" id="ds-data">(.*?)</script>', page, re.S).group(1))
     assert data["usedIn"] == {"status": [[f"/d/local/{dash_id}", "S"]]}
     assert "<th>Dashboards</th>" in page and f'href="/d/local/{dash_id}"' in page
+
+
+# --- the chart modal's preview ---------------------------------------------------------
+
+
+def _preview(client, **form):
+    return client.post("/chart/config/preview", data={"yaml_text": _YAML, **form}).text
+
+
+def test_the_preview_draws_the_chart_as_the_form_would_save_it(client):
+    """Edit: the form Save posts, drawn — the new title, nothing saved."""
+    html = _preview(client, cid="b", type="bar", dataset="orders", title="Renamed", x="at", y="status",
+                    calc="n")
+    assert html.startswith('<div class="fireflyer-dashboard ff-preview-board">')
+    assert "Renamed" in html and _labels(html)
+    assert 'class="fireflyer-chart-tools"' not in html             # no toolbar in a look
+
+
+def test_the_preview_draws_a_chart_being_added(client):
+    html = _preview(client, type="table", dataset="orders", title="New one", add_mode="row", add_index="end")
+    assert "New one" in html and ">pending<" in html
+
+
+def test_a_form_that_wouldnt_save_previews_why(client):
+    html = _preview(client, cid="b", type="bar", dataset="orders", title="T", x="at", calc="missing")
+    assert html.startswith('<div class="ff-preview-error" role="alert">') and "unknown calc" in html
+
+
+def test_a_chart_that_cant_draw_previews_as_the_dashboard_would(client):
+    """It would save — the chart's own error shows in its card, as on the dashboard."""
+    html = _preview(client, cid="b", type="bar", dataset="orders", title="T", x="nope", calc="n")
+    assert "ff-preview-board" in html and "unable to find column" in html
+
+
+def test_the_previews_own_controls_redraw_just_its_cell(client):
+    """A table's page in the preview: the cell alone, of the chart as edited."""
+    table = {"type": "table", "dataset": "orders", "title": "Paged", "pagination": "2"}
+    first = _preview(client, cid="b", part="cell", **table)
+    second = _preview(client, cid="b", part="cell", table_page="2", **table)
+    assert first.startswith('<div class="fireflyer-dashboard-cell"') and "Paged" in first
+    assert re.findall(r">(\d)</td>", first)[:1] == ["1"] and re.findall(r">(\d)</td>", second)[:1] == ["3"]
+
+
+def test_a_grain_picked_in_the_preview_is_its_own(client):
+    """No out-of-band grain state for the page, as a dashboard cell's has."""
+    html = _preview(client, cid="b", type="bar", dataset="orders", title="T", x="at", y="status",
+                    calc="n", part="cell", set_grain="b|day|0")
+    assert "fireflyer-dashboard-cell" in html and "hx-swap-oob" not in html

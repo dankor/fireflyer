@@ -495,7 +495,8 @@ def render_editor_page(
     styles = assets.favicons() + "\n" + assets.stylesheets("editor.css", "filters.css", "code.css", "nav.css", "profile.css")
     return (
         page.replace("__FF_STYLES__", styles)
-        .replace("__FF_SCRIPT__", assets.script("filter-builder.js") + "\n" + assets.script("editor.js")
+        .replace("__FF_SCRIPT__", assets.script("filter-builder.js") + "\n" + assets.script("list-builder.js")
+                 + "\n" + assets.script("editor.js")
                  + "\n" + assets.module("yaml-editor.js"))
         .replace("__FF_CHAT__", CHAT_PANEL)
         # Which dashboard: its version history, and the key its unsaved draft
@@ -2713,6 +2714,41 @@ async def chart_config_save(request: Request) -> dict:
     cid = form.get("cid", "")
     return _edited(request, "edit_chart", yaml_text, lambda: config_edit.apply_edit(yaml_text, cid, form),
                    **_form_detail(form))
+
+
+@app.post("/chart/config/preview", response_class=HTMLResponse)
+async def chart_config_preview(request: Request) -> str:
+    """The chart as the modal's fields would make it, drawn beside the form as
+    they change: the form Save (`cid`) or Add (none) would post. Nothing is
+    saved, or logged — a keystroke isn't a gesture. Read as the dashboard is,
+    through the viewer's access.
+
+    The preview's own controls — a table's pages and search, a legend's pages,
+    a bar's time grain — come back here (editor.js) with what they'd send
+    `/dashboard/cell`, and `part=cell` for just the cell they swap. A grain is
+    the preview's alone: no out-of-band state for the page, as a cell's has."""
+    form = await request.form()
+    grains = form.getlist("grain")
+    if form.get("set_grain"):
+        grains = set_grain_token(grains, form["set_grain"])
+    try:
+        text, cid = config_edit.edited_chart(form.get("yaml_text", ""), form, form.get("cid", ""))
+        dashboard, _, _ = _dashboard_for(request, text, "", "")
+        cell = dashboard.render_cell(
+            cid, grain_tokens=grains,
+            legend_page=int(form.get("legend_page") or 0),
+            table_page=int(form.get("table_page") or 1),
+            table_query=form.get("table_q", ""),
+        )
+    except (config_edit.ConfigEditError, DashboardError, ValueError) as exc:
+        return f'<div class="ff-preview-error" role="alert">{escape(str(exc))}</div>'
+    if form.get("part") == "cell":
+        return cell
+    # The cell in a one-cell dashboard row, so the dashboard's look (and its
+    # theme's colours) apply and the chart fills the pane as it fills its slot.
+    return ('<div class="fireflyer-dashboard ff-preview-board">'
+            '<div class="fireflyer-dashboard-row" style="grid-template-columns: 1fr; grid-template-rows: 100%;">'
+            f"{cell}</div></div>")
 
 
 # --- Calcs manager ---------------------------------------------------------

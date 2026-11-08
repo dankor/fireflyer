@@ -14,6 +14,7 @@ from fireflyer.params import (
     DatasetParam,
     FilterListParam,
     IntParam,
+    ListParam,
     ParamContext,
     TextParam,
 )
@@ -331,3 +332,54 @@ def test_the_search_box_is_outside_the_form():
     live = filter_fields(["c"], "c", "in", choices=many, live="orders")
     box = re.search(r'<input[^>]*name="filter_q"[^>]*>', live).group(0)
     assert 'hx-post="/filter/values"' in box and 'hx-target="next .ff-filter-choices"' in box
+
+
+# --- ordered lists (a table's columns, measures, sort) ---------------------------
+
+
+def _rows(html):
+    return re.findall(r'<li class="ff-list-item" draggable="true" data-value="([^"]*)">', html)
+
+
+def test_a_list_is_a_row_per_entry_submitting_the_same_text():
+    """Rows to drag, remove and add to — the hidden input holds what the text
+    field did, so parsing is unchanged."""
+    p = ListParam("columns", "Columns", reads="columns", placeholder="all columns")
+    ctx = ParamContext(columns=["name", "zone", "age"], column_types={"age": "number"})
+    html = p.render(["zone", "age"], ctx)
+    assert _rows(html.split("<template")[0]) == ["zone", "age"]
+    assert '<input type="hidden" name="columns" value="zone, age">' in html
+    assert re.findall(r'class="ff-colpick-item ff-list-option" data-value="([^"]+)"', html) == ["name", "zone", "age"]
+    assert 'class="ff-type-glyph" title="number"' in html          # a column's type icon
+    assert '<span class="ff-list-empty">all columns</span>' in html
+    assert p.parse(FakeForm(single={"columns": "zone, age"})) == ["zone", "age"]
+
+
+def test_measures_offer_the_value_calcs():
+    p = ListParam("measures", "Measures", reads="calcs")
+    html = p.render([], ParamContext(columns=["name"], calcs=["n", "avg_age"]))
+    assert re.findall(r'ff-list-option" data-value="([^"]+)"', html) == ["n", "avg_age"]
+    assert _rows(html.split("<template")[0]) == []
+
+
+def test_sort_rows_carry_their_direction_and_offer_the_tables_output():
+    """`-name` is descending; the choices come from the columns and measures
+    lists (`data-from`), which the script narrows to their entries."""
+    p = ListParam("sort", "Sort", reads="none", options_from=("columns", "measures"), directions=True)
+    html = p.render(["-age", "+name"], ParamContext(columns=["name", "age"], calcs=["n"]))
+    assert _rows(html.split("<template")[0]) == ["-age", "+name"]
+    assert html.count('class="ff-list-dir is-desc"') == 1 and 'title="Ascending — click for descending"' in html
+    assert '<span class="ff-list-name">age</span>' in html          # the name, not its sign
+    assert 'data-from="columns measures"' in html
+    assert p.parse(FakeForm(single={"sort": "-age, +name"})) == ["-age", "+name"]
+
+
+def test_a_list_holding_every_choice_has_no_plus():
+    """Nothing left to add, no + (the script keeps it so as the list changes)."""
+    p = ListParam("columns", "Columns", reads="columns")
+    ctx = ParamContext(columns=["name", "zone"])
+    assert '<details class="ff-colpick ff-list-add" hidden>' in p.render(["zone", "name"], ctx)
+    assert '<details class="ff-colpick ff-list-add">' in p.render(["zone"], ctx)
+    # Sort's choices follow its siblings, which only the page knows: the script decides.
+    sort = ListParam("sort", "Sort", reads="none", options_from=("columns",), directions=True)
+    assert '<details class="ff-colpick ff-list-add">' in sort.render(["-name", "zone"], ctx)

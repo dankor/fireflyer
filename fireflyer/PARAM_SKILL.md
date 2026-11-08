@@ -55,7 +55,9 @@ class MyParam(Param):
 Existing widgets to reuse before writing a new one: `TextParam`, `DatasetParam`,
 `ColumnParam`, `CalcParam` (dropdown of the dataset's calc keys),
 `ChoiceParam(choices)`, `IntParam(minimum, maximum, step, nullable)`,
-`BoolParam`, `FilterListParam`. Add a new subclass **only** when none fit.
+`BoolParam`, `FilterListParam`, `ListParam(reads, options_from, directions)` (an
+ordered list to drag, remove from and add to — the table's columns, measures and
+sort). Add a new subclass **only** when none fit.
 
 Note: form controls are styled by the editor page (`app.py`) via the `.ff-input`
 class and the theme tokens — a new widget that uses `class="ff-input"` inherits

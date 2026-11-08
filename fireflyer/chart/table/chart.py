@@ -154,7 +154,8 @@ class Table:
         ListParam("columns", "Columns", reads="columns", placeholder="all columns"),
         ListParam("measures", "Measures", reads="calcs", placeholder="none — show raw rows"),
         # Sort names the table's own output columns — read already, or measures.
-        ListParam("sort", "Sort", reads="none", placeholder="-revenue, +status"),
+        ListParam("sort", "Sort", reads="none", placeholder="unsorted",
+                  options_from=("columns", "measures"), directions=True),
         BoolParam("search", "Search box"),
         IntParam("pagination", "Rows per page", minimum=0),
         FilterListParam("filters", "Filters"),

@@ -76,7 +76,7 @@ For anyone in a hurry. *"Add a table of orders."* *"Put the pie next to it."* *"
 
 ## What's inside
 
-- **Five chart types** — table, pie, bar, map (a hex heatmap over OpenStreetMap) and number.
+- **Five chart types** — table, pie, bar, map (a hex heatmap over OpenStreetMap) and number, each [edited in a form beside a live preview](docs/use-cases.md#edit-a-chart-with-ui).
 - **Calcs** — sums, counts, averages and ratios, defined once and shared by every chart. [How →](docs/use-cases.md#create-a-dashboard-with-code)
 - **Filters** — fixed per chart, [click-to-filter across charts](docs/use-cases.md#filter-with-a-cross-filter), [global](docs/use-cases.md#filter-with-a-global-filter), and [per role](docs/use-cases.md#filter-with-a-role).
 - **Datasets** — [upload a CSV](docs/use-cases.md#upload-a-dataset), shape its columns with formulas, keep every version and [compare them](docs/use-cases.md#compare-dataset-versions).

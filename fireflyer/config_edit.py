@@ -371,7 +371,7 @@ def build_form(text: str, cid: str, type_override: str = "", resolve=None,
         f'<button type="button" class="ff-btn ff-cancel">Cancel</button>'
         f'<button type="submit" class="ff-btn ff-primary">Save</button>'
         f'</div>'
-        f'</form>'
+        f'</form>{_PREVIEW}'
     )
 
 
@@ -580,6 +580,24 @@ def apply_edit(text: str, cid: str, form) -> str:
     return new_text
 
 
+# Beside the form: the chart as its fields would draw it (`edited_chart`,
+# `/chart/config/preview`), filled and refreshed by editor.js. Outside the
+# <form>: a chart carries fields of its own (a table's search, the filter
+# panel's), which mustn't ride along with Save.
+_PREVIEW = '<div class="ff-modal-preview" aria-label="Preview"></div>'
+
+
+def edited_chart(text: str, form, cid: str = "") -> tuple[str, str]:
+    """What the modal's `form` would save — chart `cid` edited, or a new one
+    added when there's no `cid` — and which chart that is: the YAML and the id,
+    for the preview beside the form to draw. Raises as a save would."""
+    if cid:
+        return apply_edit(text, cid, form), cid
+    before = set(_load(text).get("charts") or {})
+    added = add_chart(text, form)
+    return added, next(c for c in _load(added)["charts"] if c not in before)
+
+
 # --- adding a new chart -------------------------------------------------------
 #
 # The "+" buttons in the editor's left gutter add a chart via the same modal.
@@ -647,7 +665,7 @@ def build_add_form(text: str, ctype: str, add_mode: str, add_index: str,
         '<div class="ff-modal-foot">'
         '<button type="button" class="ff-btn ff-cancel">Cancel</button>'
         '<button type="submit" class="ff-btn ff-primary">Add</button>'
-        '</div></form>'
+        '</div></form>' + _PREVIEW
     )
 
 

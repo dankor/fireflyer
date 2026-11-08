@@ -754,14 +754,43 @@ config through a form. Each chart hovered in the editor shows a **pencil button*
 (only while the YAML pane is open); clicking it opens a **modal** whose fields are
 the same config, rendered as widgets.
 
+Beside the fields, the modal **previews** the chart as they would draw it: the
+form Save (or Add) would post goes to `POST /chart/config/preview`, which makes
+the YAML that would be saved (`config_edit.edited_chart` — the same
+`apply_edit` / `add_chart`), and renders just that chart's cell, read as the
+dashboard is (through the viewer's access), in a one-cell dashboard row so the
+dashboard's look and theme apply. Nothing is saved or logged. The browser asks
+again a moment after any change to the fields — typing, a pick, the filter
+builder's rows, a new type or dataset — skipping a form identical to the last
+one sent and dropping an answer a newer one overtook; the pane is as tall as
+the chart is on the dashboard (320px for a new one). A form that wouldn't save
+previews its reason; a chart that saves but can't draw shows its error in its
+card, as on the dashboard.
+
+The preview's chart is **live**: its filter button (description, dataset,
+filters), tooltips and info icons work as on the dashboard. It sits **outside
+the `<form>`** — a chart carries fields of its own (a table's search, the
+filter panel's add), which mustn't post with Save — so the modal is the grid
+and the form lends it its parts (`display: contents`). Its own controls — a
+table's pages and search, a legend's pages, a bar's time grain — would ask
+`/dashboard/cell`, which draws the dashboard's chart from the YAML as it is;
+`editor.js` (`htmx:configRequest`) sends them to the preview route instead,
+with the form as it is now and `part=cell`, for just the cell they swap. A
+grain picked there is the preview's (no out-of-band page state) and kept while
+the modal is open. What else it asks — a crossfilter, the filter panel's add —
+is the dashboard's state, not a look's, and is dropped (the add is hidden).
+
 The widgets are a small shared abstraction — the **only** one the project permits
 against its otherwise anti-abstraction stance, because it's what makes the editor
 usable and it's confined to editor support:
 
 * **Param classes** (`fireflyer/params.py`) — `TextParam`, `DatasetParam`,
-  `ColumnParam`, `ChoiceParam`, `IntParam`, `BoolParam`, `FilterListParam`. A
-  `Param` renders an autoescaped input, parses the submitted value, and emits it
-  back to YAML. New widget kinds are added here once and reused.
+  `ColumnParam`, `ChoiceParam`, `IntParam`, `BoolParam`, `FilterListParam`,
+  `ListParam` (an ordered list — a row per entry, dragged to reorder, ✕ to
+  remove, + to add from a searchable menu, optionally an ascending /
+  descending arrow; submitted as comma-separated text; `web/static/list-builder.js`).
+  A `Param` renders an autoescaped input, parses the submitted value, and emits
+  it back to YAML. New widget kinds are added here once and reused.
 * **A chart declares `PARAMS`** — a `list[Param]`, one per constructor field, in
   display order. The chart's YAML schema is still its constructor; `PARAMS` is the
   *editor view* of that schema. A test keeps the two in lockstep. The modal also

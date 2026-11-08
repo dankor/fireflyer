@@ -955,3 +955,24 @@ def test_a_hash_inside_quotes_isnt_a_comment():
     old = '  a:\n    title: "No. #1"  # real\n'
     new = '  a:\n    title: "No. #2"\n'
     assert keep_comments(old, new) == '  a:\n    title: "No. #2"  # real\n'
+
+
+def test_edited_chart_is_what_save_or_add_would_make(orders_parquet):
+    """The preview's source: the edited chart's YAML and id, or a new one's."""
+    doc = _doc(orders_parquet)
+    edit = FakeForm(single={"type": "number", "dataset": orders_parquet, "title": "Takings"})
+    text, cid = ce.edited_chart(doc, edit, "revenue")
+    assert (text, cid) == (ce.apply_edit(doc, "revenue", edit), "revenue")
+
+    add = FakeForm(single={"type": "pie", "dataset": orders_parquet, "title": "P", "column": "status",
+                           "add_mode": "row", "add_index": "end"})
+    text, cid = ce.edited_chart(doc, add)
+    assert cid == "pie" and yaml.safe_load(text)["charts"][cid]["title"] == "P"
+
+
+def test_both_modal_forms_carry_the_preview_outside_the_form(orders_parquet):
+    """After `</form>`: the preview's chart has fields of its own (a table's
+    search, the filter panel's), which Save mustn't post."""
+    for html in (ce.build_form(_doc(orders_parquet), "revenue"),
+                 ce.build_add_form(_doc(orders_parquet), "table", "row", "end")):
+        assert html.endswith('</form><div class="ff-modal-preview" aria-label="Preview"></div>')
