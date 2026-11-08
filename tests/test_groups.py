@@ -308,6 +308,19 @@ def test_the_picker_splits_personal_and_shared_groups(portal):
     assert 'class="is-inactive" title="Nothing here is shared with you">_alice</a>' in personal
 
 
+def test_the_chart_modals_preview_reads_as_its_viewer(portal):
+    """Editing a chart in his own group on alice's data, bob's preview shows a
+    lock until it's shared, then just the rows his role is granted."""
+    bob = _client("bob")
+    form = {"yaml_text": _yaml("Mine", "_alice:orders"), "cid": "rows",
+            "type": "table", "dataset": "_alice:orders", "title": "Rows"}
+    preview = lambda: bob.post("/chart/config/preview", data=form,
+                               headers={"X-FF-Dashboard": "_bob/Mine"}).text
+    assert "fireflyer-no-access" in preview()
+    _share(portal)
+    assert _statuses(preview()) == {"paid"}
+
+
 def test_only_the_lists_have_the_picker(portal):
     """A dashboard or a dataset you opened has back, and its group read-only."""
     admin = _client("admin")

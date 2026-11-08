@@ -207,7 +207,39 @@ def groups(clip: Clip) -> None:
     clip.click("#ff-modes button[data-mode=code]", settle=2.4)               # reading `_alice:orders`
 
 
-SCENES = {"users-roles": users_roles, "groups": groups}
+def edit_chart(clip: Clip) -> None:
+    """docs/use-cases.md → "Edit a chart with UI" (local paths mode, the `demo`
+    path's "Orders overview"): the pie's form beside its preview, which follows
+    every change and is live (its filter button opens). Cancels at the end, so
+    the file in git is untouched."""
+    page = clip.page
+    clip.goto("/d/demo/orders-overview")
+    clip.hold(1.0)
+    clip.click("#ff-modes button[data-mode=edit]", settle=0.6)
+    page.locator(".fireflyer-dashboard-cell[data-cid=status_pie]").first.scroll_into_view_if_needed()
+    clip.hold(0.4)
+    clip.move(".fireflyer-dashboard-cell[data-cid=status_pie]")
+    clip.hold(0.4)
+    # The pencil shows on hover: a click where the cursor is, as a hand makes
+    # it (a locator's click checks the spot first, before the hover lit it).
+    clip.move(".fireflyer-dashboard-cell[data-cid=status_pie] .fireflyer-edit-btn")
+    page.mouse.click(*clip.at)
+    page.wait_for_selector(".ff-modal-preview .ff-preview-board")
+    clip.hold(1.6)
+    clip.move("#ff-modal-form select[name=column]")
+    page.select_option("#ff-modal-form select[name=column]", "channel")
+    clip.hold(1.8)                                                   # the slices follow
+    clip.click("#ff-modal-form input[name=title]", settle=0.2)
+    page.keyboard.press("ControlOrMeta+A")
+    clip.type("Revenue by channel")
+    clip.hold(1.4)
+    clip.click("#ff-modal-form input[name=total]", settle=1.8)       # the centre empties
+    clip.click(".ff-modal-preview .fireflyer-filter-indicator summary", settle=1.8)  # it's live
+    clip.click(".ff-modal-preview .fireflyer-filter-indicator summary", settle=0.4)
+    clip.click("#ff-modal-form .ff-cancel", settle=0.8)
+
+
+SCENES = {"users-roles": users_roles, "groups": groups, "edit-chart": edit_chart}
 
 
 def main() -> None:

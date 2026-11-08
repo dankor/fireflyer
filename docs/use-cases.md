@@ -18,6 +18,7 @@ status, amount and day.
   - [Create a dashboard with UI](#create-a-dashboard-with-ui)
   - [Create a dashboard with code](#create-a-dashboard-with-code)
   - [Create a dashboard with AI](#create-a-dashboard-with-ai)
+  - [Edit a chart with UI](#edit-a-chart-with-ui)
   - [Arrange the layout with UI](#arrange-the-layout-with-ui)
   - [Arrange the layout with code](#arrange-the-layout-with-code)
   - [Arrange the layout with AI](#arrange-the-layout-with-ai)
@@ -82,6 +83,20 @@ your datasets' columns (never their data), writes the whole YAML, checks it,
 and the preview updates at once; keep asking to refine it, then save.
 
 ![Creating a dashboard by asking the AI assistant](../media/create-ai.webp)
+
+### Edit a chart with UI
+
+A chart's settings are a form: its type, dataset, title, the columns and calc it
+draws, its filters. In **edit** mode, the pencil on a chart opens it, with the
+chart beside the form as it would look — at its size on the dashboard, redrawn
+as you change anything. A table's columns, measures and sort are lists: drag
+a row to reorder it, ✕ to drop it, + to add one, and flip a sort key's arrow
+for descending. The preview is the real chart: open its filter
+button to read the description, page and search a table, switch a bar's time
+grain. Nothing changes on the dashboard until you save, and Cancel leaves it
+as it was. Adding a chart works the same way.
+
+![Editing a chart beside its live preview](../media/edit-chart.webp)
 
 ### Arrange the layout with UI
 

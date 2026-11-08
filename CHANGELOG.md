@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-08
+
+### Added
+
+- **A live preview in the chart modal.** Editing or adding a chart shows it
+  beside the form as the fields would draw it — at its size on the dashboard,
+  redrawn a moment after any change (type, dataset, columns, calc, filters,
+  title). The preview is live: its filter button, descriptions and
+  tooltips work, and a table's paging and search, a legend's paging and a
+  bar's time grain redraw the preview (crossfilters stay the dashboard's).
+  Nothing is saved until Save; a form that wouldn't save says why in the
+  preview. `POST /chart/config/preview`, `config_edit.edited_chart`.
+- **A table's columns, measures and sort are lists to arrange** in the chart
+  form, not comma-separated text: a row per entry, dragged to reorder, ✕ to
+  remove, + to add from a searchable menu of the dataset's columns (its calcs,
+  for measures; the table's own columns and measures, for sort), and an arrow
+  to flip a sort key between ascending and descending. `ListParam`,
+  `static/list-builder.js`; the YAML is unchanged.
+- Use case "Edit a chart with UI", with its clip (`scripts/record.py edit-chart`).
+
 ## [0.24.0] - 2026-11-08
 
 ### Added
@@ -1383,7 +1403,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/dankor/fireflyer/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/dankor/fireflyer/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/dankor/fireflyer/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/dankor/fireflyer/compare/v0.21.0...v0.22.0

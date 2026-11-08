@@ -325,16 +325,24 @@ class BoolParam(Param):
 
 
 class ListParam(Param):
-    """Comma-separated list of names — the table's `columns`, `measures` and
-    `sort`.
+    """An ordered list of names — the table's `columns`, `measures` and `sort`.
 
-    A text field rather than a multi-select: all three are **order-sensitive**
-    (column order, measure order, sort precedence), and `sort` entries carry a
-    `+`/`-` prefix. A checkbox list expresses neither.
-    """
+    Order matters in all three (column order, measure order, sort precedence),
+    and `sort` entries carry a direction, so it's a list to arrange rather than
+    a multi-select: one row per entry — dragged by its grip to reorder, ✕ to
+    remove, (`sort`) an arrow to flip ascending / descending — and a + that
+    picks another from what the list may hold. `static/list-builder.js` drives
+    it; what it submits is the same comma-separated text the field always took
+    (`-name` descending), so parsing and the YAML don't change.
+
+    What the + offers: `reads="columns"` the dataset's columns (column calcs
+    included), `"calcs"` its value calcs; `options_from` names sibling lists
+    whose entries are the choices instead — `sort` orders the table's own
+    output, its columns (all of them while that list is empty) and measures."""
     kind = "list"
 
-    def __init__(self, name: str, label: str, *, reads: str, placeholder: str = ""):
+    def __init__(self, name: str, label: str, *, reads: str, placeholder: str = "",
+                 options_from: tuple[str, ...] = (), directions: bool = False):
         # A list holds columns, calcs or neither (`sort` names output columns):
         # required, because which it is decides what the chart may read.
         super().__init__(name, label)
@@ -342,18 +350,73 @@ class ListParam(Param):
             raise ValueError(f"list param {name!r}: reads must be columns, calcs or none")
         self.reads = reads
         self.placeholder = placeholder
+        self.options_from = options_from
+        self.directions = directions
 
     def render(self, value, ctx: ParamContext) -> str:
-        val = ", ".join(str(v) for v in (value or []))
-        placeholder = (
-            f' placeholder="{escape(self.placeholder, quote=True)}"'
-            if self.placeholder
-            else ""
-        )
+        entries = [str(v) for v in (value or [])]
+        types = {} if self.reads == "calcs" else ctx.column_types   # a sort key is mostly a column
+        rows = "".join(self._row(entry, types) for entry in entries)
+        sources = f' data-from="{escape(" ".join(self.options_from), quote=True)}"' if self.options_from else ""
         return self._wrap(
-            f'<input class="ff-input" type="text" '
-            f'name="{escape(self.name, quote=True)}" '
-            f'value="{escape(val, quote=True)}"{placeholder}>'
+            f'<div class="ff-list" data-name="{escape(self.name, quote=True)}"'
+            f' data-reads="{escape(self.reads, quote=True)}"{sources}>'
+            f'<input type="hidden" name="{escape(self.name, quote=True)}" value="{escape(", ".join(entries), quote=True)}">'
+            f'<ol class="ff-list-items">{rows}</ol>'
+            f'<span class="ff-list-empty">{escape(self.placeholder)}</span>'
+            f'{self._adder(self._choices(ctx), types, entries)}'
+            # What the script copies for a row it adds.
+            f'<template class="ff-list-row">{self._row("", {})}</template>'
+            "</div>"
+        )
+
+    def _choices(self, ctx: ParamContext) -> list[str]:
+        """What the + offers. A list fed by its siblings is given every column
+        and calc here; the script narrows it to the siblings' entries."""
+        if self.reads == "columns":
+            return list(ctx.columns)
+        if self.reads == "calcs":
+            return list(ctx.calcs)
+        return list(dict.fromkeys([*ctx.columns, *ctx.calcs]))
+
+    def _row(self, entry: str, types: dict) -> str:
+        """One entry: the grip, its name (type icon for a column), a direction
+        arrow for a list that has them, and ✕."""
+        name = entry.lstrip("+-") if self.directions else entry
+        arrow = ""
+        if self.directions:
+            down = entry.startswith("-")
+            label = "Descending — click for ascending" if down else "Ascending — click for descending"
+            arrow = (f'<button type="button" class="ff-list-dir{" is-desc" if down else ""}"'
+                     f' title="{label}" aria-label="{label}">{_ARROW}</button>')
+        return (
+            f'<li class="ff-list-item" draggable="true" data-value="{escape(entry, quote=True)}">'
+            f'<span class="ff-list-grip" title="Drag to reorder" aria-hidden="true">{_GRIP}</span>'
+            f'{type_glyph(types.get(name))}<span class="ff-list-name">{escape(name)}</span>{arrow}'
+            f'<button type="button" class="ff-list-del" title="Remove" aria-label="Remove {escape(name, quote=True)}">'
+            f"{_CROSS}</button></li>"
+        )
+
+    def _adder(self, choices: list[str], types: dict, entries: list[str]) -> str:
+        """The +: a searchable list of what may be added — the filter builder's
+        column picker's look. What's already in the list is hidden by the
+        script; with nothing left to add there's no + at all (decided here
+        when the list's own choices are all it needs — the script keeps it so,
+        and decides for a list fed by its siblings)."""
+        items = "".join(
+            f'<button type="button" class="ff-colpick-item ff-list-option" data-value="{escape(c, quote=True)}">'
+            f'{type_glyph(types.get(c))}<span>{escape(c)}</span></button>'
+            for c in choices
+        )
+        listed = {e.lstrip("+-") if self.directions else e for e in entries}
+        spent = not self.options_from and not set(choices) - listed
+        return (
+            f'<details class="ff-colpick ff-list-add"{" hidden" if spent else ""}>'
+            f'<summary class="ff-list-add-btn" title="Add" aria-label="Add to {escape(self.label, quote=True)}">{_PLUS}</summary>'
+            '<div class="ff-colpick-list" role="listbox">'
+            '<input class="ff-input ff-list-search" type="search" placeholder="Search" aria-label="Search"'
+            ' autocomplete="off" spellcheck="false">'
+            f'{items}<span class="ff-list-none" hidden>Nothing to add</span></div></details>'
         )
 
     def parse(self, form):
@@ -362,6 +425,20 @@ class ListParam(Param):
 
     def to_yaml(self, value):
         return value or []  # empty list is dropped by the emitter
+
+
+# The list rows' icons, on the chart icons' 16px grid in `currentColor`.
+def _icon16(paths: str, size: int = 14) -> str:
+    return (f'<svg viewBox="0 0 16 16" width="{size}" height="{size}" aria-hidden="true" fill="none"'
+            ' stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+            f"{paths}</svg>")
+
+
+_GRIP = _icon16('<circle cx="6" cy="4" r=".6"/><circle cx="10" cy="4" r=".6"/><circle cx="6" cy="8" r=".6"/>'
+                '<circle cx="10" cy="8" r=".6"/><circle cx="6" cy="12" r=".6"/><circle cx="10" cy="12" r=".6"/>')
+_ARROW = _icon16('<path d="M8 3v10M4.5 9.5 8 13l3.5-3.5"/>')     # down; flipped by CSS for ascending
+_CROSS = _icon16('<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>', 12)
+_PLUS = _icon16('<path d="M8 3.5v9M3.5 8h9"/>')
 
 
 # The filter builder's inputs, shared by two places: the chart builder's

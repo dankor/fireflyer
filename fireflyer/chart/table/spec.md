@@ -135,9 +135,13 @@ Card, header, row stripes, hover highlight, borders, search input, and paginatio
 - When `to_html()` is invoked outside the Fireflyer web app, the controls render but htmx is absent, so they are inert. Acceptable for MVP.
 
 ## Editor params
-Edit-modal schema (`Table.PARAMS`): dataset (dropdown), title (text), description (text), columns
-(comma-separated list), measures (comma-separated list), sort (comma-separated
-list), search (checkbox), pagination (number), filters (filter builder). The three
-lists use `ListParam` — a text field rather than a multi-select, because all three
-are order-sensitive and `sort` entries carry a `+`/`-` prefix. Widgets live in
-`fireflyer/params.py`.
+Edit-modal schema (`Table.PARAMS`): dataset (dropdown), title (text), description (text), columns,
+measures and sort (ordered lists), search (checkbox), pagination (number),
+filters (filter builder). The three lists use `ListParam` — a row per entry,
+dragged by its grip to reorder, ✕ to remove, a + to add from a searchable menu
+— rather than a multi-select, because all three are order-sensitive: columns
+offers the dataset's columns (column calcs too), measures its value calcs, and
+sort the table's output (its columns — every one while that list is empty — and
+measures), each sort row with an arrow for ascending / descending (`-name`).
+The form still submits each list as comma-separated text. Widgets live in
+`fireflyer/params.py`, the list's script in `web/static/list-builder.js`.

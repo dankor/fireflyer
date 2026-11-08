@@ -995,17 +995,112 @@ function closeModal() {
   modalBox.innerHTML = '';
   editingCid = null;
   addTarget = null;
+  clearTimeout(previewTimer);
+  previewSent = '';
+  previewGrain = '';
 }
+
+// The preview beside the form (`.ff-modal-preview`): the chart as its fields
+// would draw it — /chart/config/preview takes what Save (or Add) would post and
+// saves nothing. Any change to the fields asks again after a pause: typing, a
+// pick, and the filter builder's rows, which change by script (hence watching
+// the fields, not just their events). A form identical to the last one sent
+// isn't sent again, and an answer overtaken by a newer one is dropped.
+const PREVIEW_PAUSE_MS = 300;
+const PREVIEW_HEIGHT = 320;        // a new chart's, or one not on screen
+let previewTimer = null;
+let previewSeq = 0;
+let previewSent = '';
+let previewHeight = PREVIEW_HEIGHT;
+let previewGrain = '';             // a time grain picked in the preview, kept while it's open
+
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(refreshPreview, PREVIEW_PAUSE_MS);
+}
+
+async function refreshPreview() {
+  const form = modalBox.querySelector('#ff-modal-form');
+  const pane = modalBox.querySelector('.ff-modal-preview');
+  if (!form || !pane) return;
+  const fd = new FormData(form);
+  fd.append('yaml_text', codeEl.value);
+  if (editingCid !== null) fd.append('cid', editingCid);
+  if (previewGrain) fd.append('set_grain', previewGrain);
+  const sent = new URLSearchParams(fd).toString();
+  if (sent === previewSent) return;
+  previewSent = sent;
+  const seq = ++previewSeq;
+  pane.classList.add('is-loading');
+  const res = await fetch('/chart/config/preview', { method: 'POST', body: fd });
+  const html = await res.text();
+  if (seq !== previewSeq || !pane.isConnected) return;
+  pane.innerHTML = html;
+  pane.classList.remove('is-loading');
+}
+
+// A freshly loaded form (opened, or rebuilt for a new type or dataset): the
+// chart's size on the dashboard, the last preview kept until the next lands
+// (no blank flash), and watch its fields.
+const previewWatch = typeof MutationObserver !== 'undefined' ? new MutationObserver(schedulePreview) : null;
+function formLoaded(lastPreview = '') {
+  const form = modalBox.querySelector('#ff-modal-form');
+  const pane = modalBox.querySelector('.ff-modal-preview');
+  if (!form || !pane) return;
+  if (window.ffListBuilder) window.ffListBuilder.refresh(form);   // a + with nothing to add hides
+  pane.style.height = previewHeight + 'px';
+  pane.innerHTML = lastPreview;
+  previewSent = '';
+  if (previewWatch) {
+    previewWatch.disconnect();
+    previewWatch.observe(form.querySelector('.ff-modal-body'), { childList: true, subtree: true });
+  }
+  refreshPreview();
+}
+
+// How tall the chart is where it sits, so the preview shows it at that size.
+function chartHeight(cid) {
+  const cell = cid && outEl.querySelector('.fireflyer-dashboard-cell[data-cid="' + CSS.escape(cid) + '"]');
+  const height = cell ? cell.getBoundingClientRect().height : 0;
+  return height > 0 ? Math.round(height) : PREVIEW_HEIGHT;
+}
+
+// The preview's chart is live: its filter button, descriptions and tooltips
+// work as on the dashboard. Its own controls — a table's pages and search, a
+// legend's pages, a bar's grain — ask /dashboard/cell, which draws the
+// dashboard's chart from the YAML as it is; they're sent to the preview
+// instead, with the form as it is now. What else it asks — a crossfilter, the
+// filter panel's add — is the dashboard's state, not a look's: dropped.
+document.body.addEventListener('htmx:configRequest', e => {
+  const elt = e.detail.elt;
+  if (!elt.closest || !elt.closest('.ff-modal-preview')) return;
+  const form = modalBox.querySelector('#ff-modal-form');
+  if (e.detail.path !== '/dashboard/cell' || !form) { e.preventDefault(); return; }
+  const params = e.detail.parameters;
+  const fields = new FormData(form);
+  for (const key of new Set(fields.keys())) {
+    const values = fields.getAll(key);
+    params[key] = values.length > 1 ? values : values[0];
+  }
+  params.yaml_text = codeEl.value;
+  params.part = 'cell';
+  if (editingCid !== null) params.cid = editingCid; else delete params.cid;
+  if (params.set_grain) previewGrain = params.set_grain;
+  else if (previewGrain) params.set_grain = previewGrain;
+  e.detail.path = '/chart/config/preview';
+});
 
 async function openChartEditor(cid) {
   editingCid = cid;
   addTarget = null;
+  previewHeight = chartHeight(cid);
   const fd = new FormData();
   fd.append('yaml_text', codeEl.value);
   fd.append('cid', cid);
   const res = await fetch('/chart/config/form', { method: 'POST', body: fd });
   modalBox.innerHTML = await res.text();
   modalOverlay.classList.add('open');
+  formLoaded();
 }
 
 // Open the same modal in "add" mode. `mode` is 'row' (new row) or 'cell' (add to
@@ -1014,6 +1109,7 @@ async function openChartEditor(cid) {
 async function openAddChart(mode, index) {
   editingCid = null;
   addTarget = { mode, index };
+  previewHeight = PREVIEW_HEIGHT;
   const fd = new FormData();
   fd.append('yaml_text', codeEl.value);
   fd.append('add_type', 'table');
@@ -1022,6 +1118,7 @@ async function openAddChart(mode, index) {
   const res = await fetch('/chart/config/add-form', { method: 'POST', body: fd });
   modalBox.innerHTML = await res.text();
   modalOverlay.classList.add('open');
+  formLoaded();
 }
 
 // Show a confirm dialog before deleting a chart.
@@ -1702,10 +1799,12 @@ async function refetchChartForm(form, type) {
     endpoint = '/chart/config/form';
   }
   form.dataset.loadedFor = dataset;
+  const lastPreview = (modalBox.querySelector('.ff-modal-preview') || {}).innerHTML || '';
   const res = await fetch(endpoint, { method: 'POST', body: fd });
   modalBox.innerHTML = await res.text();
   const fresh = modalBox.querySelector('form');
   if (fresh) fresh.dataset.loadedFor = dataset;
+  formLoaded(lastPreview);
 }
 modalBox.addEventListener('change', e => {
   const form = e.target.closest('form');
@@ -1759,6 +1858,14 @@ modalBox.addEventListener('change', e => {
   input.focus();                                 // the group's datasets, listed
 });
 modalBox.addEventListener('input', e => { const c = comboOf(e.target); if (c) comboFilter(c); });
+// Typing and picks re-preview — not the dataset search (its pick rebuilds the
+// form, which previews) or a filter's value search (it only narrows a list).
+for (const kind of ['input', 'change']) {
+  modalBox.addEventListener(kind, e => {
+    if (!e.target.closest('.ff-modal-body') || comboOf(e.target) || e.target.name === 'filter_q') return;
+    schedulePreview();
+  });
+}
 modalBox.addEventListener('mousedown', e => {
   const item = e.target.closest('.ff-combo-item');
   if (item) { e.preventDefault(); comboPick(comboOf(item), item); }   // before the input blurs
@@ -1814,6 +1921,7 @@ if (typeof MutationObserver !== 'undefined') {
 modalBox.addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
+  if (form.id !== 'ff-modal-form') return;      // a form in the preview's chart isn't the chart's
   const fd = new FormData(form);
   fd.append('yaml_text', codeEl.value);
   let endpoint;
