@@ -66,7 +66,7 @@ class Number:
         follows the viewer's OS preference (inherited from the dashboard root
         when nested)."""
         lf = scan_chart(self)
-        preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
+        preds = filters_mod.predicates(self.filters, lf.collect_schema())
         if preds:
             lf = lf.filter(*preds)
         calcs, key = self._resolve_calc()

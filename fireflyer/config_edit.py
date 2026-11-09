@@ -155,10 +155,18 @@ def _types(config: dict, dataset, resolve=None) -> dict[str, str]:
 VALUE_LIST_LIMIT = 100
 
 
-def _as_text(column: str):
+def _items(frame: pl.LazyFrame, column: str) -> pl.Expr:
+    """`column`'s values as a filter tests them: a list column's are its items
+    (a filter on it asks what the list contains), anything else's itself."""
+    if isinstance(frame.collect_schema().get(column), pl.List):
+        return pl.col(column).explode()
+    return pl.col(column)
+
+
+def _as_text(frame: pl.LazyFrame, column: str):
     """A column as a filter compares it — text (`filters.predicates` casts both
-    sides to strings)."""
-    return pl.col(column).cast(pl.String, strict=False).alias("value")
+    sides to strings), item by item for a list."""
+    return _items(frame, column).cast(pl.String, strict=False).alias("value")
 
 
 def _distinct(config: dict, dataset, column: str, resolve=None, query="") -> ValueChoices | None:
@@ -170,9 +178,10 @@ def _distinct(config: dict, dataset, column: str, resolve=None, query="") -> Val
     if not dataset or not column:
         return None
     try:
+        frame = _scan(config, dataset, resolve)
         values = (
-            _scan(config, dataset, resolve)
-            .select(pl.col(column).alias("raw"))
+            frame
+            .select(_items(frame, column).alias("raw"))
             .drop_nulls()
             .unique()
             .with_columns(pl.col("raw").cast(pl.String, strict=False).alias("value"))
@@ -217,8 +226,9 @@ def _present(config: dict, dataset, column: str, values, resolve=None) -> list[s
     if not values:
         return []
     try:
+        frame = _scan(config, dataset, resolve)
         found = set(
-            _scan(config, dataset, resolve).select(_as_text(column))
+            frame.select(_as_text(frame, column))
             .filter(pl.col("value").is_in([str(v) for v in values]))
             .unique().collect()["value"].to_list()
         )

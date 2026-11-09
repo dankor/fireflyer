@@ -733,3 +733,15 @@ def test_the_relabelled_columns_description_reaches_the_header_card(orders_parqu
     th = next(t for t in re.findall(r"<th(?=[ >])[^>]*>.*?</th>", body, re.S)
               if "Order status" in t)
     assert 'tip-desc">Where the order got to</span>' in th
+
+
+def test_a_raw_tables_filter_on_a_column_it_doesnt_show():
+    """The filter's column needn't be one of the table's — it narrows the rows
+    all the same (it used to be skipped, the column picked away first)."""
+    import re
+    import fireflyer as ff
+    text = ("name: T\ncharts:\n  t: {type: table, dataset: orders, title: R, columns: [status], "
+            "filters: [{column: amount, op: in, values: [42]}]}\nlayout:\n  - ['@40', t]\n"
+            "datasets:\n  orders: |\n    id,status,amount\n    1,paid,42\n    2,open,5\n")
+    html = ff.Dashboard.from_yaml(text).render_cell("t")
+    assert re.findall(r"<td[^>]*>([a-z]+)</td>", html) == ["paid"]

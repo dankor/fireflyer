@@ -75,13 +75,16 @@ def _format(value, is_num: bool) -> str:
         return ""
     if is_num and isinstance(value, (int, float)):
         return f"{value:,}"
+    if isinstance(value, list):                 # a list column (`to_list()`): its items
+        return ", ".join(str(v) for v in value if v is not None)
     return str(value)
 
 
 def _search(df: pl.DataFrame, query: str) -> pl.DataFrame:
-    """Case-insensitive substring match across all columns, stringified."""
+    """Case-insensitive substring match across all columns, stringified — a
+    list column's items included."""
     needle = query.casefold()
-    columns = [pl.col(c).cast(pl.String, strict=False).fill_null("") for c in df.columns]
+    columns = [filters_mod.as_text(c, df.schema[c]).fill_null("") for c in df.columns]
     haystack = pl.concat_str(columns, separator="\t").str.to_lowercase()
     return df.filter(haystack.str.contains(needle, literal=True))
 
@@ -180,6 +183,9 @@ class Table:
         to `2026-06-01 00:00:00.000000` where `str()` gives `2026-06-01 00:00:00`,
         which would match nothing at all.
         """
+        # A list column can't be one value of a token: a click means "this
+        # row's values", and a list is many. The row is named by the rest.
+        dims = [d for d in dims if not isinstance(df.schema[d], pl.List)]
         if not emitter or not dims:
             return [""] * df.height
         text = df.select([pl.col(d).cast(pl.String, strict=False) for d in dims])
@@ -277,10 +283,12 @@ class Table:
     def _raw(self, lf: pl.LazyFrame) -> pl.DataFrame:
         """Row-by-row, no aggregation. `head()` pushes down into the scan, so
         only ~MAX_ROWS are read from the Parquet, not the whole file."""
-        df = lf.head(MAX_ROWS).collect()
+        # Filtered before the columns are picked: a filter may be on a column
+        # the table doesn't show.
+        df = filters_mod.apply(lf.head(MAX_ROWS).collect(), self.filters)
         if self.columns:
             df = df.select([c for c in self.columns if c in df.columns])
-        return filters_mod.apply(df, self.filters)
+        return df
 
     def _aggregate(self, lf: pl.LazyFrame) -> pl.DataFrame:
         """Group by `columns` and compute one output column per measure.
@@ -297,7 +305,7 @@ class Table:
                 "table `measures` are calc keys, so they need a dashboard's "
                 "`calcs:` block — a standalone table can only show raw rows"
             )
-        schema = lf.collect_schema().names()
+        schema = lf.collect_schema()
         preds = filters_mod.predicates(self.filters, schema)
         if preds:
             lf = lf.filter(*preds)

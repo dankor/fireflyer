@@ -383,7 +383,7 @@ class DatasetStore:
         wanted = filters_mod.normalize(filters)
         if any(f.column not in lf.collect_schema().names() for f in wanted):
             return None
-        preds = filters_mod.predicates(wanted, lf.collect_schema().names())
+        preds = filters_mod.predicates(wanted, lf.collect_schema())
         return lf.filter(*preds).select(pl.len()).collect().item() if preds else lf.select(pl.len()).collect().item()
 
     def rename_role(self, old: str, new: str, author: str = "") -> None:

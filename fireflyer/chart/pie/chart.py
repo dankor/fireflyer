@@ -300,7 +300,7 @@ class Pie:
         # projection into the Parquet read, so only what the calc and the
         # category column need is scanned, not the whole file.
         lf = scan_chart(self)
-        preds = filters_mod.predicates(self.filters, lf.collect_schema().names())
+        preds = filters_mod.predicates(self.filters, lf.collect_schema())
         if preds:
             lf = lf.filter(*preds)
 
