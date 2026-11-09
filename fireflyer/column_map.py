@@ -4,9 +4,10 @@ uploaded ones.
 An upload is read with every column as text — a CSV says nothing about types,
 and guessing quietly turns `007` into `7`. The mapping then lists the columns
 the dataset has, each with a formula over the uploaded columns, in the calc
-grammar (`+ - * /`, `str2dt()`, `to_number()`). A column's type is whatever its
-formula gives: text as uploaded, a number from `to_number()`, a date from
-`str2dt()`. It's YAML, edited in a form or by hand:
+grammar (`+ - * /`, `str2dt()`, `to_number()`, `to_list()`). A column's type is
+whatever its formula gives: text as uploaded, a number from `to_number()`, a
+date from `str2dt()`, a list of text from `to_list()`. It's YAML, edited in a
+form or by hand:
 
     columns:
       id:
@@ -15,6 +16,8 @@ formula gives: text as uploaded, a number from `to_number()`, a date from
         formula: status
       total:
         formula: to_number(unit_price) * to_number(qty)
+      tags:
+        formula: to_list(tags)          # ["a", "b"] -> a list; filtered on what it holds
 
 A column's key is its name; `formula` defaults to the column of that name, and
 `name: formula` is the short form. Columns can be renamed (a new key over the
@@ -47,6 +50,7 @@ from dataclasses import dataclass
 import polars as pl
 import yaml
 
+from fireflyer import filters as filters_mod
 from fireflyer import filters as filters_mod
 from fireflyer.calcs import CalcError, compile_formula, formula_names
 
@@ -254,8 +258,9 @@ def _scalar(text: str) -> str:
 
 
 def as_text(df: pl.DataFrame) -> pl.DataFrame:
-    """Every column as text — how a mapping sees an upload, whatever its file."""
-    return df.with_columns(pl.all().cast(pl.String))
+    """Every column as text — how a mapping sees an upload, whatever its file.
+    A list's items joined by `, `, which `to_list()` reads back."""
+    return df.with_columns(filters_mod.as_text(c, df.schema[c]).alias(c) for c in df.columns)
 
 
 def examples(df: pl.DataFrame, n: int = 5) -> dict[str, list[str]]:

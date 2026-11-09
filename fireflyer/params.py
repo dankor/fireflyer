@@ -216,7 +216,8 @@ class ColumnParam(Param):
         self.optional = optional
 
     def render(self, value, ctx: ParamContext) -> str:
-        choices = list(ctx.columns)
+        # One value per row: a list column is no axis or slice (`LIST_KIND`).
+        choices = [c for c in ctx.columns if ctx.column_types.get(c) != LIST_KIND]
         if value not in choices and value not in (None, ""):
             choices = [str(value), *choices]
         if self.optional:
@@ -466,6 +467,9 @@ PICKABLE_OPS = ("in", "ni")
 # alphabetically, which nobody means.
 DATE_KIND = "date"
 NUMBER_KIND = "number"
+# A list of text (`to_list()`): filtered on what it contains, shown as its
+# items — never one chart's axis or slice, which is one value per row.
+LIST_KIND = "list"
 # The column types a `between` makes sense on: a date range, a number range.
 RANGE_KINDS = (DATE_KIND, NUMBER_KIND)
 COLUMN_TYPES = {
@@ -478,6 +482,9 @@ COLUMN_TYPES = {
     # A calendar page.
     DATE_KIND: ('<rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/>'
                 '<path d="M2.5 7h11M5.5 2v3M10.5 2v3"/>', "date / time"),
+    # Bullets beside lines: a list.
+    LIST_KIND: ('<path d="M6 4.5h7.5M6 8h7.5M6 11.5h7.5"/>'
+                '<path d="M2.6 4.5h.1M2.6 8h.1M2.6 11.5h.1" stroke-width="2"/>', "list"),
     # A letter beside lines of text.
     "text": ('<path d="M1.5 12.5 4.5 4l3 8.5M2.5 10h4"/>'
              '<path d="M10 6.5h4.5M10 9.5h4.5M10 12.5h3"/>', "text"),
@@ -491,6 +498,8 @@ def column_type(dtype) -> str:
     """A `COLUMN_TYPES` key for a Polars dtype (or its string form). A duration
     is checked first: its name mentions a time unit, but it is no date."""
     d = str(dtype).lower()
+    if d.startswith(("list", "array")):         # before text: `List(String)` names `str` too
+        return LIST_KIND
     if "duration" in d:
         return "other"
     if any(x in d for x in ("int", "float", "decimal")):

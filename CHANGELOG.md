@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-09
+
+### Added
+
+- **List columns.** `to_list(<column>)` reads text that holds a list — a JSON
+  array `["a", "b"]`, `[a, b]`, a Postgres array `{a,b}`, `('a', 'b')` or plain
+  `a, b` — into a list of text; `to_list(<column>, <separator>)` splits on
+  another (`to_list(tags, ;)`, `to_list(words, ' ')`); an empty cell is an
+  empty list. Best in a dataset's
+  column mapping, where it's built once and stored as a list column. A filter
+  on one tests what it holds: `=` (in) keeps a row whose list contains any of
+  the values, `≠` (not in) one whose list contains none, an empty one
+  included — one vectorised pass,
+  under a millisecond on 100k rows. The value picker lists the items, a table
+  shows them joined (and its search finds one), and a list has its own type
+  icon; it's never offered as a pie's column or a bar's axis. Tested for
+  every op against every kind of row, and wherever a filter is set: a chart's
+  own, a calc's, a viewer's global quick filter and a role's rows.
+
+### Fixed
+
+- A raw table's own filter on a column the table doesn't show was ignored —
+  the column was picked away before the filter ran. It now narrows the rows.
+
 ## [0.25.0] - 2026-11-08
 
 ### Added
@@ -1403,7 +1427,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/dankor/fireflyer/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/dankor/fireflyer/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/dankor/fireflyer/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/dankor/fireflyer/compare/v0.22.0...v0.23.0

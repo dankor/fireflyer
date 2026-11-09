@@ -604,7 +604,7 @@ class Bar:
         # sized by the calc; drop empty/undefined groups.
         lf = scan_chart(self)
         schema = lf.collect_schema()
-        preds = filters_mod.predicates(self.filters, schema.names())
+        preds = filters_mod.predicates(self.filters, schema)
         if preds:
             lf = lf.filter(*preds)
 

@@ -12,6 +12,10 @@ express, and half-open is what makes adjacent buckets tile without overlap. On
 **numbers** it is **inclusive** — `lo <= v <= hi` — because nothing tiles
 numbers here: a number range is picked by a person (a price from 10 to 20), who
 means 20 too.
+
+On a **list** column (text read by `to_list()`) `in` means the list **contains**
+one of the values, `ni` that it contains none of them — an empty list contains
+none, and so does a missing one; `between` means nothing there.
 """
 
 import base64
@@ -20,6 +24,7 @@ import re
 import zlib
 from dataclasses import dataclass
 from datetime import date, timedelta
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 import polars as pl
@@ -148,7 +153,7 @@ def apply(df: pl.DataFrame, filters: Iterable[Filter]) -> pl.DataFrame:
     one chart emits a filter that other charts may not be able to apply if
     their dataset lacks that column. The architecture spec calls this out.
     """
-    preds = predicates(filters, df.columns)
+    preds = predicates(filters, df.schema)
     return df.filter(*preds) if preds else df
 
 
@@ -157,21 +162,50 @@ def predicates(filters: Iterable[Filter], columns: Iterable[str]) -> list[pl.Exp
     `columns` — the lazy-scan counterpart to `apply`, so charts can push
     predicates down into `scan_parquet`. Absent-column filters are skipped
     (crossfilter contract). Passing an empty list to `.filter(*[])` is a no-op.
+
+    `columns` is the frame's schema (names alone do, but then a list column
+    can't be told apart): a filter on a list column tests what it contains.
     """
     have = set(columns)
+    dtypes = columns if isinstance(columns, Mapping) else {}
     exprs: list[pl.Expr] = []
     for f in filters:
         if f.column not in have:
             continue
+        targets = [str(v) for v in f.values]
+        if isinstance(dtypes.get(f.column), pl.List):
+            exprs.append(_contains(f, targets))
+            continue
         # Stringify both sides — crossfilter values arrive as strings (URL form
         # data); declared filters can be any literal in YAML/Python.
         col = pl.col(f.column).cast(pl.String, strict=False)
-        targets = [str(v) for v in f.values]
         if f.op == "between":
             exprs.append(_between(f.column, col, *targets))
         else:
             exprs.append(col.is_in(targets) if f.op == "in" else ~col.is_in(targets))
     return exprs
+
+
+def _contains(f: Filter, targets: list[str]) -> pl.Expr:
+    """A list column: `in` keeps a row whose list holds any of `targets`, `ni`
+    one whose list holds none — an empty list, and a missing one (a list from
+    a file rather than `to_list()`, which makes none), hold none. One
+    vectorised pass over the items (`is_in` inside `list.eval`), which stays
+    flat as the values grow — testing each value with `list.contains` was
+    10–20x slower at thirty of them."""
+    if f.op == "between":
+        raise FilterError(f"filter on {f.column!r}: a list column takes = or ≠, not a range")
+    items = pl.element().cast(pl.String, strict=False)
+    hit = pl.col(f.column).list.eval(items.is_in(targets)).list.any().fill_null(False)
+    return hit if f.op == "in" else ~hit
+
+
+def as_text(column: str, dtype=None) -> pl.Expr:
+    """`column` as text, as a person reads it: a list's items joined by `, `
+    (a list won't cast to text), anything else Polars' own string cast."""
+    if isinstance(dtype, pl.List):
+        return pl.col(column).list.eval(pl.element().cast(pl.String, strict=False)).list.join(", ")
+    return pl.col(column).cast(pl.String, strict=False)
 
 
 def _between(column: str, as_text: pl.Expr, low: str, high: str) -> pl.Expr:

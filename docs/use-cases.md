@@ -186,7 +186,9 @@ on the columns it has, with example values.
 
 Every column is a formula over the file you uploaded, so you can fix it without
 touching the file. In **edit** mode, make a column a number with
-`to_number()`, rename it, or hide it from dashboards with the crossed-out eye.
+`to_number()`, a list with `to_list()` (it reads `["a", "b"]`, `{a,b}` or
+`a, b`; filter it on what it contains), rename it, or hide it from dashboards
+with the crossed-out eye.
 Saving builds the next version (1.0 → 1.1).
 
 ![Editing a dataset's columns in the form](../media/dataset-edit.webp)

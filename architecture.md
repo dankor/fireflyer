@@ -104,8 +104,8 @@ Parquet in object storage with efficient (pushdown) scans — so "only CSV" and
 formula language — including per-calc row-level expressions, derived ratios and
 calculated columns. None relaxes the rest: no auth beyond the portal's simple
 login, no multi-user, no caching, no SQL/joins, and calcs stay an expression
-language — no `case`/string ops, and `str2dt()` and `to_number()` are the only
-functions.
+language — no `case`/string ops, and `str2dt()`, `to_number()` and `to_list()`
+are the only functions.
 
 ---
 
@@ -193,6 +193,29 @@ A filter is a small declarative shape:
 * `column` — the dataset column to filter on.
 * `op` — one of `in`, `ni` (not-in), `between`.
 * `values` — a list of values to compare against; exactly two (low, high) for `between`.
+
+**On a list column** (text read by `to_list()`, below) `in` keeps a row whose
+list **contains** any of the values and `ni` one whose list contains **none** of
+them — so an empty list (an empty cell, under `to_list()`) is kept by `ni`, and
+so is a missing one (a list from a file). For the same values every row is kept
+by exactly one of the two:
+
+| the row's list | `in [u1]` | `ni [u1]` | `in [u1, u3]` | `ni [u1, u3]` |
+|---|---|---|---|---|
+| `[u1, u2]` — holds a value | ✓ | | ✓ | |
+| `[u3]` — holds another | | ✓ | ✓ | |
+| `[]` — empty | | ✓ | | ✓ |
+| missing | | ✓ | | ✓ |
+
+A value matches a whole item, case and all (`u` finds nothing in `u1`).
+`between` means nothing there and is refused. The
+test is one vectorised pass over the items (`list.eval(is_in).list.any()` —
+`filters.predicates`, which takes the frame's schema to tell a list column
+apart); the editor offers a list column `=` / `≠` only, its value picker lists
+the **items**, a table shows a list as its items joined by `, ` (and its search
+finds one), and a table row's click leaves the list out of its token (a list is
+many values). A list is never a chart's axis or slice: the single-column fields
+(`ColumnParam`) don't offer it.
 
 `filters` is a list of these; all must match (AND) for a row to pass. There is no `or` and no nesting.
 
@@ -435,11 +458,28 @@ A managed dataset is **versioned**, `major.minor` — `orders:3.4`:
 the ones charts see — each with a **formula** over the uploaded columns. An
 upload is read with **every column as text** — a CSV says nothing about types,
 and guessing turns `007` into `7` — and the formulas make it what it should be.
-They're the calc grammar (`+ - * /`, `str2dt()`, `to_number()`; see **Calcs**),
-so a column can be renamed, computed from several, or left out. There is **no
-type to pick**: a column's type is what its formula gives — text as uploaded, a
-number from `to_number()` (whole numbers stay integers), a date from
-`str2dt()`. It is YAML, so it's edited by hand as easily as through a form:
+They're the calc grammar (`+ - * /`, `str2dt()`, `to_number()`, `to_list()`;
+see **Calcs**), so a column can be renamed, computed from several, or left out.
+There is **no type to pick**: a column's type is what its formula gives — text
+as uploaded, a number from `to_number()` (whole numbers stay integers), a date
+from `str2dt()`, a **list of text** from `to_list()`.
+
+**`to_list(<column>)`** reads text that holds a list, written any of the usual
+ways — a JSON array `["a", "b"]`, `[a, b]`, a Postgres array `{a,b}`, a tuple
+`('a', 'b')` or plain `a, b`: brackets or braces around the whole are dropped,
+it splits on commas, and each item is trimmed of spaces and quotes; an empty
+item is no item, and an empty or missing cell is an empty list, like `[]`.
+**`to_list(<column>, <separator>)`** splits on another — `to_list(tags, ;)`,
+`to_list(path, /)`, quoted when it's a space (`to_list(words, ' ')`). One
+function rather than a `split()` with characters to strip, because every
+common shape is read the same way and there is nothing to get wrong; an item
+can't hold the separator itself (it reads lists, not quoted CSV). Put it in the
+**mapping**: the list is built once and stored as a list column, so a filter
+tests membership without reading text again (35 ms to build 100k rows, under
+1 ms to filter them). It works in a dashboard's column calc too, re-read on
+every render.
+
+It is YAML, so it's edited by hand as easily as through a form:
 
 ```yaml
 columns:
@@ -707,8 +747,8 @@ against a dashboard's `calcs:` block. See `fireflyer/calcs.py`.
 
 This is an **owner-approved extension** to the count-only MVP aggregation — it
 unlocks ratios, conditional aggregates and calculated columns, but stays a tiny
-expression language, not SQL: no joins, no `case`/string ops, and `str2dt()` and
-`to_number()` are the only functions.
+expression language, not SQL: no joins, no `case`/string ops, and `str2dt()`,
+`to_number()` and `to_list()` are the only functions.
 
 ## Charts section
 

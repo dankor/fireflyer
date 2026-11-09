@@ -23,7 +23,8 @@ Nothing in the YAML names the kind. `agg` means aggregate; a bare formula is
 sorted into derived vs column by **what it references** — sibling calcs make it
 derived, dataset columns make it a column (see `_classify`). All three share the
 same tiny expression grammar (`+ - * /`, parens, numeric literals, and the
-`str2dt()` function); the only difference is what a bare name resolves to.
+`str2dt()`, `to_number()` and `to_list()` functions); the only difference is
+what a bare name resolves to.
 """
 
 from __future__ import annotations
@@ -62,8 +63,8 @@ class CalcError(ValueError):
 # become `pl.col(<column>)`, for a derived formula `pl.col(<leaf calc>)` —
 # same grammar, different leaf meaning. Numbers are literals; `+ - * /`, parens
 # and unary minus compose them. No comparisons — aggregation is expressed by
-# `agg:`, not inside the formula. There is exactly one function, `str2dt()`
-# (see `_str2dt_expr`); anything else is rejected.
+# `agg:`, not inside the formula. There are three functions — `str2dt()`,
+# `to_number()` and `to_list()` (see their `_expr`s); anything else is rejected.
 
 _TOKEN_RE = re.compile(r"\d+(?:\.\d+)?|[A-Za-z_]\w*|\S")
 _NAME_RE = re.compile(r"[A-Za-z_]\w*")
@@ -91,7 +92,8 @@ def _tokenize(text: str) -> list[tuple[str, int]]:
 class _Parser:
     """expr := term (('+'|'-') term)* ; term := factor (('*'|'/') factor)* ;
     factor := number | call | name | '(' expr ')' | '-' factor ;
-    call := 'str2dt' '(' name ',' <raw pattern> ')' | 'to_number' '(' expr ')'."""
+    call := 'str2dt' '(' name ',' <raw pattern> ')' | 'to_number' '(' expr ')'
+          | 'to_list' '(' name [',' <raw separator>] ')'."""
 
     def __init__(self, text: str, tokens: list[tuple[str, int]], resolve):
         self.text = text
@@ -174,9 +176,11 @@ class _Parser:
                 raise CalcError("missing ')' in to_number()")
             self._eat()
             return to_number_expr(inner)
+        if name == "to_list":
+            return self._to_list()
         if name != "str2dt":
             raise CalcError(
-                f"unknown function {name!r} in formula — there are str2dt() and to_number()"
+                f"unknown function {name!r} in formula — there are str2dt(), to_number() and to_list()"
             )
         self._eat()  # '('
         column = self._peek()
@@ -195,12 +199,38 @@ class _Parser:
         self.names.add(column)
         return _str2dt_expr(column, pattern)
 
-    def _find_close(self) -> int:
+    def _to_list(self) -> pl.Expr:
+        """`to_list(<column>)` or `to_list(<column>, <separator>)`. Like a
+        str2dt pattern, the separator is the raw source up to the `)` — `;`,
+        `|` and `/` aren't expression syntax — quoted when it's a space or
+        starts or ends with one (`to_list(words, ' ')`)."""
+        self._eat()  # '('
+        column = self._peek()
+        if column is None or not _NAME_RE.fullmatch(column):
+            raise CalcError("to_list() takes a column name, e.g. to_list(tags)")
+        self._eat()
+        self.names.add(column)
+        if self._peek() == ")":
+            self._eat()
+            return to_list_expr(column)
+        if self._peek() != ",":
+            raise CalcError("missing ')' in to_list()")
+        self._eat()  # ','
+        close = self._find_close("to_list")
+        separator = self.text[self._offset(self.pos) : self._offset(close)].strip()
+        self.pos = close + 1
+        if len(separator) >= 2 and separator[0] == separator[-1] and separator[0] in "'\"":
+            separator = separator[1:-1]
+        if not separator:
+            raise CalcError("to_list() needs a separator after its comma, e.g. to_list(tags, ;)")
+        return to_list_expr(column, separator)
+
+    def _find_close(self, function: str = "str2dt") -> int:
         """Index of the `)` token closing the current call."""
         for i in range(self.pos, len(self.tokens)):
             if self.tokens[i][0] == ")":
                 return i
-        raise CalcError(f"missing ')' in str2dt().{_FLOW_MAPPING_HINT}")
+        raise CalcError(f"missing ')' in {function}().{_FLOW_MAPPING_HINT}")
 
 
 def compile_formula(text: str, resolve) -> tuple[pl.Expr, set[str]]:
@@ -256,6 +286,35 @@ def to_number_expr(expr: pl.Expr) -> pl.Expr:
     checks for those first and says which (`column_map.apply`)."""
     text = expr.cast(pl.String).str.strip_chars()
     return pl.when(text == "").then(None).otherwise(text).cast(pl.Float64, strict=False)
+
+
+# What `to_list()` strips: brackets or braces around the whole value (a JSON
+# array `[…]`, a Postgres one `{…}`, a tuple `(…)`), and around each item the
+# spaces and quotes that wrap it. So one call reads every common way a list is
+# written into a text column, and the plain `a, b, c` too.
+_LIST_OPEN, _LIST_CLOSE = "[{(", "]})"
+_ITEM_WRAP = " \t\r\n\"'"
+
+
+def to_list_expr(column: str, separator: str = ",") -> pl.Expr:
+    """`to_list(x)`: text read as a list of text — `["a", "b"]`, `[a, b]`,
+    `{a,b}` and `a, b` all give `a`, `b`. Split on `separator` (a comma unless
+    given), each item trimmed of spaces and quotes, empty ones dropped; an
+    empty or missing cell is an empty list, like `[]` — a row that lists
+    nothing, which "doesn't contain" keeps. An item can't hold the separator
+    itself — this reads lists, not quoted CSV.
+
+    Best applied in a dataset's column mapping: the list is then built once,
+    stored as a list column, and filters test membership on it without
+    re-reading any text (`filters.predicates`)."""
+    # A missing cell splits like an empty one: one empty item, then none.
+    text = pl.col(column).cast(pl.String, strict=False).fill_null("").str.strip_chars()
+    inner = text.str.strip_chars_start(_LIST_OPEN).str.strip_chars_end(_LIST_CLOSE)
+    return (
+        inner.str.split(separator)
+        .list.eval(pl.element().str.strip_chars(_ITEM_WRAP))
+        .list.eval(pl.element().filter(pl.element() != ""))
+    )
 
 
 def date_pattern(pattern: str) -> tuple[str, bool]:
@@ -502,7 +561,7 @@ class CalcSet:
         leaf is computed with its own `filters`, joined on `dims`, then the
         (derived or trivial) value expression is evaluated. Non-finite results —
         empty groups, divide-by-zero — become null so callers can drop them."""
-        schema = lf.collect_schema().names()
+        schema = lf.collect_schema()
         frames = []
         for leaf in self._leaves(key):
             lm = self.get(leaf)

@@ -2247,7 +2247,8 @@ def _service_mark() -> str:
 
 def _kinds(ds: Dataset) -> dict[str, tuple[str, str]]:
     """Column name -> (icon, kind) from the built data: a column's type is what
-    its formula gave (text, a number from to_number(), a date from str2dt())."""
+    its formula gave (text, a number from to_number(), a date from str2dt(), a
+    list from to_list())."""
     out = {}
     for c in ds.columns + ds.service:
         kind = column_type(c.dtype)

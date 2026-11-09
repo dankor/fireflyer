@@ -295,7 +295,7 @@ function table(heads, rows) {
 // --- edit ------------------------------------------------------------------------
 
 // Each column a name and a formula (the calc grammar over the uploaded columns:
-// `status`, `to_number(qty)`, `str2dt(day, YYYY-MM-DD)`); ✕ drops one, ＋ adds
+// `status`, `to_number(qty)`, `str2dt(day, YYYY-MM-DD)`, `to_list(tags)`); ✕ drops one, ＋ adds
 // one. The type isn't chosen — it's what the formula gives.
 function showEdit() {
   const rows = rules.map((r, i) => {

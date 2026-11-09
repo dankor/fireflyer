@@ -43,10 +43,10 @@ def narrow(lf: pl.LazyFrame, rows: list[dict]) -> pl.LazyFrame:
     from fireflyer import filters as filters_mod
 
     wanted = filters_mod.normalize(rows)
-    names = lf.collect_schema().names()
-    if any(f.column not in names for f in wanted):
+    schema = lf.collect_schema()
+    if any(f.column not in schema for f in wanted):
         raise NoAccess("a permission names a column the data lacks")
-    preds = filters_mod.predicates(wanted, names)
+    preds = filters_mod.predicates(wanted, schema)
     return lf.filter(*preds) if preds else lf
 
 
