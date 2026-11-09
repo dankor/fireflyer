@@ -25,11 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   icon; it's never offered as a pie's column or a bar's axis. Tested for
   every op against every kind of row, and wherever a filter is set: a chart's
   own, a calc's, a viewer's global quick filter and a role's rows.
+- Use cases: filtering has its own section, **Filters** — the four sources,
+  then a section and a clip per kind of column: text, numbers, dates, yes / no
+  and lists (`scripts/record.py filter-text`, `filter-number`, `filter-date`,
+  `filter-yes-no`, `filter-list`). The cross-filter one lists what each click
+  filters on. The demo orders gain a `gift` (yes / no) and `tags` column, read
+  with `to_list(tags, ;)`.
 
 ### Fixed
 
 - A raw table's own filter on a column the table doesn't show was ignored —
   the column was picked away before the filter ran. It now narrows the rows.
+- Adding or changing a filter while scrolled down a dashboard threw the page to
+  its bottom: scroll anchoring held the old dashboard in place while the new
+  one replaced it. The dashboard opts out (`overflow-anchor: none`).
+- On a short window a filter badge's column list ran past the bottom edge, its
+  last columns out of reach. It opens inside the panel now, which flips above
+  its badge when there's no room below.
 
 ## [0.25.0] - 2026-11-08
 

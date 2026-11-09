@@ -10,7 +10,8 @@ YAML, or ask the AI. Pick whichever feels easiest and switch at any time —
 they all edit the same file.
 
 Every example uses one small sample dataset: a list of orders, each with its
-status, amount and day.
+status, amount and day — and whether it was a gift and its tags, so there's a
+column of every type to filter.
 
 ## Contents
 
@@ -22,11 +23,17 @@ status, amount and day.
   - [Arrange the layout with UI](#arrange-the-layout-with-ui)
   - [Arrange the layout with code](#arrange-the-layout-with-code)
   - [Arrange the layout with AI](#arrange-the-layout-with-ai)
+  - [Compare versions](#compare-versions)
+- [Filters](#filters)
   - [Filter with a built-in filter](#filter-with-a-built-in-filter)
   - [Filter with a cross-filter](#filter-with-a-cross-filter)
   - [Filter with a global filter](#filter-with-a-global-filter)
   - [Filter with a role](#filter-with-a-role)
-  - [Compare versions](#compare-versions)
+  - [Filter text](#filter-text)
+  - [Filter numbers](#filter-numbers)
+  - [Filter dates](#filter-dates)
+  - [Filter yes / no](#filter-yes--no)
+  - [Filter a list](#filter-a-list)
 - [Datasets](#datasets)
   - [Upload a dataset](#upload-a-dataset)
   - [Edit columns with UI](#edit-columns-with-ui)
@@ -132,10 +139,32 @@ wider, what goes in which tab — and the assistant rewrites the layout.
 
 ![Asking the assistant to rearrange the layout](../media/layout-ai.webp)
 
+### Compare versions
+
+Every save is a version. Edit a chart, save, and open **diff** mode to see the
+change line by line — and restore an older version if you need it back.
+
+![Editing a chart and comparing versions](../media/compare-versions.webp)
+
+## Filters
+
+Filters come from four places — built into a chart, a click on another chart,
+one you type, a role you're viewing as — and all of them apply at once: a row
+has to pass every one. Only clicked values on the same column widen each
+other (this slice *or* that one). Nothing a viewer picks is saved: it's yours,
+in the page address, so a reload or a link you send opens the same view, and
+Back leaves the dashboard rather than stepping through your clicks.
+
+To **type** one, open any chart's badge (the count in its corner) and fill its
+bottom row — a column, an operator, values — then **+**; it applies to every
+chart with that column. The badge lists every filter on the chart, each led
+by where it comes from; the pencil edits a typed one in place, ✕ removes it.
+What the row offers follows the column's type, shown by its icon — one section
+each below.
+
 ### Filter with a built-in filter
 
-Filters come from four places, and a chart's badge lists each one with its
-source. A built-in filter is part of the chart itself: add it under
+A built-in filter is part of the chart itself: add it under
 **Filters** in the chart's edit form (or `filters:` in its YAML), and the
 chart always shows only those rows — here, every status but cancelled.
 
@@ -145,6 +174,19 @@ chart always shows only those rows — here, every status but cancelled.
 
 Click a slice or a bar to filter every other chart on the dashboard; click it
 again to clear. The click rides in the page URL, so a link keeps it.
+
+What a click filters on:
+
+| Click | Filters on |
+|---|---|
+| a pie slice, or its legend row | that value |
+| a bar | its value — on a date axis, its whole span (a month, a week…) |
+| a stacked bar's segment | both: the bar's value and the series |
+| a bar chart's legend row | that series |
+| a table row | the row's values — a grouped table's group, a raw table's one record (a list column left out) |
+| another value on the same column — a second slice, a bar, in any chart | either of them; a second date span instead narrows to where both hold, so pick one at a time |
+
+A number chart and a map aren't clickable.
 
 ![Filtering a dashboard by clicking a chart](../media/filter-cross.webp)
 
@@ -166,12 +208,46 @@ their roles; its search narrows either list.
 
 ![Viewing a dashboard as a role](../media/filter-role.webp)
 
-### Compare versions
+### Filter text
 
-Every save is a version. Edit a chart, save, and open **diff** mode to see the
-change line by line — and restore an older version if you need it back.
+`=` keeps rows with any of the values you tick, `≠` the rest — a search box
+narrows a long list of values. Here the orders from two channels, then every
+other one: the counts and charts follow each time.
 
-![Editing a chart and comparing versions](../media/compare-versions.webp)
+![Filtering text: two channels, then all but them](../media/filter-text.webp)
+
+### Filter numbers
+
+`=` and `≠` take values you tick, as on text; `↔` takes a range — type *from*
+and *to*, or drag the slider over the column's values. Both ends are included:
+`100–300` keeps an order of exactly 300.
+
+![Filtering numbers: amounts from 100 to 300](../media/filter-number.webp)
+
+### Filter dates
+
+`↔` opens a calendar on the data's latest month: click the first day, then the
+last (or type them under **Start** and **End**), and the chart follows those
+days. `=` and `≠` tick single days.
+
+![Filtering dates: the first two weeks of June](../media/filter-date.webp)
+
+### Filter yes / no
+
+A yes / no column lists its two values: tick the one to keep (`=`) or to leave
+out (`≠`). Here only the orders sent as a gift.
+
+![Filtering yes / no: only gifts](../media/filter-yes-no.webp)
+
+### Filter a list
+
+A column read with `to_list()` holds several items per row — an order's tags,
+say. `=` keeps a row whose list **contains** any of the items you tick; `≠` one
+that contains **none** of them, an empty list included. An item matches whole:
+`promo` never matches `promotion`. Here the promo orders, then every other —
+the one with no tags too.
+
+![Filtering a list: orders tagged promo, then the rest](../media/filter-list.webp)
 
 ## Datasets
 

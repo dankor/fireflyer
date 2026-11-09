@@ -92,6 +92,16 @@ class Clip:
         self._dot()
         self.hold(settle)
 
+    def tap(self, selector: str, settle: float = 0.4) -> None:
+        """A click where the cursor lands, as a hand makes it — no scrolling
+        first, unlike a locator's click: a panel kept on screen (the filter
+        badge's) stays where it is, and a control lit by hovering is hit."""
+        self.move(selector)
+        self._dot(press=True)
+        self.page.mouse.click(*self.at)
+        self._dot()
+        self.hold(settle)
+
     def type(self, text: str, per_key: float = 0.07) -> None:
         for ch in text:
             self.page.keyboard.type(ch)
@@ -251,7 +261,158 @@ def edit_chart(clip: Clip) -> None:
     clip.click("#ff-modal-form .ff-cancel", settle=0.8)
 
 
-SCENES = {"users-roles": users_roles, "groups": groups, "edit-chart": edit_chart}
+# --- filtering while viewing: a clip per kind of column ----------------------------
+#
+# Each on the demo path's "Orders overview" in view mode, typed into a chart's
+# badge: pick the column, the operator, the values, then +. Viewer state only —
+# nothing is saved, and each recording starts from a fresh page.
+
+_BADGE = ".fireflyer-filter-indicator"
+_ORDERS_KPI = f".fireflyer-dashboard-cell:has-text('Orders') {_BADGE}"
+_ALL_ORDERS = f".fireflyer-dashboard-cell:has-text('All orders') {_BADGE}"
+
+
+def _open(clip: Clip, badge: str, settle: float = 0.6) -> None:
+    clip.tap(f"{badge} > summary", settle=settle)
+
+
+def _column(clip: Clip, badge: str, column: str, op: str | None = None) -> None:
+    """Pick `column` in the badge's bottom row (and `op`, when not `=`)."""
+    form = f"{badge} form.fireflyer-filter-add"
+    clip.tap(f"{form} .ff-colpick > summary", settle=0.5)
+    item = clip.page.locator(f"{form} .ff-colpick-item[data-column='{column}']").first
+    item.evaluate("e => e.scrollIntoView({block: 'nearest'})")     # within the list only
+    clip.hold(0.3)
+    clip.tap(f"{form} .ff-colpick-item[data-column='{column}']", settle=0.2)
+    clip.page.wait_for_selector(f"{form} input[name=filter_column][value='{column}']", state="attached")
+    clip.hold(0.6)
+    if op:
+        _operator(clip, form, op)
+
+
+def _operator(clip: Clip, form: str, op: str) -> None:
+    clip.move(f"{form} select[name=filter_op]")
+    clip.page.locator(f"{form} select[name=filter_op]").first.select_option(op)
+    clip.hold(0.8)
+
+
+def _tick(clip: Clip, badge: str, *values: str) -> None:
+    for value in values:
+        clip.tap(f"{badge} form.fireflyer-filter-add label.ff-filter-choice:has(input[value='{value}'])", settle=0.3)
+
+
+def _add(clip: Clip, badge: str) -> None:
+    """+ (or ✓ for an edit): the dashboard redraws, the badge stays open."""
+    clip.tap(f"{badge} form.fireflyer-filter-add button[type=submit]", settle=1.4)
+
+
+def _look(clip: Clip, badge: str, seconds: float = 2.2) -> None:
+    """Close the badge to see the dashboard it narrowed."""
+    _open(clip, badge, settle=seconds)
+
+
+def _edit_to_not_in(clip: Clip, badge: str) -> None:
+    """The filter's pencil, `≠` for `=`, ✓: the rows the first one left out."""
+    _open(clip, badge)
+    clip.tap(f"{badge} .fireflyer-filter-edit", settle=0.8)
+    _operator(clip, f"{badge} form.fireflyer-filter-add", "ni")
+    _add(clip, badge)
+    _look(clip, badge, 2.6)
+
+
+def _all_orders(clip: Clip) -> None:
+    """The Orders tab, scrolled to its every-column table (gift, tags shown)."""
+    clip.tap(".fireflyer-tab[data-tab-name=Orders]", settle=1.4)
+    clip.page.evaluate("""() => {
+        const cell = [...document.querySelectorAll('.fireflyer-dashboard-cell')]
+          .find(c => c.textContent.includes('All orders'));
+        const pane = document.querySelector('.pane-body');
+        pane.scrollTop += cell.getBoundingClientRect().top - 96;   // under the tab bar
+    }""")
+    clip.hold(1.0)
+
+
+def filter_text(clip: Clip) -> None:
+    """docs/use-cases.md → "Filter text": channel = partner, phone, then ≠."""
+    clip.goto("/d/demo/orders-overview")
+    clip.hold(1.2)
+    _open(clip, _ORDERS_KPI)
+    _column(clip, _ORDERS_KPI, "channel")
+    _tick(clip, _ORDERS_KPI, "partner", "phone")
+    _add(clip, _ORDERS_KPI)
+    _look(clip, _ORDERS_KPI)
+    _edit_to_not_in(clip, _ORDERS_KPI)
+
+
+def filter_number(clip: Clip) -> None:
+    """docs/use-cases.md → "Filter numbers": amount from 100 to 300, both included."""
+    page = clip.page
+    form = f"{_ORDERS_KPI} form.fireflyer-filter-add"
+    clip.goto("/d/demo/orders-overview")
+    clip.hold(1.2)
+    _open(clip, _ORDERS_KPI)
+    _column(clip, _ORDERS_KPI, "amount", "between")
+    page.wait_for_selector(f"{form} input[name=filter_low]")
+    clip.tap(f"{form} input[name=filter_low]", settle=0.2)
+    clip.type("100", per_key=0.12)
+    clip.tap(f"{form} input[name=filter_high]", settle=0.2)
+    clip.type("300", per_key=0.12)
+    clip.hold(1.0)                                                   # the slider follows
+    _add(clip, _ORDERS_KPI)
+    _look(clip, _ORDERS_KPI, 2.8)
+
+
+def filter_date(clip: Clip) -> None:
+    """docs/use-cases.md → "Filter dates": order_day over June's first two weeks,
+    on the calendar (which opens on the data's latest month)."""
+    page = clip.page
+    form = f"{_ORDERS_KPI} form.fireflyer-filter-add"
+    clip.goto("/d/demo/orders-overview")
+    clip.hold(1.2)
+    # Up a little, so the two-month calendar fits the clip's height.
+    page.evaluate("document.querySelector('.pane-body').scrollTop = 40")
+    clip.hold(0.4)
+    _open(clip, _ORDERS_KPI)
+    _column(clip, _ORDERS_KPI, "order_day", "between")
+    page.wait_for_selector(f"{form} .ff-range > summary")
+    clip.tap(f"{form} .ff-range > summary", settle=0.8)
+    clip.tap(f"{form} .ff-cal-day[aria-label$='June 1, 2026']", settle=0.8)
+    clip.tap(f"{form} .ff-cal-day[aria-label$='June 14, 2026']", settle=1.2)
+    _add(clip, _ORDERS_KPI)
+    _look(clip, _ORDERS_KPI, 3.0)                                    # the bars are those days
+
+
+def filter_yes_no(clip: Clip) -> None:
+    """docs/use-cases.md → "Filter yes / no": gift = true, in the every-column table."""
+    clip.goto("/d/demo/orders-overview")
+    clip.hold(1.0)
+    _all_orders(clip)
+    _open(clip, _ALL_ORDERS)
+    _column(clip, _ALL_ORDERS, "gift")
+    _tick(clip, _ALL_ORDERS, "true")
+    _add(clip, _ALL_ORDERS)
+    _look(clip, _ALL_ORDERS, 3.0)
+
+
+def filter_list(clip: Clip) -> None:
+    """docs/use-cases.md → "Filter a list": tags = promo (a list holding it),
+    then ≠ (holding none — an order with no tags too)."""
+    clip.goto("/d/demo/orders-overview")
+    clip.hold(1.0)
+    _all_orders(clip)
+    _open(clip, _ALL_ORDERS)
+    _column(clip, _ALL_ORDERS, "tags")
+    _tick(clip, _ALL_ORDERS, "promo")
+    _add(clip, _ALL_ORDERS)
+    _look(clip, _ALL_ORDERS, 2.6)
+    _edit_to_not_in(clip, _ALL_ORDERS)
+
+
+SCENES = {
+    "users-roles": users_roles, "groups": groups, "edit-chart": edit_chart,
+    "filter-text": filter_text, "filter-number": filter_number, "filter-date": filter_date,
+    "filter-yes-no": filter_yes_no, "filter-list": filter_list,
+}
 
 
 def main() -> None:

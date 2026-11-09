@@ -137,6 +137,11 @@
   color: var(--ff-ink);
   background: var(--ff-canvas);
   position: relative;   /* positioning context for the move-mode drop-zone overlay */
+  /* A filter redraws the dashboard by swapping it whole, and for that moment
+     old and new sit one above the other: scroll anchoring, holding the old one
+     in place, threw a scrolled page to its bottom. The swap keeps the height,
+     so nothing needs anchoring. */
+  overflow-anchor: none;
   /* A section header's left offset. Just enough that it doesn't sit flush
      against the edge — deliberately *not* the card's text inset (21px), which
      pushed the title visibly out of line with the cards it heads. */
@@ -1115,21 +1120,22 @@ body.fireflyer-resizing-col * {
 .fireflyer-filter-add .ff-colpick-chevron { margin-left: auto; flex: none; opacity: 0.7; }
 .fireflyer-filter-add .ff-colpick[open] > .ff-colpick-field { border-color: var(--ff-accent); }
 .fireflyer-filter-add .ff-colpick .ff-type-glyph { margin-right: 0; }
+/* The list opens **inside** the panel, not floating under its field: the panel
+   is kept on screen (flipped above its badge where there's no room below),
+   but a list hanging out of it was cut off at the window's bottom on a short
+   one — the last columns out of reach. In the panel it grows the panel, which
+   then flips if it must; short enough that it fits one side, it scrolls. */
 .fireflyer-filter-add .ff-colpick-list {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 2;
   display: flex;
   flex-direction: column;
   min-width: 100%;
-  max-height: 260px;
+  max-height: 160px;
+  margin-top: 4px;
   overflow: auto;
   padding: 3px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 4px;
   background: var(--ff-tooltip-bg);
-  box-shadow: 0 6px 18px var(--ff-shadow-strong);
 }
 .fireflyer-filter-add .ff-colpick-item {
   display: flex;
