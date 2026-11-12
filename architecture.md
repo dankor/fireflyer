@@ -1513,8 +1513,9 @@ dashboard editor is the same, so the selected-item pages are consistent.
 The Datasets tab manages datasets (see the
 **Datasets** section above, and **Versions and column mapping**): upload a CSV
 (name, description, delimiter) → version 1.0, built in the background; the list
-shows each dataset's version, its description under the name, and — as its
-last column — links to the dashboards reading it (the dashboards list likewise
+shows each dataset's version, its description under the name, its **size** — the
+bytes it keeps: every upload's original once, plus the built Parquet (the exact
+count in the tooltip) — and, as its last column, links to the dashboards reading it (the dashboards list likewise
 links each dashboard's datasets; one that isn't uploaded shows dashed). A
 dataset's page leads with the **columns**, in five modes as the dashboard editor
 has its own — **view** (each column's name, type and its first five distinct
@@ -1529,7 +1530,14 @@ mapping revisions side by side, with restore and step older/newer) and
 **permissions** (the roles that may read it; see **Permissions**). Its
 **version chip** opens the history,
 grouped by upload: a check marks the version in use, a version opens the
-comparison, and an upload not in use can be deleted. A dataset **can't be
+comparison, an upload's first version shows the uploaded file's size, the
+version in use the built Parquet's (beside its check), and an upload not in
+use can be deleted. **What is stored**: every upload's original file, and the
+built data of the version in use only — any other version is its upload plus
+its mapping (the formulas that transform it), built again when restored. Sizes are recorded as files are written (each
+version's `size`, the document's `data_size` for the Parquet); a document from
+before them is measured from its files once, on load (`ObjectStore.size`, a
+`stat` or an S3 `HEAD`, never a read). A dataset **can't be
 removed** while a dashboard of **its own group** references it (the trash shows
 the count and lists those dashboards); other groups' dashboards don't hold it —
 the confirm lists them, and their charts on it lock. **Renaming cascades** —

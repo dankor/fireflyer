@@ -171,6 +171,11 @@ dialog textarea { resize:vertical; min-height:52px; }
   text-align:left; cursor:pointer; }
 .ds-ver:hover { background:color-mix(in srgb, var(--accent) 14%, transparent); }
 .ds-ver-label { font-family:ui-monospace, Menlo, monospace; min-width:3.5em; }
+/* The upload's size, on its first version's row; a column, so the dates align. */
+.ds-size { min-width:4.5em; text-align:right; }
+/* The built data's size, beside the in-use check: the one version kept as data. */
+.ds-built { margin-left:auto; }
+.ds-built + .ds-mark { margin-left:8px; }
 /* In use: a check; building: the spinner. */
 .ds-mark { margin-left:auto; display:inline-flex; align-self:center; color:var(--accent); }
 .ds-mark svg { width:15px; height:15px; }

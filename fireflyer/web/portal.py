@@ -1155,6 +1155,24 @@ def _stamp(iso: str) -> str:
     return f'<time datetime="{escape(iso)}">{escape(text)} UTC</time>' if text else ""
 
 
+def human_size(n: int) -> str:
+    """Bytes as people read them: `820 B`, `4.2 KB`, `38 KB`, `1.4 MB`."""
+    size, unit = float(n), "B"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            break
+        size /= 1024
+    if unit == "B":
+        return f"{n} B"
+    return f"{size:.1f} {unit}" if size < 10 else f"{size:.0f} {unit}"
+
+
+def _size(n: int, what: str) -> str:
+    """A size, with its exact bytes in the tooltip."""
+    title = escape(f"{what}: {n:,} bytes", quote=True)
+    return f'<span title="{title}">{human_size(n)}</span>'
+
+
 def _author_cell(author: str, authors: bool) -> str:
     """Who made it — a column only where there are people to name: with no
     login (local mode) every row would read "—"."""
@@ -1578,6 +1596,7 @@ def _dataset_row(ds: Dataset, authors: bool = True,
         f'<td class="muted mono">{_version_cell(ds)}</td>'
         f'<td class="muted">{len(ds.columns) + len(ds.service)}</td>'
         f'<td class="muted">{ds.rows}</td>'
+        f'<td class="muted">{_size(ds.size, "Stored, every upload and the built data")}</td>'
         f'<td class="muted">{updated}</td>'
         f"{_author_cell(ds.author, authors)}"
         f"{dashboards}"
@@ -1599,7 +1618,7 @@ def render_datasets(
     mode) leaves the column out. `inactive`: the names not shared with the
     viewer."""
     table = list_table(
-        ["Name", "Group", "Version", "Columns", "Rows", "Updated", *(["Author"] if authors else []),
+        ["Name", "Group", "Version", "Columns", "Rows", "Size", "Updated", *(["Author"] if authors else []),
          *(["Dashboards"] if used_by is not None else [])],
         [_dataset_row(d, authors, used_by, group, d.name in inactive, can_write) for d in datasets],
         "No datasets yet", _add_button("New dataset", "openUpload()") if can_write else "",
@@ -2302,12 +2321,18 @@ def _history_menu(ds: Dataset, versions: list[Version], authors: bool = True,
             f'<button class="act act-danger" type="submit" title="Delete upload {major} and its versions"'
             f' aria-label="Delete upload {major}">{_icon("trash")}</button></form>'
         )
+        # The upload's file is the group's first version's; the rest only
+        # remapped its columns, so the size shows once, there.
+        first = min(mine, key=lambda v: v.minor)
         items = "".join(
             f'<button type="button" class="ds-ver" data-version="{v.label}">'
             f'<span class="ds-ver-label">{v.label}</span>'
+            f'<span class="muted ds-size">{_size(v.size, "Uploaded file") if v is first else ""}</span>'
             f'<span class="muted">{_stamp(datetime.fromtimestamp(v.created_at, timezone.utc).isoformat())}</span>'
             + (f'<span class="muted">{escape(v.author or "")}</span>' if authors else "")
-            + (f'<span class="ds-mark" title="In use" aria-label="In use">{_icon("check")}</span>'
+            # The version in use is the one whose data is built and kept.
+            + (f'<span class="muted ds-built">{_size(ds.data_size, "Built data")}</span>'
+               f'<span class="ds-mark" title="In use" aria-label="In use">{_icon("check")}</span>'
                if v.label == ds.version else "")
             + ('<span class="ds-mark" title="Building" aria-label="Building"><span class="ds-spin"></span></span>'
                if v.status == "building" else "")

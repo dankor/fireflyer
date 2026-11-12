@@ -12,7 +12,9 @@ guarded when dashboards still use it (both handled a layer up, in the web app).
   reset: an upload keeps it (1.3 → 2.3) unless the mapping it carries forward
   changed (new columns: 2.4), and saving a mapping is the next one (2.5);
 - only the **latest** computed Parquet is kept — the one charts read. Older
-  versions keep their mapping, so any two can be compared;
+  versions keep just their mapping: any two can be compared, and any one is
+  built again from its upload's file when restored, so storing its data would
+  only cost space;
 - a major can be deleted (with all its minors), except the current one.
 
 Computing a version is a **build** (`build()`), which the web app runs in the
@@ -76,6 +78,8 @@ class Dataset:
     # Service columns: in the dataset, never in the data charts read — so not in
     # `columns`, which is what dashboards and their editors are offered.
     service: list[Column] = field(default_factory=list)
+    size: int = 0            # bytes kept: every upload's original and the built Parquet
+    data_size: int = 0       # bytes of the built Parquet — the version in use's
 
 
 @dataclass
@@ -88,6 +92,7 @@ class Version:
     rows: int = 0
     mapping: str = ""
     sources: list[str] = field(default_factory=list)
+    size: int = 0            # bytes of the upload it was built from
 
     @property
     def label(self) -> str:
@@ -327,6 +332,8 @@ class DatasetStore:
             version=doc.get("current") or "",
             building=_label(building) if building else "",
             error=doc.get("error", ""),
+            size=_stored(doc),
+            data_size=doc.get("data_size", 0),
         )
 
     def versions(self, name: str) -> list[Version]:
@@ -483,7 +490,8 @@ class DatasetStore:
             "current": None, "error": "", "versions": [],
         }
         self._store.put(_raw_key(name, 1, "csv"), csv_bytes)
-        doc["versions"].append(_new_version(1, 0, sources, column_map.default(sources), author, "csv"))
+        doc["versions"].append(_new_version(1, 0, sources, column_map.default(sources), author, "csv",
+                                            size=len(csv_bytes)))
         self._save(doc)
         return self._finish(name, build)
 
@@ -509,7 +517,8 @@ class DatasetStore:
         self._store.put(_raw_key(name, major, "csv"), csv_bytes)
         _drop_building(doc)
         minor = _next_minor(doc, column_map.dump(rules, perms))
-        doc["versions"].append(_new_version(major, minor, sources, rules, author, "csv", perms))
+        doc["versions"].append(_new_version(major, minor, sources, rules, author, "csv", perms,
+                                            size=len(csv_bytes)))
         doc["delimiter"] = delimiter
         doc["error"] = ""                        # a new try: the last failure is history
         if description is not None:
@@ -542,11 +551,12 @@ class DatasetStore:
                 return self.get(name)
             minor = _next_minor(doc, text) if doc["versions"] else latest["minor"]
             doc["versions"].append(_new_version(latest["major"], minor, latest["sources"],
-                                                rules, author, latest["raw"], perms))
+                                                rules, author, latest["raw"], perms, latest.get("size", 0)))
         else:
             minor = max(v["minor"] for v in doc["versions"]) + 1
             doc["versions"].append(
-                _new_version(latest["major"], minor, latest["sources"], rules, author, latest["raw"], perms)
+                _new_version(latest["major"], minor, latest["sources"], rules, author, latest["raw"], perms,
+                             latest.get("size", 0))
             )
         doc["error"] = ""
         self._save(doc)
@@ -585,7 +595,7 @@ class DatasetStore:
             {"name": n, "dtype": str(t), **({"service": True} if n in service else {})}
             for n, t in out.schema.items()
         ])
-        doc.update(current=_label(mine), error="", updated_at=_now())
+        doc.update(current=_label(mine), error="", updated_at=_now(), data_size=len(buf.getvalue()))
         self._save(doc)
         if before is None:
             return {}
@@ -669,7 +679,28 @@ class DatasetStore:
             for v in {id(v): v for v in (_find(doc, doc.get("current")), _latest(doc)) if v}.values():
                 v["mapping"] = column_map.with_permissions(v["mapping"], grants)
             self._save(doc)
+        if self._measure(name, doc):
+            self._save(doc)
         return doc
+
+    def _measure(self, name: str, doc: dict) -> bool:
+        """Documents from before sizes were kept get them from the files
+        themselves, once. True when one was added."""
+        added = False
+        for v in doc.get("versions", []):
+            if "size" not in v:
+                v["size"] = self._size(_raw_key(name, v["major"], v["raw"]))
+                added = True
+        if "data_size" not in doc and doc.get("current"):
+            doc["data_size"] = self._size(_data_key(name))
+            added = True
+        return added
+
+    def _size(self, key: str) -> int:
+        try:
+            return self._store.size(key)
+        except Exception:                        # gone, or the store can't say
+            return 0
 
     def _require(self, name: str) -> dict:
         doc = self._load(name)
@@ -693,7 +724,7 @@ class DatasetStore:
             data = self._store.get(f"{name}.parquet")
             columns = [(c["name"], c["dtype"]) for c in old.get("columns", [])]
             version = _new_version(1, 0, [c for c, _ in columns], column_map.from_dtypes(columns),
-                                   old.get("author", ""), "parquet")
+                                   old.get("author", ""), "parquet", size=len(data))
             version.update(status="ready", rows=old.get("rows", 0),
                            columns=[{"name": c, "dtype": t} for c, t in columns])
             updated = _unix(old.get("updated_at", ""))
@@ -703,7 +734,7 @@ class DatasetStore:
                 "name": name, "description": old.get("description", ""),
                 "delimiter": old.get("delimiter", ","), "author": old.get("author", ""),
                 "created_at": updated, "updated_at": updated,
-                "current": "1.0", "error": "", "versions": [version],
+                "current": "1.0", "error": "", "versions": [version], "data_size": len(data),
             })
             self._store.delete(f"{name}.parquet")
             self._store.delete(meta_key)
@@ -713,11 +744,13 @@ class DatasetStore:
 
 
 def _new_version(major: int, minor: int, sources: list[str], rules, author: str, raw: str,
-                 permissions: dict | None = None) -> dict:
+                 permissions: dict | None = None, size: int = 0) -> dict:
+    """`size`: the upload's bytes — every version of a major is built from
+    the same file, so each carries it."""
     return {
         "major": major, "minor": minor, "status": "building",
         "created_at": _now(), "author": author, "rows": 0,
-        "raw": raw, "sources": list(sources), "columns": [],
+        "raw": raw, "size": size, "sources": list(sources), "columns": [],
         "mapping": column_map.dump(rules, permissions),
     }
 
@@ -755,7 +788,14 @@ def _drop_building(doc: dict) -> None:
 
 def _version(v: dict) -> Version:
     return Version(v["major"], v["minor"], v["created_at"], v.get("author", ""), v["status"],
-                   v.get("rows", 0), v["mapping"], list(v["sources"]))
+                   v.get("rows", 0), v["mapping"], list(v["sources"]), v.get("size", 0))
+
+
+def _stored(doc: dict) -> int:
+    """Bytes a dataset keeps: each upload's original once, and the built
+    Parquet charts read."""
+    uploads = {v["major"]: v.get("size", 0) for v in doc.get("versions", [])}
+    return sum(uploads.values()) + doc.get("data_size", 0)
 
 
 def _read(data: bytes, delimiter: str, kind: str, rows: int | None = None) -> pl.DataFrame:
