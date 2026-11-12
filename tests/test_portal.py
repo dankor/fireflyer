@@ -140,6 +140,40 @@ def test_render_datasets_table():
     assert "openUpload" in html
 
 
+def test_human_size():
+    from fireflyer.web.portal import human_size
+
+    assert [human_size(n) for n in (0, 820, 4300, 38_000, 1_480_000, 5 * 1024**3)] == [
+        "0 B", "820 B", "4.2 KB", "37 KB", "1.4 MB", "5.0 GB"]
+
+
+def test_render_datasets_shows_each_ones_size():
+    ds = _ds()
+    ds.size = 1_480_000
+    html = render_datasets([ds])
+    assert ">Size</th>" in html
+    assert '<span title="Stored, every upload and the built data: 1,480,000 bytes">1.4 MB</span>' in html
+
+
+def test_history_menu_shows_each_uploads_size_once():
+    from fireflyer.datasets import Version
+    from fireflyer.web.portal import _history_menu
+
+    ds = _ds()
+    ds.version, ds.data_size = "2.1", 512
+    versions = [Version(2, 1, 0, "", "ready", size=2048), Version(2, 0, 0, "", "ready", size=2048),
+                Version(1, 0, 0, "", "ready", size=900)]
+    html = _history_menu(ds, versions)
+    # On the upload's own row (its first version), not on the remap after it.
+    assert html.count("Uploaded file: 2,048 bytes") == 1 and ">2.0 KB<" in html
+    assert html.index('data-version="2.0"') < html.index("2.0 KB") < html.index('data-version="1.0"')
+    assert "Uploaded file: 900 bytes" in html
+    # The built data: on the version in use alone, beside its check.
+    assert html.count("Built data:") == 1
+    row = html[html.index('data-version="2.1"'):html.index('data-version="2.0"')]
+    assert "Built data: 512 bytes" in row and 'title="In use"' in row
+
+
 def test_render_datasets_escapes_name():
     html = render_datasets([_ds(name="<script>x</script>")])
     assert "<script>x</script>" not in html and "&lt;script&gt;" in html

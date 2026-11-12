@@ -363,3 +363,43 @@ def test_the_minor_counts_mapping_changes_and_never_resets(store):
     assert store.replace("orders", CSV).version == "2.1"          # same columns: same mapping
     assert store.remap("orders", TYPED + "  big: to_number(amount) * 2\n").version == "2.2"
     assert store.replace("orders", CSV).version == "3.2"
+
+
+# --- sizes: each upload's file, and what the dataset keeps in all --------------------
+
+
+def test_sizes_are_kept_per_upload_and_in_all(store):
+    store.create("orders", CSV)
+    bigger = CSV + b"4,paid,99\n"
+    store.replace("orders", bigger)
+    store.remap("orders", store.mapping("orders").replace("id:", "order_id:", 1))
+    by_label = {v.label: v.size for v in store.versions("orders")}
+    # A remap is built from the same upload: it carries that file's size.
+    assert by_label == {"1.0": len(CSV), "2.0": len(bigger), "2.1": len(bigger)}
+    parquet = store._store.size("datasets/orders/data.parquet")
+    # Each upload once, plus the Parquet charts read.
+    assert store.get("orders").size == len(CSV) + len(bigger) + parquet
+    assert store.get("orders").data_size == parquet
+
+
+def test_deleting_an_upload_drops_its_size(store):
+    store.create("orders", CSV)
+    store.replace("orders", CSV + b"4,paid,99\n")
+    before = store.get("orders").size
+    store.delete_major("orders", 1)
+    assert store.get("orders").size == before - len(CSV)
+
+
+def test_sizes_are_measured_for_datasets_from_before_them(store):
+    import yaml
+
+    store.create("orders", CSV)
+    doc = yaml.safe_load(store._catalog.load("orders"))
+    doc.pop("data_size")
+    for v in doc["versions"]:
+        v.pop("size")
+    store._catalog.save("orders", yaml.safe_dump(doc))
+    assert store.versions("orders")[0].size == len(CSV)
+    assert store.get("orders").size == len(CSV) + store._store.size("datasets/orders/data.parquet")
+    # Measured once: written back to the document.
+    assert "size:" in store._catalog.load("orders")

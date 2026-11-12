@@ -285,6 +285,8 @@ a line and you have a new computed column.
 
 Every saved change is a version. **compare** shows two side by side; the
 arrows step back and forth through them, and restore brings an old one back.
+The version chip lists them by upload, each upload with its file's size; the
+datasets list shows what each dataset keeps in all.
 
 ![Comparing versions of a dataset](../media/dataset-compare.webp)
 

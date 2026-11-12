@@ -23,6 +23,10 @@ class ObjectStore(Protocol):
     def exists(self, key: str) -> bool: ...
     def list_keys(self) -> list[str]: ...
 
+    def size(self, key: str) -> int:
+        """`key`'s size in bytes, without reading it."""
+        ...
+
     def source(self, key: str) -> tuple[str, dict | None]:
         """`(uri, storage_options)` to hand to `pl.scan_parquet` for `key`."""
         ...
@@ -62,6 +66,9 @@ class LocalObjectStore:
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
+
+    def size(self, key: str) -> int:
+        return self._path(key).stat().st_size
 
     def list_keys(self) -> list[str]:
         return sorted(
@@ -121,6 +128,9 @@ class S3ObjectStore:
         except Exception:
             return False
 
+    def size(self, key: str) -> int:
+        return self._client.head_object(Bucket=self._bucket, Key=key)["ContentLength"]
+
     def list_keys(self) -> list[str]:
         keys: list[str] = []
         token = None
@@ -168,6 +178,9 @@ class PrefixedStore:
 
     def exists(self, key: str) -> bool:
         return self._store.exists(self._prefix + key)
+
+    def size(self, key: str) -> int:
+        return self._store.size(self._prefix + key)
 
     def list_keys(self) -> list[str]:
         return [k[len(self._prefix):] for k in self._store.list_keys() if k.startswith(self._prefix)]

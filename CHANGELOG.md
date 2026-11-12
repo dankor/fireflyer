@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-12
+
+### Added
+
+- **File sizes.** The datasets list has a **Size** column: what a dataset
+  keeps — every upload's original and the built Parquet — with the exact
+  bytes in its tooltip. In a dataset's version history, each upload shows its
+  file's size on its first version, and the version in use its built data's
+  size — the only built data kept; any other version is rebuilt from its
+  upload and mapping when restored. Sizes are recorded on upload and build;
+  datasets from before are measured from their files once.
+
 ## [0.26.0] - 2026-11-09
 
 ### Added
@@ -1439,7 +1451,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/dankor/fireflyer/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/dankor/fireflyer/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/dankor/fireflyer/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/dankor/fireflyer/compare/v0.23.0...v0.24.0
