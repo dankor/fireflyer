@@ -15,7 +15,10 @@ guarded when dashboards still use it (both handled a layer up, in the web app).
   versions keep just their mapping: any two can be compared, and any one is
   built again from its upload's file when restored, so storing its data would
   only cost space;
-- a major can be deleted (with all its minors), except the current one.
+- a major can be deleted (with all its minors), except the current one;
+- a dataset keeps `history:` (a mapping key, `column_map`) majors before the
+  current one — 0 by default: when a version is built, the older ones past
+  that count go, their file and versions.
 
 Computing a version is a **build** (`build()`), which the web app runs in the
 background: until it finishes, charts keep reading the previous file, and if a
@@ -26,6 +29,13 @@ Everything about a dataset but its files is one **YAML document** — name,
 description, versions with their mappings — kept by a catalog: as a file next
 to the data in local mode (`ObjectCatalog`, the default), in the portal's
 database in portal mode (`SqlCatalog`).
+
+A dataset's data can also come from a **database**: its mapping's `source:`
+names a connection and the SQL (`connections.py`), and each **refresh** is the
+next major — the query's result kept as `raw/<major>.parquet`, typed, where an
+upload keeps its CSV. From there it's the same: the mapping reads it, `build()`
+computes it. The first mapping of a query keeps the result's types
+(`column_map.typed_formula`), and a column a later refresh brings does too.
 
 A mapping also carries the dataset's **permissions** (`permissions:`, see
 `column_map`): who may read it, and which rows. So they're versioned with the
@@ -80,6 +90,7 @@ class Dataset:
     service: list[Column] = field(default_factory=list)
     size: int = 0            # bytes kept: every upload's original and the built Parquet
     data_size: int = 0       # bytes of the built Parquet — the version in use's
+    history: int = 0         # how many uploads before the one in use it keeps (the mapping's)
 
 
 @dataclass
@@ -93,6 +104,7 @@ class Version:
     mapping: str = ""
     sources: list[str] = field(default_factory=list)
     size: int = 0            # bytes of the upload it was built from
+    from_query: bool = False  # its upload is a query's result, not a file
 
     @property
     def label(self) -> str:
@@ -252,6 +264,10 @@ class SqlCatalog:
     def delete(self, name: str) -> None:
         self._run("DELETE FROM datasets WHERE group_name = ? AND name = ?", (self._group, name))
 
+    def every(self) -> list[tuple[str, str, str]]:
+        """`(group, name, document)` of every dataset in every group."""
+        return self._run("SELECT group_name, name, doc FROM datasets")
+
     def move_group(self, old: str, new: str) -> None:
         self._run("UPDATE datasets SET group_name = ? WHERE group_name = ?", (new, old))
 
@@ -334,6 +350,7 @@ class DatasetStore:
             error=doc.get("error", ""),
             size=_stored(doc),
             data_size=doc.get("data_size", 0),
+            history=column_map.history((current or {}).get("mapping", "")),
         )
 
     def versions(self, name: str) -> list[Version]:
@@ -358,7 +375,8 @@ class DatasetStore:
         latest = _latest(doc)
         rules = column_map.parse(old["mapping"], old["sources"])
         return column_map.dump(column_map.default(latest["sources"], rules, old["sources"]),
-                               column_map.permissions(old["mapping"]))
+                               column_map.permissions(old["mapping"]), column_map.source(old["mapping"]),
+                               column_map.history(old["mapping"]))
 
     # --- permissions -----------------------------------------------------------
 
@@ -412,6 +430,11 @@ class DatasetStore:
             after = change(before)
             if after != before:
                 self.remap(name, column_map.with_permissions(latest, after), author=author)
+
+    def query_source(self, name: str) -> dict | None:
+        """Where `name`'s data comes from — `{connection, query}` — or None
+        for an uploaded file. The latest version's: what a refresh runs."""
+        return column_map.source(self.mapping(name))
 
     def mapping(self, name: str) -> str:
         """The YAML of the version being built, or else of the published one."""
@@ -513,18 +536,86 @@ class DatasetStore:
         previous = column_map.parse(latest["mapping"], latest["sources"])
         rules = column_map.default(sources, previous, latest["sources"])
         perms = column_map.permissions(latest["mapping"])       # who may read it carries over too
+        keep = column_map.history(latest["mapping"])             # and how many uploads to keep
         major = max(v["major"] for v in doc["versions"]) + 1
         self._store.put(_raw_key(name, major, "csv"), csv_bytes)
         _drop_building(doc)
-        minor = _next_minor(doc, column_map.dump(rules, perms))
+        minor = _next_minor(doc, column_map.dump(rules, perms, history=keep))
         doc["versions"].append(_new_version(major, minor, sources, rules, author, "csv", perms,
-                                            size=len(csv_bytes)))
+                                            size=len(csv_bytes), history=keep))
         doc["delimiter"] = delimiter
         doc["error"] = ""                        # a new try: the last failure is history
         if description is not None:
             doc["description"] = description
         self._save(doc)
         return self._finish(name, build)
+
+    def create_query(self, name: str, frame: pl.DataFrame, source: dict, *, description: str = "",
+                     author: str = "", build: bool = True) -> Dataset:
+        """A new dataset from a query's result (`frame`), version 1.0: each
+        column read back as its type, `source` — `{connection, query}` — kept
+        in the mapping for the next refresh."""
+        name = _check_name(name)
+        if self._load(name) is not None:
+            raise DatasetError(f"a dataset named {name!r} already exists")
+        data = _parquet(frame)
+        now = _now()
+        doc = {
+            "name": name, "description": description, "delimiter": ",",
+            "author": author, "created_at": now, "updated_at": now,
+            "current": None, "error": "", "versions": [],
+        }
+        self._store.put(_raw_key(name, 1, "parquet"), data)
+        rules = column_map.default(frame.columns, dtypes=_dtypes(frame))
+        doc["versions"].append(_new_version(1, 0, frame.columns, rules, author, "parquet",
+                                            size=len(data), source=source))
+        self._save(doc)
+        return self._finish(name, build)
+
+    def refresh(self, name: str, frame: pl.DataFrame, *, mapping: str | None = None,
+                author: str = "", build: bool = True) -> Dataset:
+        """A query's new result (`frame`): the next major, as an upload is.
+        `mapping`: the YAML to carry forward — the latest version's unless a
+        changed one comes with it (a new query, saved with its columns); its
+        columns whose formulas still find what they read are kept, the
+        result's new ones read back as their type."""
+        doc = self._require(name)
+        latest = _latest(doc)
+        text = mapping if mapping is not None else latest["mapping"]
+        try:
+            previous = column_map.rules(text)
+            perms = column_map.permissions(text)
+            source = column_map.source(text)
+            keep = column_map.history(text)
+        except column_map.MappingError as exc:
+            raise DatasetError(str(exc)) from exc
+        rules = column_map.default(frame.columns, previous, latest["sources"], _dtypes(frame))
+        if not rules:
+            raise DatasetError("none of the mapping's columns are in the query's result")
+        data = _parquet(frame)
+        major = max(v["major"] for v in doc["versions"]) + 1
+        self._store.put(_raw_key(name, major, "parquet"), data)
+        _drop_building(doc)
+        minor = _next_minor(doc, column_map.dump(rules, perms, source, keep))
+        doc["versions"].append(_new_version(major, minor, frame.columns, rules, author, "parquet", perms,
+                                            len(data), source, keep))
+        doc["error"] = ""
+        self._save(doc)
+        return self._finish(name, build)
+
+    def record_error(self, name: str, error: str) -> None:
+        """A refresh that failed before there was a version to build — the
+        database refused: shown as a failed build is, the data kept."""
+        doc = self._require(name)
+        doc["error"] = error
+        self._save(doc)
+
+    def every_version(self) -> list[dict]:
+        """One row per version of every dataset, in every group the catalog
+        holds — the `internal` connection's `dataset_versions` table."""
+        every = getattr(self._catalog, "every", None)
+        docs = every() if every else [("", n, self._catalog.load(n)) for n in self._catalog.names()]
+        return [row for group, _, text in docs if text for row in _version_rows(group, yaml.safe_load(text))]
 
     def remap(self, name: str, mapping: str, *, author: str = "", build: bool = True) -> Dataset:
         """A new column mapping: the next minor (the dataset's one counter), on
@@ -535,9 +626,11 @@ class DatasetStore:
         try:
             rules = column_map.parse(mapping, latest["sources"])
             perms = column_map.permissions(mapping)
+            source = column_map.source(mapping)
+            keep = column_map.history(mapping)       # `parse` refused a bad one
         except column_map.MappingError as exc:
             raise DatasetError(str(exc)) from exc
-        text = column_map.dump(rules, perms)
+        text = column_map.dump(rules, perms, source, keep)
         if text == latest["mapping"]:
             raise DatasetError("the mapping hasn't changed")
         if latest["status"] == "building":
@@ -551,12 +644,13 @@ class DatasetStore:
                 return self.get(name)
             minor = _next_minor(doc, text) if doc["versions"] else latest["minor"]
             doc["versions"].append(_new_version(latest["major"], minor, latest["sources"],
-                                                rules, author, latest["raw"], perms, latest.get("size", 0)))
+                                                rules, author, latest["raw"], perms, latest.get("size", 0),
+                                                source, keep))
         else:
             minor = max(v["minor"] for v in doc["versions"]) + 1
             doc["versions"].append(
                 _new_version(latest["major"], minor, latest["sources"], rules, author, latest["raw"], perms,
-                             latest.get("size", 0))
+                             latest.get("size", 0), source, keep)
             )
         doc["error"] = ""
         self._save(doc)
@@ -596,6 +690,7 @@ class DatasetStore:
             for n, t in out.schema.items()
         ])
         doc.update(current=_label(mine), error="", updated_at=_now(), data_size=len(buf.getvalue()))
+        self._prune(name, doc)
         self._save(doc)
         if before is None:
             return {}
@@ -659,6 +754,19 @@ class DatasetStore:
             return None
         self._save(doc)
         return None
+
+    def _prune(self, name: str, doc: dict) -> None:
+        """Drop the uploads before the one in use past the newest its mapping's
+        `history:` keeps — each one's file and versions. Uploads after it (one
+        building) stay."""
+        current = _find(doc, doc.get("current"))
+        if current is None:
+            return
+        older = sorted({v["major"] for v in doc["versions"] if v["major"] < current["major"]}, reverse=True)
+        for major in older[column_map.history(current["mapping"]):]:
+            gone = next(v for v in doc["versions"] if v["major"] == major)
+            self._store.delete(_raw_key(name, major, gone["raw"]))
+            doc["versions"] = [v for v in doc["versions"] if v["major"] != major]
 
     def _keys(self, name: str) -> list[str]:
         return [k for k in self._store.list_keys() if k.startswith(_folder(name))]
@@ -744,14 +852,15 @@ class DatasetStore:
 
 
 def _new_version(major: int, minor: int, sources: list[str], rules, author: str, raw: str,
-                 permissions: dict | None = None, size: int = 0) -> dict:
+                 permissions: dict | None = None, size: int = 0, source: dict | None = None,
+                 history: int = 0) -> dict:
     """`size`: the upload's bytes — every version of a major is built from
     the same file, so each carries it."""
     return {
         "major": major, "minor": minor, "status": "building",
         "created_at": _now(), "author": author, "rows": 0,
         "raw": raw, "size": size, "sources": list(sources), "columns": [],
-        "mapping": column_map.dump(rules, permissions),
+        "mapping": column_map.dump(rules, permissions, source, history),
     }
 
 
@@ -788,7 +897,31 @@ def _drop_building(doc: dict) -> None:
 
 def _version(v: dict) -> Version:
     return Version(v["major"], v["minor"], v["created_at"], v.get("author", ""), v["status"],
-                   v.get("rows", 0), v["mapping"], list(v["sources"]), v.get("size", 0))
+                   v.get("rows", 0), v["mapping"], list(v["sources"]), v.get("size", 0),
+                   v.get("raw") == "parquet" and column_map.source(v["mapping"]) is not None)
+
+
+def _version_rows(group: str, doc: dict) -> list[dict]:
+    """A dataset's versions as rows — no mappings, no columns: what usage
+    analytics reads."""
+    current = doc.get("current")
+    return [{
+        "group_name": group, "dataset": doc.get("name", ""), "version": _label(v),
+        "current": _label(v) == current, "status": v.get("status", ""), "author": v.get("author", ""),
+        "created_at": v.get("created_at", 0), "rows": v.get("rows", 0), "size": v.get("size", 0),
+        "data_size": doc.get("data_size", 0) if _label(v) == current else 0,
+        "error": doc.get("error", "") if _label(v) == current else "",
+    } for v in doc.get("versions", [])]
+
+
+def _dtypes(frame: pl.DataFrame) -> dict[str, str]:
+    return {c: str(t) for c, t in frame.schema.items()}
+
+
+def _parquet(frame: pl.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    frame.write_parquet(buf)
+    return buf.getvalue()
 
 
 def _stored(doc: dict) -> int:

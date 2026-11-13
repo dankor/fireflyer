@@ -1083,6 +1083,14 @@ _ICONS = {
     "compare": '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/>'
                '<path d="M6 9h1M6 13h1M17 11h1M17 15h1"/>',
     "check": '<path d="M5 12.5l4.5 4.5L19 7"/>',
+    # A database: a connection, and a dataset whose data comes from one.
+    "database": '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/>'
+                '<path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+    # Two arrows round: run a dataset's query again.
+    "refresh": '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/>'
+               '<path d="M21 3v5h-5M3 21v-5h5"/>',
+    # A plug: test a connection.
+    "plug": '<path d="M9 2v6M15 2v6"/><path d="M6 8h12v4a6 6 0 0 1-12 0z"/><path d="M12 18v4"/>',
     # An eye, crossed out: a service column — in the dataset, hidden from dashboards.
     "service": '<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>'
                '<circle cx="12" cy="12" r="2.8"/><path d="M4 4l16 16"/>',
@@ -1100,6 +1108,7 @@ _ICONS = {
     "role": '<circle cx="9" cy="7" r="3.5"/><path d="M2.5 20c0-3.8 2.9-6.5 6.5-6.5 1.4 0 2.7.4 3.7 1.1"/>'
             '<path d="M18 12.5l3.5 1.4v2.8c0 2.1-1.5 3.7-3.5 4.3-2-.6-3.5-2.2-3.5-4.3v-2.8z"/>',
     "save": '<path d="M5 3h11l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 3v5h7V3"/><rect x="7" y="13" width="10" height="7" rx="1"/>',
+    "history": '<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
 }
 
 
@@ -1216,7 +1225,7 @@ def list_table(heads: list[str], rows: list[str], empty: str, add: str) -> str:
     in it, over `empty`."""
     head = "".join(f"<th>{h}</th>" for h in heads) + f'<th class="actions">{add}</th>'
     body = "".join(rows) or f'<tr><td class="empty-row" colspan="{len(heads) + 1}">{empty}</td></tr>'
-    return f'<table class="dash-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+    return f'<table class="dash-table ff-list"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
 
 
 def _add_button(title: str, onclick: str) -> str:
@@ -1305,11 +1314,13 @@ def back_button(href: str, title: str) -> str:
     return f'<a class="ff-back" href="{href}" title="{t}" aria-label="{t}">{_icon("back")}</a>'
 
 
-def nav_switch(active: str, users: bool = False, group: str = "") -> str:
+def nav_switch(active: str, users: bool = False, group: str = "", connections: bool = False) -> str:
     """The list pages' left-nav control: a segmented Dashboards | Datasets |
     Access switch (`active` marks the current list) — and Users and Groups,
-    with `users` (portal mode, an admin). The first two stay in `group`; with
-    none they open the viewer's own. Not shown on selected-item pages."""
+    with `users` (portal mode, an admin), and Connections with `connections`
+    (an admin; anyone where there are no logins). The first two stay in
+    `group`; with none they open the viewer's own. Not shown on selected-item
+    pages."""
     def seg(href, label, key):
         cls = " active" if key == active else ""
         return f'<a class="ff-switch-seg{cls}" href="{href}">{label}</a>'
@@ -1320,6 +1331,7 @@ def nav_switch(active: str, users: bool = False, group: str = "") -> str:
         + seg(f"/datasets{where}", "Datasets", "datasets")
         + seg("/access", "Access", "access")
         + (seg("/users", "Users", "users") + seg("/groups", "Groups", "groups") if users else "")
+        + (seg("/connections", "Connections", "connections") if connections else "")
         + "</nav>"
     )
 
@@ -1465,6 +1477,7 @@ def _shell(
     head: str = "",
     users: bool = False,
     group: str = "",
+    connections: bool = False,
 ) -> str:
     """The gallery page frame. Overview pages (dashboards/datasets lists) lead
     with a Dashboards | Datasets switch on the left; on the **right** the group
@@ -1473,7 +1486,7 @@ def _shell(
     and show their group read-only in `picker` (`group_label`): back goes to
     the list, which has the picker.
     Then optional `topbar_right`, then `body`. No second nav bar."""
-    nav = "" if detail else nav_switch(active, users, group)
+    nav = "" if detail else nav_switch(active, users, group, connections)
     right = picker + topbar_right + theme_switch() + user_menu
     right_html = f'<span class="topbar-right">{right}</span>' if right else ""
     return f"""<!DOCTYPE html>
@@ -1500,6 +1513,7 @@ def render_gallery(
     picker: str = "", authors: bool = True,
     datasets: set[str] | None = None, uses: dict[str, list[str]] | None = None,
     users: bool = False, group: str = groups.LOCAL_GROUP, inactive: set[str] = frozenset(),
+    connections: bool = False,
     can_write: bool = True, clone_groups: list[str] | None = None,
 ) -> str:
     """Group `group`'s dashboards. `datasets`: the references that exist, so a
@@ -1522,7 +1536,7 @@ def render_gallery(
     return _shell(
         title, user_menu, "dashboards", body_table,
         extra=add_dialog + clone_dialog,
-        picker=picker, users=users, group=group,
+        picker=picker, users=users, group=group, connections=connections,
     )
 
 
@@ -1570,6 +1584,51 @@ def _upload_dialog(action: str, heading: str, ok_label: str, dialog_id: str, nam
 </dialog>"""
 
 
+def _new_dataset_dialog(base: str, sources: list[str] | None) -> str:
+    """A new dataset: a name and a description, then a CSV file — or, for one
+    who may connect (`sources`, the connections), a query on a database: the
+    CSV | SQL switch swaps the fields and where the form posts. The database
+    checks the SQL; its error comes back as the page."""
+    if not sources:
+        return _upload_dialog(f"{base}/new", "New dataset", "Upload", "upload-dialog", True)
+    options = "".join(f'<option value="{escape(c, quote=True)}">{escape(c)}</option>' for c in sources)
+    kinds = "".join(
+        f'<button type="button" data-kind="{k}" title="{t}"{" class=active" if k == "csv" else ""}>{label}</button>'
+        for k, label, t in (("csv", "CSV", "Upload a CSV file"), ("sql", "SQL", "A query on a database"))
+    )
+    csv, sql = escape(f"{base}/new", quote=True), escape(f"{base}/new-query", quote=True)
+    return f"""
+<dialog class="wide" id="upload-dialog">
+  <form method="post" action="{csv}" enctype="multipart/form-data" data-csv="{csv}" data-sql="{sql}">
+    <div class="conn-head"><h3>New dataset</h3>
+      <div class="ds-modes ds-kinds" role="group" aria-label="From">{kinds}</div></div>
+    <label>Name</label><input name="name" autocomplete="off" required>
+    <label>Description</label><textarea name="description"></textarea>
+    <div class="ds-kind" data-kind="csv">
+      <label>CSV file</label>
+      <input type="file" name="file" accept=".csv,text/csv" required>
+      <label>Delimiter</label>
+      <select name="delimiter">
+        <option value=",">Comma ( , )</option>
+        <option value=";">Semicolon ( ; )</option>
+        <option value="\t">Tab</option>
+        <option value="|">Pipe ( | )</option>
+      </select>
+    </div>
+    <div class="ds-kind" data-kind="sql" hidden>
+      <label>Connection</label><select name="connection" disabled>{options}</select>
+      <label>Query</label>
+      <textarea name="query" class="ff-sql" rows="8" spellcheck="false" required disabled
+                placeholder="select …"></textarea>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="cancel" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="ok">Create</button>
+    </div>
+  </form>
+</dialog>"""
+
+
 def _version_cell(ds: Dataset) -> str:
     """`2.1`, or `2.1 → 2.2` while the next one builds."""
     if ds.building:
@@ -1611,24 +1670,28 @@ def render_datasets(
     picker: str = "", authors: bool = True,
     used_by: dict[str, list[tuple[str, str]]] | None = None,
     users: bool = False, group: str = groups.LOCAL_GROUP, inactive: set[str] = frozenset(),
+    connections: bool = False,
     can_write: bool = True,
+    sources: list[str] | None = None,
 ) -> str:
     """Group `group`'s datasets. `used_by`: dataset name -> (href, label) of
     each dashboard reading it; None (no dashboards to look at, plain local
     mode) leaves the column out. `inactive`: the names not shared with the
-    viewer."""
+    viewer. `sources`: the connections a new dataset may read from — for an
+    admin; None or empty offers only a file."""
     table = list_table(
         ["Name", "Group", "Version", "Columns", "Rows", "Size", "Updated", *(["Author"] if authors else []),
          *(["Dashboards"] if used_by is not None else [])],
         [_dataset_row(d, authors, used_by, group, d.name in inactive, can_write) for d in datasets],
-        "No datasets yet", _add_button("New dataset", "openUpload()") if can_write else "",
+        "No datasets yet",
+        _add_button("New dataset", "openUpload()") if can_write else "",
     )
-    extra = _upload_dialog(f"/datasets/{groups.url_name(group)}/new", "New dataset", "Upload",
-                           "upload-dialog", True) if can_write else ""
+    base = f"/datasets/{groups.url_name(group)}"
+    extra = _new_dataset_dialog(base, sources) if can_write else ""
     return _shell(
         title, user_menu, "datasets", table,
         extra=extra,
-        picker=picker, users=users, group=group,
+        picker=picker, users=users, group=group, connections=connections,
     )
 
 
@@ -1838,6 +1901,7 @@ def render_access(
     picker: str = "",
     datasets: dict[str, list[tuple[str, str]]] | None = None,
     users: bool = False,
+    connections: bool = False,
 ) -> str:
     """The Access list: every role, by name, with when it last changed and —
     `datasets`, role name -> the datasets naming it — where it's used."""
@@ -1853,8 +1917,93 @@ def render_access(
     return _shell(
         title, user_menu, "access", table,
         extra=add_dialog + rename_dialog,
-        picker=picker, users=users,
+        picker=picker, users=users, connections=connections,
     )
+
+
+# --- connections ------------------------------------------------------------------
+# The databases a dataset's data can come from (`fireflyer/connections.py`), by
+# name: a URL each (no password shown — it stays in the store), the datasets
+# whose `source:` names it, a test, edit and remove — none is built in.
+
+
+def render_connections(
+    connections: list, title: str = "Fireflyer Portal", user_menu: str = "",
+    picker: str = "", used: dict[str, list[tuple[str, str]]] | None = None, users: bool = False,
+) -> str:
+    """Every connection. `used`: name -> (href, label) of the datasets reading
+    from it."""
+    used = used or {}
+    table = list_table(
+        ["Name", "URL", "Datasets", "Updated"],
+        [_connection_row(c, used.get(c.name, [])) for c in connections],
+        "No connections yet", _add_button("New connection", "openConnection()"),
+    )
+    return _shell(title, user_menu, "connections", table, extra=_connection_dialog(),
+                  picker=picker, users=users, connections=True)
+
+
+def _connection_row(c, datasets: list[tuple[str, str]]) -> str:
+    name = escape(quote(c.name, safe=""), quote=True)
+    # Its state is its icon: the plug, a spinner while it asks, then a check or
+    # a cross — and the database's error under the URL.
+    test = (f'<button class="act conn-test" type="button" title="Test the connection"'
+            f' data-url="/connections/{name}/test" onclick="testConnection(this)">'
+            f'<span class="t-idle">{_icon("plug")}</span><span class="t-busy ds-spin"></span>'
+            f'<span class="t-ok">{_icon("check")}</span><span class="t-fail">{_icon("cross")}</span></button>')
+    fields = "".join(f' data-{k}="{escape(getattr(c, k), quote=True)}"' for k in ("name", "description", "url"))
+    guard = (f"return confirm('Remove this connection?')" if not datasets
+             else f"alert({escape(json.dumps('Datasets read from it: ' + ', '.join(l for _, l in datasets)), quote=True)}); return false")
+    actions = (
+        test
+        + f'<button class="act" type="button" title="Edit"{fields}'
+        + (" data-has-password" if c.has_password else "")
+        + f' onclick="openConnection(this)">{_icon("pencil")}</button>'
+        f'<form method="post" action="/connections/{name}/delete" onsubmit="{guard}">'
+        f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
+    )
+    return (
+        f'<tr>'
+        f'<td><span class="name">{escape(c.name)}</span>{_has_password(c)}{_sub(c.description)}</td>'
+        f'<td class="muted mono ff-wrap">{escape(c.url)}<div class="conn-error" hidden></div></td>'
+        f"<td>{_ref_links(datasets)}</td>"
+        f'<td class="muted">{_stamp(c.updated_at)}</td>'
+        f'<td class="actions">{actions}</td></tr>'
+    )
+
+
+def _has_password(c) -> str:
+    return f'<span class="ff-key" title="Has a password">{_icon("key")}</span>' if c.has_password else ""
+
+
+def _connection_dialog() -> str:
+    """New and edit, one dialog: the fields — or the same as YAML (code), the
+    form's twin. The password is never filled in: empty keeps it."""
+    modes = "".join(
+        f'<button type="button" data-mode="{m}" title="{t}" aria-label="{t}"'
+        f'{" class=active" if m == "form" else ""}>{_icon(i)}</button>'
+        for m, i, t in (("form", "pencil", "Fields"), ("code", "code", "YAML"))
+    )
+    return f"""
+<dialog class="wide" id="conn-dialog">
+  <form id="conn-form" method="post" action="/connections/new">
+    <div class="conn-head"><h3 id="conn-title">New connection</h3>
+      <div class="ds-modes conn-modes" role="group" aria-label="Edit as">{modes}</div></div>
+    <div class="conn-fields">
+      <label>Name</label><input name="name" autocomplete="off" pattern="[A-Za-z0-9_-]+" required>
+      <label>Description</label><textarea name="description"></textarea>
+      <label>URL</label><input name="url" class="mono" autocomplete="off" spellcheck="false" required
+             placeholder="postgresql://user@host:5432/database">
+      <label>Password</label>
+      <input name="password" type="password" autocomplete="new-password" placeholder="">
+    </div>
+    <textarea name="yaml" class="ff-sql conn-yaml" rows="7" spellcheck="false" hidden disabled></textarea>
+    <div class="dialog-actions">
+      <button type="button" class="cancel" onclick="this.closest('dialog').close()">Cancel</button>
+      <button type="submit" class="ok">Save</button>
+    </div>
+  </form>
+</dialog>"""
 
 
 # --- users gallery ------------------------------------------------------------
@@ -2002,7 +2151,7 @@ def render_users(
         title, user_menu, "users", table,
         head=assets.stylesheets("multi-select.css") + "\n" + assets.script("multi-select.js"),
         extra=_user_dialog(roles, reads or {}),
-        users=True,
+        users=True, connections=True,
     )
 
 
@@ -2059,7 +2208,8 @@ def render_groups(
                          description=True, placeholder="Group name")
     rename_dialog = _dialog("rename-dialog", "rename-form", "", "Edit group", "Save",
                             description=True, placeholder="Group name")
-    return _shell(title, user_menu, "groups", table, extra=add_dialog + rename_dialog, users=True)
+    return _shell(title, user_menu, "groups", table, extra=add_dialog + rename_dialog, users=True,
+                  connections=True)
 
 
 def render_dataset_detail(
@@ -2077,12 +2227,16 @@ def render_dataset_detail(
     readonly: bool = False,
     elsewhere: list[tuple[str, str]] | None = None,
     ref: str = "",
+    refresh: bool = False,
+    sources: list[str] | None = None,
 ) -> str:
     """Group `group`'s dataset `ds`. `used_by`: (href, label) of the dashboards
     in its own group that read it — while there are any it can't be removed;
     `elsewhere`: those of other groups, which a removal turns into locks.
     `readonly`: someone else's — its columns and examples only, nothing to
-    change, no service column, version history or permissions."""
+    change, no service column, version history or permissions. `sources`:
+    the connections its query may read from — for one who may change it; None
+    shows a query dataset's SQL read-only."""
     if readonly:
         return _dataset_read_only(ds, title, user_menu, group_label, mapping, versions or [],
                                   examples or {}, used_in or {}, group)
@@ -2165,7 +2319,10 @@ def render_dataset_detail(
         '<button class="ff-save" id="ds-save" type="button" title="Save (⌘/Ctrl+S)" aria-label="Save"'
         f' hidden>{_icon("save")}</button></span>'
         '<span class="detail-actions">'
-        '<button class="act" title="Upload a new file (the next version)"'
+        + (f'<form method="post" action="{escape(url, quote=True)}/refresh" style="display:inline">'
+           '<button class="act" type="submit" title="Refresh: run the query again (the next version)"'
+           f' aria-label="Refresh">{_icon("refresh")}</button></form>' if refresh else "")
+        + '<button class="act" title="Upload a new file (the next version)"'
         f" onclick=\"document.getElementById('replace-dialog').showModal()\">{_icon('upload')}</button>"
         f"{trash}</span>"
     )
@@ -2176,7 +2333,7 @@ def render_dataset_detail(
   {status}
   <section class="ds-columns" id="ds-columns" data-mode="view">{_columns_view(ds, mapping, versions, examples or {}, used_in or {})}</section>
   <div class="ds-toast" id="ds-toast" role="status" hidden></div>
-  <script type="application/json" id="ds-data">{_page_data(ds, mapping, versions, examples or {}, used_in or {}, group, ref)}</script>"""
+  <script type="application/json" id="ds-data">{_page_data(ds, mapping, versions, examples or {}, used_in or {}, group, ref, sources)}</script>"""
     replace = _upload_dialog(f"{url}/replace", "Upload a new version", "Upload", "replace-dialog", False)
     page_head = (
         assets.stylesheets("code.css", "filters.css")
@@ -2266,8 +2423,8 @@ def _service_mark() -> str:
 
 def _kinds(ds: Dataset) -> dict[str, tuple[str, str]]:
     """Column name -> (icon, kind) from the built data: a column's type is what
-    its formula gave (text, a number from to_number(), a date from str2dt(), a
-    list from to_list())."""
+    its formula gave (text, a number from to_number(), a date from str2dt(),
+    yes / no from to_bool(), a list from to_list())."""
     out = {}
     for c in ds.columns + ds.service:
         kind = column_type(c.dtype)
@@ -2327,7 +2484,7 @@ def _history_menu(ds: Dataset, versions: list[Version], authors: bool = True,
         items = "".join(
             f'<button type="button" class="ds-ver" data-version="{v.label}">'
             f'<span class="ds-ver-label">{v.label}</span>'
-            f'<span class="muted ds-size">{_size(v.size, "Uploaded file") if v is first else ""}</span>'
+            f'<span class="muted ds-size">{_upload_size(v) if v is first else ""}</span>'
             f'<span class="muted">{_stamp(datetime.fromtimestamp(v.created_at, timezone.utc).isoformat())}</span>'
             + (f'<span class="muted">{escape(v.author or "")}</span>' if authors else "")
             # The version in use is the one whose data is built and kept.
@@ -2351,6 +2508,14 @@ def _history_menu(ds: Dataset, versions: list[Version], authors: bool = True,
     )
 
 
+def _upload_size(v: Version) -> str:
+    """An upload's size — after a database icon when a query made it."""
+    if not v.from_query:
+        return _size(v.size, "Uploaded file")
+    return (f'<span class="ds-from-query" title="From a database query">{_icon("database")}</span>'
+            + _size(v.size, "Query result"))
+
+
 def _build_status(ds: Dataset) -> str:
     """One line while a version builds, or when the last one failed."""
     if ds.building:
@@ -2363,7 +2528,7 @@ def _build_status(ds: Dataset) -> str:
 
 def _page_data(ds: Dataset, mapping: str, versions: list[Version], examples: dict[str, list[str]],
                used_in: dict[str, list[tuple[str, str]]], group: str = groups.LOCAL_GROUP,
-               ref: str = "") -> str:
+               ref: str = "", sources: list[str] | None = None) -> str:
     """What dataset-columns.js works from. `</` is escaped so no value can end
     the <script> it sits in."""
     rules = _mapping_rules(ds, mapping, versions)
@@ -2377,6 +2542,13 @@ def _page_data(ds: Dataset, mapping: str, versions: list[Version], examples: dic
         "mapping": mapping,
         "rules": [{"name": r.name, "formula": r.formula, "service": r.service} for r in rules],
         "serviceIcon": _icon("service"),
+        "databaseIcon": _icon("database"),
+        "historyIcon": _icon("history"),
+        # A query dataset's `source:` — edit mode shows its SQL; `connections`
+        # (None: read-only) are what it may switch to.
+        "source": column_map.source(mapping),
+        "history": column_map.history(mapping),     # uploads to keep before the one in use
+        "connections": sources,
         "examples": examples,
         "usedIn": used_in,
         # Column name -> [icon, kind] from the built data (a column not built

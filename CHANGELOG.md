@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-13
+
+### Added
+
+- **Connections.** A dataset's data can come from a SQL query on a database.
+  A new **Connections** tab (admins only; everyone where there is no login)
+  lists the databases by name, with a SQLAlchemy URL and a password. The
+  password is encrypted with `FIREFLYER_SECRET` and is never shown again. Edit
+  a connection with fields or as YAML, and test it with the plug button: it
+  shows a check, or a cross and the error of the database. No connection is
+  built in: an admin can change or remove each one.
+- **Datasets from a query.** The datasets list's **+** has a **CSV | SQL**
+  switch: select SQL to make a dataset from a query. The query is in the
+  dataset's YAML (`source:` names the connection), so compare and restore
+  cover it. Edit mode shows the connection and the SQL in a box under the columns.
+  **Refresh** (↻) runs it again into the next version. Fireflyer finds the
+  column types from the result. The database checks the SQL: its error, with
+  the line, is what you see.
+- **Dataset history.** A dataset keeps only the upload in use (by default).
+  When a new upload or refresh is in use, Fireflyer deletes the older uploads
+  and their versions. To keep more, set `history:` in the dataset's YAML, or
+  click the clock beside the ＋ in edit mode: the number of uploads to keep
+  before the one in use.
+- **`to_bool()`** reads text as yes / no (`true`, `yes`, `1` and `false`,
+  `no`, `0`).
+- **Usage analytics.** The portal makes a connection `internal` to its own
+  database, five `usage_*` datasets on it and a **Fireflyer Usage** dashboard
+  in `_admin`, once: active users, actions by day, the most opened dashboards,
+  errors with their messages, dashboards nobody opens, datasets nobody reads
+  and storage by group. The queries give usernames only.
+- **Error messages in the activity log.** A failed action keeps why it failed
+  (`detail.error`): the route's message, or the start of the answer.
+
+### Changed
+
+- In a dataset's edit mode, the ＋ that adds a column is in the header of
+  the actions column, as on the list pages.
+- SQLAlchemy and `cryptography` are now core dependencies.
+- The list pages are wider (1200 px). The name column takes the free space
+  and cuts a long description; the other columns stay on one line.
+
 ## [0.27.0] - 2026-11-12
 
 ### Added
@@ -1451,7 +1492,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/dankor/fireflyer/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/dankor/fireflyer/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/dankor/fireflyer/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/dankor/fireflyer/compare/v0.24.0...v0.25.0

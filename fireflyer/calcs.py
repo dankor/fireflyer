@@ -23,7 +23,7 @@ Nothing in the YAML names the kind. `agg` means aggregate; a bare formula is
 sorted into derived vs column by **what it references** — sibling calcs make it
 derived, dataset columns make it a column (see `_classify`). All three share the
 same tiny expression grammar (`+ - * /`, parens, numeric literals, and the
-`str2dt()`, `to_number()` and `to_list()` functions); the only difference is
+`str2dt()`, `to_number()`, `to_bool()` and `to_list()` functions); the only difference is
 what a bare name resolves to.
 """
 
@@ -63,8 +63,9 @@ class CalcError(ValueError):
 # become `pl.col(<column>)`, for a derived formula `pl.col(<leaf calc>)` —
 # same grammar, different leaf meaning. Numbers are literals; `+ - * /`, parens
 # and unary minus compose them. No comparisons — aggregation is expressed by
-# `agg:`, not inside the formula. There are three functions — `str2dt()`,
-# `to_number()` and `to_list()` (see their `_expr`s); anything else is rejected.
+# `agg:`, not inside the formula. There are four functions — `str2dt()`,
+# `to_number()`, `to_bool()` and `to_list()` (see their `_expr`s); anything else
+# is rejected.
 
 _TOKEN_RE = re.compile(r"\d+(?:\.\d+)?|[A-Za-z_]\w*|\S")
 _NAME_RE = re.compile(r"[A-Za-z_]\w*")
@@ -93,7 +94,7 @@ class _Parser:
     """expr := term (('+'|'-') term)* ; term := factor (('*'|'/') factor)* ;
     factor := number | call | name | '(' expr ')' | '-' factor ;
     call := 'str2dt' '(' name ',' <raw pattern> ')' | 'to_number' '(' expr ')'
-          | 'to_list' '(' name [',' <raw separator>] ')'."""
+          | 'to_bool' '(' expr ')' | 'to_list' '(' name [',' <raw separator>] ')'."""
 
     def __init__(self, text: str, tokens: list[tuple[str, int]], resolve):
         self.text = text
@@ -169,18 +170,18 @@ class _Parser:
         and spaces are not expression syntax, so it's taken as the **raw
         source** between the comma and the closing paren rather than re-joined
         from tokens."""
-        if name == "to_number":
+        if name in ("to_number", "to_bool"):
             self._eat()  # '('
             inner = self._expr()
             if self._peek() != ")":
-                raise CalcError("missing ')' in to_number()")
+                raise CalcError(f"missing ')' in {name}()")
             self._eat()
-            return to_number_expr(inner)
+            return to_number_expr(inner) if name == "to_number" else to_bool_expr(inner)
         if name == "to_list":
             return self._to_list()
         if name != "str2dt":
             raise CalcError(
-                f"unknown function {name!r} in formula — there are str2dt(), to_number() and to_list()"
+                f"unknown function {name!r} in formula — there are str2dt(), to_number(), to_bool() and to_list()"
             )
         self._eat()  # '('
         column = self._peek()
@@ -286,6 +287,22 @@ def to_number_expr(expr: pl.Expr) -> pl.Expr:
     checks for those first and says which (`column_map.apply`)."""
     text = expr.cast(pl.String).str.strip_chars()
     return pl.when(text == "").then(None).otherwise(text).cast(pl.Float64, strict=False)
+
+
+# What `to_bool()` reads as yes and as no, after trimming and lower-casing:
+# how databases, spreadsheets and people write it. Anything else is missing.
+_TRUE = ("true", "t", "yes", "y", "1")
+_FALSE = ("false", "f", "no", "n", "0")
+
+
+def to_bool_expr(expr: pl.Expr) -> pl.Expr:
+    """`to_bool(x)`: text read as yes / no — `true`, `yes`, `1` and the like
+    one way, `false`, `no`, `0` the other; an empty cell or anything else
+    missing."""
+    text = expr.cast(pl.String).str.strip_chars().str.to_lowercase()
+    return (pl.when(text.is_in(_TRUE)).then(pl.lit(True))
+            .when(text.is_in(_FALSE)).then(pl.lit(False))
+            .otherwise(pl.lit(None, dtype=pl.Boolean)))
 
 
 # What `to_list()` strips: brackets or braces around the whole value (a JSON

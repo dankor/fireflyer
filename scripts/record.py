@@ -408,10 +408,91 @@ def filter_list(clip: Clip) -> None:
     _edit_to_not_in(clip, _ALL_ORDERS)
 
 
+def _fast(clip: Clip, text: str, chunk: int = 5) -> None:
+    """Type `text` a few keys a frame: long text without a frame a key."""
+    for i in range(0, len(text), chunk):
+        clip.page.keyboard.type(text[i:i + chunk])
+        clip.hold(0.06)
+
+
+def _dialog(clip: Clip, button: str) -> None:
+    """Open a list page's dialog from its head, the page put back where it was:
+    at 960 px a list is wider than the clip, and the click scrolls it."""
+    clip.click(button, settle=0.1)
+    clip.page.evaluate("window.scrollTo(0, 0)")
+    clip.hold(0.3)
+
+
+def dataset_query(clip: Clip) -> None:
+    """docs/use-cases.md → "Read a dataset from a database" (portal mode, the
+    Docker compose's Postgres): a connection `server` to its `postgres`
+    database — not Fireflyer's own, which only `internal` reads — then a dataset
+    `databases` from a query on it, refreshed. Removes both first."""
+    page, base = clip.page, clip.base
+    page.request.post(f"{base}/datasets/_admin/databases/delete")
+    page.request.post(f"{base}/connections/server/delete")
+
+    clip.goto("/connections")
+    clip.hold(1.0)
+    _dialog(clip, "th.actions button[title='New connection']")
+    _fast(clip, "server", 3)
+    clip.click("#conn-form textarea[name=description]", settle=0.1)
+    _fast(clip, "The database server's own catalog")
+    clip.click("#conn-form input[name=url]", settle=0.1)
+    _fast(clip, "postgresql://fireflyer@postgres:5432/postgres", 8)
+    clip.click("#conn-form input[name=password]", settle=0.1)
+    _fast(clip, "fireflyer", 3)
+    clip.click(".conn-modes button[data-mode=code]", settle=1.8)      # the same, as YAML
+    clip.click("#conn-form button.ok", settle=0.8)
+    page.evaluate("window.scrollTo(0, 0)")
+    clip.click("tr:has-text('server') button[title='Test the connection']", settle=1.4)
+    page.evaluate("window.scrollTo(0, 0)")
+
+    clip.click(".ff-switch a[href^='/datasets']", settle=0.6)
+    _dialog(clip, "th.actions button[title='New dataset']")
+    clip.click("#upload-dialog .ds-kinds button[data-kind=sql]", settle=0.6)     # CSV | SQL
+    clip.click("#upload-dialog input[name=name]", settle=0.1)
+    _fast(clip, "databases", 3)
+    clip.click("#upload-dialog textarea[name=description]", settle=0.1)
+    _fast(clip, "Every database on the server, and its size")
+    page.select_option("#upload-dialog select[name=connection]", "server")
+    clip.hold(0.4)
+    clip.click("#upload-dialog textarea[name=query]", settle=0.1)
+    _fast(clip, "select datname as database, datallowconn as open,\n  pg_database_size(datname) as bytes\nfrom pg_database", 6)
+    clip.hold(0.8)
+    clip.click("#upload-dialog button.ok", settle=1.5)
+    page.reload()
+    page.wait_for_load_state("networkidle")
+    clip._dot()
+    clip.hold(2.0)                                       # typed columns: a number, a yes/no
+    clip.click("#ds-modes button[data-mode=edit]", settle=2.6)      # its SQL, under the columns
+    clip.click("button[aria-label=Refresh]", settle=1.4)
+    clip.click("#ds-history summary", settle=2.6)                   # the next version, from the query
+
+
+def usage(clip: Clip) -> None:
+    """docs/use-cases.md → "See how Fireflyer is used" (portal mode): the Fireflyer Usage
+    dashboard in `_admin`, its activity, then its content. Refreshes the
+    activity first, so it's up to date."""
+    clip.page.request.post(f"{clip.base}/datasets/_admin/usage_activity/refresh")
+    clip.goto("/d/_admin/Fireflyer%20Usage")
+    clip.hold(3.0)
+    clip.move(".fireflyer-tab[data-tab-name=Activity]")
+    for top in (180, 360, 540, 800):                     # down the Activity tab, to the errors
+        clip.page.evaluate(f"document.querySelector('.pane-body').scrollTo({{top: {top}, behavior: 'smooth'}})")
+        clip.hold(1.8)
+    clip.page.evaluate("document.querySelector('.pane-body').scrollTo({top: 0, behavior: 'smooth'})")
+    clip.hold(0.6)
+    clip.click(".fireflyer-tab[data-tab-name=Content]", settle=2.6)
+    clip.page.evaluate("document.querySelector('.pane-body').scrollTo({top: 400, behavior: 'smooth'})")
+    clip.hold(2.6)
+
+
 SCENES = {
     "users-roles": users_roles, "groups": groups, "edit-chart": edit_chart,
     "filter-text": filter_text, "filter-number": filter_number, "filter-date": filter_date,
     "filter-yes-no": filter_yes_no, "filter-list": filter_list,
+    "dataset-query": dataset_query, "usage": usage,
 }
 
 
@@ -422,7 +503,8 @@ def main() -> None:
     args = parser.parse_args()
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page(viewport=SIZE, color_scheme="dark")
+        # The portal's own certificate is self-signed.
+        page = browser.new_page(viewport=SIZE, color_scheme="dark", ignore_https_errors=True)
         page.add_init_script(_CURSOR)
         clip = Clip(page, args.base)
         _login(clip)

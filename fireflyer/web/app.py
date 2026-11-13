@@ -5,9 +5,11 @@ import os
 import pathlib
 import re
 import threading
+import time
 import traceback
-from html import escape
+from html import escape, unescape
 
+import yaml
 from dotenv import load_dotenv
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
@@ -24,6 +26,7 @@ from fireflyer import yaml_assist
 from fireflyer import filters as filters_mod
 from fireflyer import calcs_edit
 from fireflyer import column_map
+from fireflyer import connections as connections_mod
 from fireflyer import groups
 from fireflyer.scan import NoAccess
 from fireflyer.datasets import DatasetError, DatasetStore, SqlCatalog, fit_name
@@ -48,6 +51,7 @@ from fireflyer.web import auth as auth_mod
 from fireflyer.web import chat as chat_mod
 from fireflyer.web import portal as portal_mod
 from fireflyer.web import paths as paths_mod
+from fireflyer.web import usage as usage_mod
 
 # Load .env (ANTHROPIC_API_KEY) before reading it. The AI assistant is enabled
 # only when a key is present; otherwise the editor shows a setup notice.
@@ -207,19 +211,46 @@ def _record(entry) -> None:
 async def _activity(request: Request, call_next):
     try:
         response = await call_next(request)
-    except Exception:
-        _write_activity(request, 500)
+    except Exception as exc:
+        _write_activity(request, 500, str(exc))
         raise
-    await run_in_threadpool(_write_activity, request, response.status_code)
+    error = ""
+    if response.status_code >= 400 and getattr(request.state, "activity", None) is not None:
+        # A refusal's answer is its reason ("Only an admin manages roles"):
+        # read it to log it, then send the same bytes on.
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        error = _answer_text(body, response.headers.get("content-type", ""))
+        sent = response
+        response = Response(body, sent.status_code)
+        response.raw_headers = list(sent.raw_headers)    # every one, two cookies too
+    await run_in_threadpool(_write_activity, request, response.status_code, error)
     return response
 
 
-def _write_activity(request: Request, status: int) -> None:
+def _answer_text(body: bytes, content_type: str) -> str:
+    """A failed answer's message, for the log: a JSON `error`, or a short text
+    (`_error`'s `<pre>` read as its words) — never a whole page."""
+    text = body.decode("utf-8", "replace").strip()
+    if "json" in content_type:
+        try:
+            found = json.loads(text)
+        except ValueError:
+            return ""
+        message = found.get("error") or found.get("detail") if isinstance(found, dict) else ""
+        return message if isinstance(message, str) else ""
+    if len(text) > 1000 or re.search(r"(?i)<(html|body|!doctype)\b", text):
+        return ""
+    return " ".join(unescape(re.sub(r"<[^>]+>", " ", text)).split())
+
+
+def _write_activity(request: Request, status: int, error: str = "") -> None:
     logged = getattr(request.state, "activity", None)
     if logged is None or app.state.activity is None:
         return
     entry, status_code = logged
     entry.status_code = status_code if status_code is not None else status
+    if error and entry.status_code >= 400 and "error" not in entry.detail:
+        entry.detail["error"] = error
     _record(entry)
 
 
@@ -813,7 +844,7 @@ async def login_submit(request: Request, username: str = Form(""), password: str
         sign_in(request, resp, *found)
     except portal_mod.RoleError:
         # The page asks again with 200; the row says what it was — 401.
-        _log(request, "login", actor=username, status_code=401)
+        _log(request, "login", actor=username, status_code=401, error="Invalid username or password")
         return auth_mod.login_page("Invalid username or password.", PORTAL_TITLE)
     _log(request, "login", actor=found[0], source=found[1])
     return resp
@@ -884,6 +915,7 @@ def dashboards_gallery(group: str, request: Request):
         rows, _page_title(), _user_menu(request), picker=_picker(request, group),
         authors=_authors(), datasets=_known_refs(group, reads), uses=reads,
         users=_users_tab(request), group=group, inactive=inactive,
+        connections=_may_connect(request),
         can_write=_can_write(request, group), clone_groups=_writable_groups(request),
     )
 
@@ -1161,6 +1193,8 @@ def datasets_gallery(group: str, request: Request):
         datasets, _page_title(), _user_menu(request), picker=_picker(request, group, "datasets"),
         authors=_authors(), used_by=used_by, users=_users_tab(request), group=group,
         inactive=inactive, can_write=_can_write(request, group),
+        connections=_may_connect(request),
+        sources=_connections().names() if _may_connect(request) else None,
     )
 
 
@@ -1202,7 +1236,7 @@ def access_gallery(request: Request) -> str:
     _log(request, "open", "gallery", "access")
     return portal_mod.render_access(
         _role_store().roles(), _page_title(), _user_menu(request),
-        datasets=_datasets_by_role(), users=_users_tab(request),
+        datasets=_datasets_by_role(), users=_users_tab(request), connections=_may_connect(request),
     )
 
 
@@ -1553,6 +1587,184 @@ def _cascade(change, author: str, group: str = "") -> None:
             store.save(row.id, text, author=author)
 
 
+# --- connections -----------------------------------------------------------------
+# The databases a dataset's data can come from (`fireflyer/connections.py`):
+# kept where roles are — the portal's database, or locally `fireflyer.db` — and
+# managed by admins (anyone where there are no logins). None is built in; a
+# connection to the portal's own database gets `dataset_versions` (portal mode
+# adds one, `internal`, at setup). Tests set `app.state.connections`.
+app.state.connections = None
+
+
+def _connections() -> connections_mod.ConnectionStore:
+    if app.state.connections is None:
+        dsn = _DATABASE_URL if PORTAL_ENABLED else f"{_DATA_BASE}/fireflyer.db"
+        app.state.connections = connections_mod.ConnectionStore(
+            dsn, auth_mod._secret(), own_url=_DATABASE_URL if PORTAL_ENABLED else "",
+        )
+    return app.state.connections
+
+
+def _may_connect(request: Request) -> bool:
+    """Connections, and a dataset's `source:`, are an admin's — anyone's where
+    there's no login."""
+    return not _users_on() or _is_admin(request)
+
+
+def _admins_connect(request: Request) -> HTMLResponse | None:
+    return None if _may_connect(request) else HTMLResponse("Only an admin manages connections", status_code=403)
+
+
+def _datasets_reading(connection: str) -> list[tuple[str, str]]:
+    """(href, label) of every dataset, in every group, whose latest mapping
+    reads from `connection`."""
+    out = []
+    for group, store in _every_group_datasets():
+        for name in store.names():
+            try:
+                source = store.query_source(name)
+            except DatasetError:
+                continue
+            if source and source["connection"] == connection:
+                out.append((groups.dataset_url(group, name), _dataset_key(group, name)))
+    return out
+
+
+@app.get("/connections", response_class=HTMLResponse)
+def connections_gallery(request: Request):
+    _log(request, "open", "gallery", "connections")
+    if refused := _admins_connect(request):
+        return refused
+    store = _connections()
+    return portal_mod.render_connections(
+        store.list(), _page_title(), _user_menu(request),
+        used={c.name: _datasets_reading(c.name) for c in store.list()}, users=_users_tab(request),
+    )
+
+
+def _connection_form(name: str, description: str, url: str, password: str, text: str) -> dict:
+    """The dialog's fields — or its YAML, when that's what was posted."""
+    if not text.strip():
+        return {"name": name, "description": description, "url": url, "password": password}
+    try:
+        doc = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        raise connections_mod.ConnectionsError(f"not valid YAML: {exc}") from exc
+    if not isinstance(doc, dict) or set(doc) - {"name", "description", "url", "password"}:
+        raise connections_mod.ConnectionsError("a connection takes name, description, url and password")
+    return {k: str(doc.get(k) or "") for k in ("name", "description", "url", "password")}
+
+
+@app.post("/connections/new")
+async def connections_new(request: Request, name: str = Form(""), description: str = Form(""),
+                          url: str = Form(""), password: str = Form(""), yaml_text: str = Form("", alias="yaml")):
+    if refused := _admins_connect(request):
+        return refused
+    try:
+        form = _connection_form(name, description, url, password, yaml_text)
+        _log(request, "create", "connection", form["name"].strip(), password="set" if form["password"] else "")
+        _connections().create(form["name"], form["url"], description=form["description"],
+                              password=form["password"], author=_current_author(request))
+    except connections_mod.ConnectionsError as exc:
+        return _error(exc)
+    return RedirectResponse("/connections", status_code=303)
+
+
+@app.post("/connections/{old}/edit")
+async def connections_edit(old: str, request: Request, name: str = Form(""), description: str = Form(""),
+                           url: str = Form(""), password: str = Form(""),
+                           yaml_text: str = Form("", alias="yaml")):
+    if refused := _admins_connect(request):
+        return refused
+    try:
+        form = _connection_form(name, description, url, password, yaml_text)
+        new = form["name"].strip()
+        _log(request, "edit", "connection", new, renamed_from=old if old != new else "",
+             password="set" if form["password"] else "")
+        users = _datasets_reading(old) if new != old else []
+        _connections().update(old, new_name=new, url=form["url"], description=form["description"],
+                              password=form["password"])
+    except connections_mod.ConnectionsError as exc:
+        return _error(exc)
+    # Datasets name their connection in `source:`: they follow the new name.
+    if users:
+        for _, store in _every_group_datasets():
+            for dataset in store.names():
+                _rename_source(store, dataset, old, new, _current_author(request))
+    return RedirectResponse("/connections", status_code=303)
+
+
+def _rename_source(store: DatasetStore, name: str, old: str, new: str, author: str) -> None:
+    try:
+        mapping = store.mapping(name)
+    except DatasetError:
+        return
+    source = column_map.source(mapping)
+    if source and source["connection"] == old:
+        text = column_map.dump(column_map.rules(mapping), column_map.permissions(mapping),
+                               {**source, "connection": new}, column_map.history(mapping))
+        store.remap(name, text, author=author)
+
+
+@app.post("/connections/{name}/delete")
+async def connections_delete(name: str, request: Request):
+    _log(request, "delete", "connection", name)
+    if refused := _admins_connect(request):
+        return refused
+    reading = _datasets_reading(name)
+    if reading:
+        return _error(f"Datasets read from {name!r}: " + ", ".join(label for _, label in reading), 409)
+    try:
+        _connections().delete(name)
+    except connections_mod.ConnectionsError as exc:
+        return _error(exc)
+    return RedirectResponse("/connections", status_code=303)
+
+
+@app.post("/connections/{name}/test")
+def connections_test(name: str, request: Request) -> JSONResponse:
+    if refused := _admins_connect(request):
+        return _json_refused(refused)
+    try:
+        _connections().test(name)
+    except connections_mod.ConnectionsError as exc:
+        _log(request, "test", "connection", name, error=str(exc), status_code=400)
+        return JSONResponse({"ok": False, "error": str(exc)})
+    _log(request, "test", "connection", name)
+    return JSONResponse({"ok": True})
+
+
+def _run_query(source: dict):
+    """A dataset's `source` run: its query on its connection — on Fireflyer's
+    own database with `dataset_versions` beside the real tables."""
+    tables = None
+    if _connections().is_own(source["connection"]):
+        tables = {connections_mod.DATASET_VERSIONS: app.state.datasets.every_version()}
+    return _connections().read(source["connection"], source["query"], tables)
+
+
+def _refresh(request: Request, name: str, mapping: str | None = None) -> str:
+    """Run dataset `name`'s query — `mapping`'s, when a changed one comes with
+    it — into its next version, built in the background by the caller. ""
+    when done, else the database's (or the store's) error, also recorded on
+    the dataset."""
+    datasets = _dataset_store(request)
+    source = column_map.source(mapping) if mapping is not None else datasets.query_source(name)
+    if source is None:
+        return "this dataset has no query: upload a file instead"
+    start = time.monotonic()
+    try:
+        frame = _run_query(source)
+        datasets.refresh(name, frame, mapping=mapping, author=_current_author(request), build=False)
+    except (connections_mod.ConnectionsError, DatasetError) as exc:
+        _log(request, "refresh", "dataset", name, connection=source["connection"], error=str(exc),
+             status_code=400)
+        return str(exc)
+    _log(request, "refresh", "dataset", name, connection=source["connection"], rows=frame.height,
+         seconds=round(time.monotonic() - start, 2))
+    return ""
+
+
 # --- dataset builds --------------------------------------------------------------
 # An upload or a new column mapping is a new version, computed in the
 # background (`DatasetStore.build`): the request returns at once, the page shows
@@ -1661,6 +1873,50 @@ async def datasets_new(
     return RedirectResponse(_ds_url(request, ds.name), status_code=303)
 
 
+@app.post("/datasets/{group}/new-query")
+def datasets_new_query(
+    group: str, request: Request, background: BackgroundTasks, name: str = Form(""),
+    description: str = Form(""), connection: str = Form(""), query: str = Form(""),
+):
+    """A new dataset from a query: run now — the database's error, if any, is
+    the answer — and built in the background, as an upload is."""
+    if refused := _read_only(request) or _admins_connect(request):
+        return refused
+    source = {"connection": connection.strip(), "query": query.strip()}
+    start = time.monotonic()
+    try:
+        frame = _run_query(source)
+        ds = _dataset_store(request).create_query(
+            name, frame, source, description=description, author=_current_author(request), build=False,
+        )
+    except (connections_mod.ConnectionsError, DatasetError) as exc:
+        _log(request, "create", "dataset", name.strip(), connection=connection, error=str(exc),
+             status_code=400)
+        return _error(exc)
+    _log(request, "create", "dataset", ds.name, connection=connection, rows=frame.height,
+         seconds=round(time.monotonic() - start, 2))
+    _build_later(background, request, ds.name)
+    return RedirectResponse(_ds_url(request, ds.name), status_code=303)
+
+
+@app.post("/datasets/{group}/{ds}/refresh")
+def dataset_refresh(group: str, ds: str, request: Request, background: BackgroundTasks):
+    """Run the dataset's query again: the next version. A failure keeps the
+    data and shows the database's error on the page."""
+    name = groups.from_url(ds)
+    if refused := _read_only(request) or _admins_connect(request):
+        return refused
+    error = _refresh(request, name)
+    if error:
+        try:
+            _dataset_store(request).record_error(name, error)
+        except DatasetError as exc:
+            return _error(exc, 404)
+    else:
+        _build_later(background, request, name)
+    return RedirectResponse(_ds_url(request, name), status_code=303)
+
+
 @app.get("/datasets/{group}/{ds}", response_class=HTMLResponse)
 def dataset_detail(group: str, ds: str, request: Request):
     name = groups.from_url(ds)
@@ -1693,6 +1949,8 @@ def dataset_detail(group: str, ds: str, request: Request):
             group_label=_group_label(group),
             authors=_authors(), group=group, readonly=not writer,
             ref=groups.join(group, name, "") if _groups_on() else name,
+            refresh=writer and _may_connect(request) and datasets.query_source(name) is not None,
+            sources=_connections().names() if writer and _may_connect(request) else None,
         )
     )
 
@@ -1734,11 +1992,21 @@ async def dataset_mapping(
     _log(request, "mapping", "dataset", name, mapping=mapping)
     if refused := _read_only(request):
         return _json_refused(refused)
+    datasets = _dataset_store(request)
     try:
         _check_permissions(_request_group(request), name, mapping)
-        found = _dataset_store(request).remap(
-            name, mapping, author=_current_author(request), build=False
-        )
+        new_source = column_map.source(mapping)
+        if new_source != datasets.query_source(name):
+            # A changed query: an admin's, and its result is the next version.
+            if refused := _admins_connect(request):
+                return _json_refused(refused)
+            if new_source is not None:
+                error = _refresh(request, name, mapping)
+                if error:
+                    return JSONResponse({"error": error}, status_code=400)
+                _build_later(background, request, name)
+                return JSONResponse({"building": datasets.get(name).building})
+        found = datasets.remap(name, mapping, author=_current_author(request), build=False)
     except (DatasetError, column_map.MappingError, portal_mod.RoleError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     _build_later(background, request, name)
@@ -1752,14 +2020,21 @@ async def dataset_mapping_check(group: str, ds: str, request: Request, mapping: 
     if refused := _read_only(request):
         return _json_refused(refused)
     datasets = _dataset_store(request)
+    name = groups.from_url(ds)
     try:
-        sources = datasets.versions(groups.from_url(ds))[0].sources
-        rules = column_map.parse(mapping, sources)
-    except (DatasetError, column_map.MappingError) as exc:
+        source = column_map.source(mapping)
+        if source is not None and source != datasets.query_source(name):
+            # A new query: the database says whether it runs, and what it gives.
+            sources = _run_query({**source, "query": f"select * from ({source['query'].rstrip(';')}) q limit 0"}).columns
+            rules = column_map.rules(mapping)
+        else:
+            sources = datasets.versions(name)[0].sources
+            rules = column_map.parse(mapping, sources)
+    except (DatasetError, column_map.MappingError, connections_mod.ConnectionsError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"rules": [
         {"name": r.name, "formula": r.formula, "service": r.service} for r in rules
-    ]})
+    ], "source": source, "history": column_map.history(mapping)})
 
 
 @app.get("/datasets/{group}/{ds}/status")
@@ -2837,3 +3112,37 @@ def _move_into_groups() -> None:
 
 if PORTAL_ENABLED:
     _move_into_groups()
+
+
+# --- usage analytics -----------------------------------------------------------------
+# Shipped with the portal (`web/usage.py`): a connection `internal` to the
+# portal's own database, datasets on it and the Fireflyer Usage dashboard, in
+# the admin's group. Made once — when that group has none of the datasets — and
+# never again: after that they're the admin's to change or remove.
+
+
+def _set_up_usage() -> None:
+    datasets = app.state.datasets.group(groups.ADMIN_GROUP)
+    if set(datasets.names()) & set(usage_mod.DATASETS):
+        return
+    admin = auth_mod.admin_name()
+    connections = _connections()
+    if connections.get(usage_mod.CONNECTION) is None:
+        connections.create(usage_mod.CONNECTION, _DATABASE_URL, description=usage_mod.CONNECTION_DESCRIPTION,
+                           author=admin)
+    for name, (description, sql) in usage_mod.DATASETS.items():
+        source = {"connection": usage_mod.CONNECTION, "query": sql}
+        try:
+            datasets.create_query(name, _run_query(source), source, description=description, author=admin)
+        except (connections_mod.ConnectionsError, DatasetError) as exc:
+            print(f"usage analytics: {name}: {exc}", flush=True)
+    dashboards = _dashboards_in(groups.ADMIN_GROUP)
+    if dashboards is not None and dashboards.get(usage_mod.DASHBOARD_NAME) is None:
+        dashboards.create(usage_mod.DASHBOARD, author=admin)
+
+
+if PORTAL_ENABLED:
+    try:
+        _set_up_usage()
+    except Exception:                    # never in the way of starting
+        traceback.print_exc()

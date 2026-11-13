@@ -5,6 +5,7 @@ majors, mappings as minors, builds, and both catalogs."""
 
 import pytest
 
+from fireflyer import column_map as cm
 from fireflyer.datasets import DatasetError, DatasetStore
 from fireflyer.storage import LocalObjectStore, make_object_store
 
@@ -152,7 +153,8 @@ def test_a_mapping_is_the_next_minor_and_types_the_columns(store):
 
 def test_an_upload_is_the_next_major_and_carries_the_mapping(store):
     store.create("orders", CSV)
-    store.remap("orders", TYPED)
+    _keep(store, "orders", 5)
+    store.remap("orders", "history: 5\n" + TYPED)
     ds = store.replace("orders", b"id,status,amount,note\n9,paid,1.5,x\n")
     assert ds.version == "2.2"            # a new column: the carried mapping changed
     # Kept: id/state/amount as mapped. New: `note`, as text.
@@ -162,7 +164,8 @@ def test_an_upload_is_the_next_major_and_carries_the_mapping(store):
 
 def test_every_original_is_kept_and_only_the_latest_parquet(store, tmp_path):
     store.create("orders", CSV)
-    store.remap("orders", TYPED)
+    _keep(store, "orders", 5)
+    store.remap("orders", "history: 5\n" + TYPED)
     store.replace("orders", CSV)
     files = sorted(p.relative_to(tmp_path / "objects").as_posix() for p in (tmp_path / "objects").rglob("*") if p.is_file())
     assert files == [
@@ -209,7 +212,8 @@ def test_an_unchanged_or_unfitting_mapping_is_refused(store):
 
 def test_deleting_a_major_drops_its_minors_but_never_the_one_in_use(store, tmp_path):
     store.create("orders", CSV)
-    store.remap("orders", TYPED)
+    _keep(store, "orders", 5)
+    store.remap("orders", "history: 5\n" + TYPED)
     store.replace("orders", CSV)
     with pytest.raises(DatasetError, match="in use"):
         store.delete_major("orders", 2)
@@ -333,10 +337,11 @@ def test_restoring_an_older_version_is_the_next_one(store):
 
 def test_restoring_a_version_of_an_older_upload_fits_it_to_the_latest(store):
     store.create("orders", CSV)
-    store.remap("orders", TYPED)
+    _keep(store, "orders", 5)
+    store.remap("orders", "history: 5\n" + TYPED)
     store.replace("orders", b"id,amount,note\n1,2,x\n")       # `status` gone, `note` new
     assert store.restored("orders", "1.1") == (
-        "columns:\n  id:\n    formula: to_number(id)\n  amount:\n    formula: to_number(amount)\n"
+        "history: 5\ncolumns:\n  id:\n    formula: to_number(id)\n  amount:\n    formula: to_number(amount)\n"
         "  note:\n    formula: note\n"
     )
 
@@ -370,6 +375,7 @@ def test_the_minor_counts_mapping_changes_and_never_resets(store):
 
 def test_sizes_are_kept_per_upload_and_in_all(store):
     store.create("orders", CSV)
+    _keep(store, "orders", 5)
     bigger = CSV + b"4,paid,99\n"
     store.replace("orders", bigger)
     store.remap("orders", store.mapping("orders").replace("id:", "order_id:", 1))
@@ -384,10 +390,76 @@ def test_sizes_are_kept_per_upload_and_in_all(store):
 
 def test_deleting_an_upload_drops_its_size(store):
     store.create("orders", CSV)
+    _keep(store, "orders", 5)
     store.replace("orders", CSV + b"4,paid,99\n")
     before = store.get("orders").size
     store.delete_major("orders", 1)
     assert store.get("orders").size == before - len(CSV)
+
+
+def _keep(store, name: str, n: int) -> None:
+    """`history: n` written into every version's mapping, as if it were always
+    there — no new version, so the tests' labels stay as they are."""
+    doc = store._load(name)
+    for v in doc["versions"]:
+        m = v["mapping"]
+        v["mapping"] = cm.dump(cm.rules(m), cm.permissions(m), cm.source(m), n)
+    store._save(doc)
+
+
+def _raws(tmp_path) -> list[str]:
+    return sorted(p.name for p in (tmp_path / "objects" / "datasets" / "orders" / "raw").iterdir())
+
+
+def test_by_default_a_new_upload_drops_the_older_ones(store, tmp_path):
+    store.create("orders", CSV)
+    store.remap("orders", TYPED)
+    assert store.get("orders").history == 0
+    store.replace("orders", CSV)
+    assert [v.label for v in store.versions("orders")] == ["2.1"]
+    assert _raws(tmp_path) == ["2.csv"]
+    assert store.get("orders").size == len(CSV) + store.get("orders").data_size
+
+
+def test_history_keeps_that_many_uploads_before_the_one_in_use(store, tmp_path):
+    store.create("orders", CSV)
+    store.remap("orders", "history: 1\n" + store.mapping("orders"))
+    assert store.get("orders").history == 1
+    for _ in range(3):
+        store.replace("orders", CSV)               # each carries `history: 1` forward
+    assert [v.label for v in store.versions("orders")] == ["4.1", "3.1"]
+    assert _raws(tmp_path) == ["3.csv", "4.csv"]
+    store.remap("orders", store.mapping("orders").replace("history: 1\n", ""))   # back to 0: at once
+    assert [v.label for v in store.versions("orders")] == ["4.2", "4.1"]
+    assert _raws(tmp_path) == ["4.csv"]
+    with pytest.raises(DatasetError, match="whole number"):
+        store.remap("orders", "history: -1\n" + store.mapping("orders"))
+
+
+def test_history_is_written_only_when_it_keeps_some(store):
+    rules = [cm.Rule("id", "id")]
+    assert cm.dump(rules, history=2) == "history: 2\ncolumns:\n  id:\n    formula: id\n"
+    assert cm.dump(rules) == "columns:\n  id:\n    formula: id\n"
+    text = cm.dump(rules, {"viewer": []}, history=2)
+    assert cm.history(cm.with_permissions(text, {})) == 2
+    assert cm.history(cm.upgrade(text)) == 2
+    assert cm.history("columns: [") == 0
+
+def test_an_upload_that_fails_to_build_drops_nothing(store, tmp_path):
+    store.create("orders", CSV)
+    store.remap("orders", TYPED)
+    with pytest.raises(DatasetError):
+        store.replace("orders", b"id,status,amount\nx,paid,1\n")       # `id` won't read as a number
+    assert [v.label for v in store.versions("orders")] == ["1.1", "1.0"]
+    assert "1.csv" in _raws(tmp_path)
+
+
+def test_an_upload_waiting_to_build_drops_nothing_yet(store, tmp_path):
+    store.create("orders", CSV)
+    store.replace("orders", CSV, build=False)
+    assert _raws(tmp_path) == ["1.csv", "2.csv"]
+    store.build("orders")
+    assert _raws(tmp_path) == ["2.csv"]
 
 
 def test_sizes_are_measured_for_datasets_from_before_them(store):
