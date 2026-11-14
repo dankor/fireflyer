@@ -104,8 +104,10 @@ Parquet in object storage with efficient (pushdown) scans — so "only CSV" and
 formula language — including per-calc row-level expressions, derived ratios and
 calculated columns. None relaxes the rest: no auth beyond the portal's simple
 login, no multi-user, no caching, no SQL/joins, and calcs stay an expression
-language — no `case`/string ops, and `str2dt()`, `to_number()` and `to_list()`
-are the only functions.
+language — no `case`/string ops, and `str2dt()`, `to_number()`, `to_bool()` and
+`to_list()` are the only functions. (A dataset's data can come from a SQL query
+on a **connection** — see **Connections**. Charts and calcs still never run
+SQL.)
 
 ---
 
@@ -441,6 +443,15 @@ A managed dataset is **versioned**, `major.minor` — `orders:3.4`:
 
 * Every **upload** is a new **major**, and its original file is kept
   (`datasets/<name>/raw/<major>.csv`).
+* **History**: the mapping's `history:` key is how many majors to keep before
+  the one in use — 0 by default (the key is then left out), so only the one in
+  use. When a version is built and in use, the store deletes the older majors
+  past the count of its mapping, each with its original and its minors
+  (`DatasetStore._prune`). A failed or waiting build deletes nothing. The
+  mapping carries it like `permissions:` (an upload or refresh keeps it), so a
+  change is the next minor, and a smaller count deletes the older majors when
+  that minor is built. In edit mode, the clock in the header of the actions
+  column shows the count; a click opens a number field (`keepButton`).
 * The **minor** counts changes to the **column mapping** — one counter for the
   dataset, never reset by an upload (`datasets._next_minor`). A new upload keeps
   the minor when the mapping it carries forward is unchanged (1.3 → 2.3) and
@@ -458,11 +469,13 @@ A managed dataset is **versioned**, `major.minor` — `orders:3.4`:
 the ones charts see — each with a **formula** over the uploaded columns. An
 upload is read with **every column as text** — a CSV says nothing about types,
 and guessing turns `007` into `7` — and the formulas make it what it should be.
-They're the calc grammar (`+ - * /`, `str2dt()`, `to_number()`, `to_list()`;
-see **Calcs**), so a column can be renamed, computed from several, or left out.
-There is **no type to pick**: a column's type is what its formula gives — text
-as uploaded, a number from `to_number()` (whole numbers stay integers), a date
-from `str2dt()`, a **list of text** from `to_list()`.
+They're the calc grammar (`+ - * /`, `str2dt()`, `to_number()`, `to_bool()`,
+`to_list()`; see **Calcs**), so a column can be renamed, computed from several,
+or left out. There is **no type to pick**: a column's type is what its formula
+gives — text as uploaded, a number from `to_number()` (whole numbers stay
+integers), a date from `str2dt()`, yes / no from `to_bool()` (`true`, `yes`,
+`1` and `false`, `no`, `0`, in any case; anything else is empty), a **list of
+text** from `to_list()`.
 
 **`to_list(<column>)`** reads text that holds a list, written any of the usual
 ways — a JSON array `["a", "b"]`, `[a, b]`, a Postgres array `{a,b}`, a tuple
@@ -748,7 +761,7 @@ against a dashboard's `calcs:` block. See `fireflyer/calcs.py`.
 This is an **owner-approved extension** to the count-only MVP aggregation — it
 unlocks ratios, conditional aggregates and calculated columns, but stays a tiny
 expression language, not SQL: no joins, no `case`/string ops, and `str2dt()`,
-`to_number()` and `to_list()` are the only functions.
+`to_number()`, `to_bool()` and `to_list()` are the only functions.
 
 ## Charts section
 
@@ -1524,7 +1537,8 @@ carries no separate data preview — and, per column, the dashboards whose chart
 read it: a **Dashboards** column, from the index in **What each dashboard reads**;
 the header filters them — a type checkbox list, a name search, a dashboards
 checkbox list — and a click on a value shows it whole, selectable, with a copy
-button), **edit** (a name and a formula per column, a service toggle, ✕ / ＋),
+button), **edit** (a name and a formula per column, a service toggle, ✕; the clock (`history:`) and the ＋ head the actions column, as on the list pages; a
+query dataset's connection and SQL in a box of their own under the columns),
 **code** (the mapping as YAML, in the same CodeMirror editor), **compare** (two
 mapping revisions side by side, with restore and step older/newer) and
 **permissions** (the roles that may read it; see **Permissions**). Its
@@ -1532,7 +1546,8 @@ mapping revisions side by side, with restore and step older/newer) and
 grouped by upload: a check marks the version in use, a version opens the
 comparison, an upload's first version shows the uploaded file's size, the
 version in use the built Parquet's (beside its check), and an upload not in
-use can be deleted. **What is stored**: every upload's original file, and the
+use can be deleted. **What is stored**: the original file of each upload that
+the mapping's `history:` keeps, and the
 built data of the version in use only — any other version is its upload plus
 its mapping (the formulas that transform it), built again when restored. Sizes are recorded as files are written (each
 version's `size`, the document's `data_size` for the Parquet); a document from
@@ -1721,6 +1736,127 @@ did you log in?". Token refresh, group-to-role mapping (a provider's groups
 could pick the user's roles in `provision`), and a stable subject id beside the
 name are left for when an integration needs them.
 
+## Connections
+
+A dataset's data can come from a **database**, as well as from an uploaded
+file. A **connection** is a database with a name: a SQLAlchemy URL
+(`postgresql+psycopg://reader@db:5432/sales`, as SQLAlchemy reads it: the
+driver is part of the URL, and Fireflyer changes nothing in it), a description and a password. A
+dataset names its connection **by name only**, as a permission names a role.
+
+**The connection store** (`fireflyer/connections.py`, `ConnectionStore`) keeps
+the connections in the same database as roles and users: the portal's
+Postgres, or `<FIREFLYER_DATA>/fireflyer.db` in local mode. The table is
+`connections (name, description, url, secret, created_by, created_at,
+updated_at)`. The URL is kept **without** its password. The password is in
+`secret`, encrypted (Fernet, with a key from `FIREFLYER_SECRET`). The password
+never goes to the browser, to the activity log or into a dataset. A password
+in a typed URL moves into `secret`. An empty password field keeps the
+password. If `FIREFLYER_SECRET` changes, the passwords cannot be read: set them
+again.
+
+At setup the portal adds one connection, `internal`, to its own database
+(`DATABASE_URL`, with the driver it has: `postgresql+psycopg://`), for usage
+analytics (below).
+
+**Fireflyer's own database.** A connection to the portal's own database has
+one more table than the database: `dataset_versions` (`group_name, dataset,
+version, current, status, author, created_at, rows, size, data_size, error`),
+one row for each version of each dataset. Postgres cannot read the datasets'
+YAML documents, so the app reads them, and puts the rows in front of the query
+as a `with` block over a JSON literal. Nothing is written to the database.
+"The own database" is the same kind, server, port and database name as
+`DATABASE_URL`, for each user and driver; a host name and its address match
+(`ConnectionStore.is_own`).
+
+**Who.** Only an admin manages connections and writes a dataset's `source:`
+(`app._may_connect`). Where there is no login (local mode), everyone can.
+
+**The Connections tab** (`/connections`, `portal.render_connections`) lists
+each connection: its name and description, its URL (no password), the
+datasets that read from it, and its last change. The **+** and the pencil open
+one dialog, with the fields or the same as YAML (`name`, `description`, `url`,
+`password`). The plug tests the connection (`select 1`): a check, or the
+database's error. A rename changes the `source:` of each dataset that reads
+from it (a new mapping version). A connection that a dataset reads from cannot
+be removed (409, the datasets listed). Routes: `/connections/new`,
+`/connections/{name}/edit|delete|test`.
+
+**A dataset's source** is in its mapping, before `columns:`, so code mode
+shows it, compare shows a change to it, and restore brings it back:
+
+```yaml
+source:
+  connection: internal
+  query: |-
+    select actor, action from activity
+columns:
+  ...
+```
+
+- **Refresh** (↻ on the dataset page) runs the query and stores the result as
+  the next **major**, `raw/<major>.parquet` (`DatasetStore.refresh`). The
+  mapping goes forward as it does for an upload. A new column gets the formula
+  for its type (below). The build runs in the background. The query runs in
+  the request, so its error is the answer.
+- **A new dataset from a query**: the **+** of the datasets list opens one
+  dialog with a **CSV | SQL** switch (`portal._new_dataset_dialog`,
+  `gallery.js` `dsKind`). The switch shows the fields of one kind, disables
+  the other's, and sets where the form posts: `/datasets/{group}/new` or
+  `/datasets/{group}/new-query` (`DatasetStore.create_query`). Only one who
+  may connect gets the switch; anyone else gets the CSV fields only.
+- **Edit mode shows the SQL.** Under the columns of a query dataset, edit mode
+  shows its connection and its query (`dataset-columns.js` `sqlEditor`). A
+  change writes the `source:` block of the mapping, as `column_map.dump`
+  writes it; **Save** runs the new query. The page data gives the source and
+  the connection names (`render_dataset_detail(sources=)`); without them (not
+  an admin) the SQL is read-only. `/mapping/check` also returns the source, so
+  the form follows an edit in code mode.
+- **The SQL field is a code editor** (`web/static/sql-editor.js`, CodeMirror):
+  plain text with line numbers, Tab and Shift-Tab indent, undo, the current
+  line lit and brackets matched. It has no SQL grammar: the database checks
+  the query. Edit mode makes one with `sqlEditor()`. In the new-dataset dialog
+  it sits over the `<textarea data-sql-editor>`, which stays hidden as the
+  field the form posts; an empty query stops the submit there.
+- **A changed `source:`** in a saved mapping runs the new query: its result is
+  the next major (`/datasets/{group}/{ds}/mapping`). The check route
+  (`/mapping/check`) asks the database for the columns (`limit 0`).
+- **An upload** to a query dataset removes `source:`. The next major is the
+  file.
+- **Types are found from the result.** The mapping reads every column as text
+  (`column_map.as_text`). The first mapping of a query gives each column the
+  formula that reads it back as its type (`column_map.typed_formula`): numbers
+  `to_number()`, yes / no `to_bool()`, dates `str2dt(…, YYYY-MM-DD)`, times
+  `str2dt(…, YYYY-MM-DD HH:mm:ss)` (with `Z` when the time has a zone), lists
+  `to_list()`.
+- **Errors come from the database.** Fireflyer does not check SQL. It shows the
+  first line of the database's error, and the line of the query when the
+  driver gives it (`(line 2)`). A failed refresh keeps the data and shows the
+  error on the dataset page. The one check of Fireflyer's own: two result
+  columns with the same name.
+- **No commit.** Fireflyer knows no SQL dialect: SQLAlchemy runs the query and
+  never commits it, so a change that the query makes is rolled back when the
+  connection closes. To stop a query at the database, give the connection a
+  read-only user. There are no limits on rows or time.
+
+The history marks a major from a query with a database icon. A refresh is
+manual only: there is no schedule.
+
+### Usage analytics
+
+The portal ships usage analytics in the admin's group `_admin`
+(`web/usage.py`): a connection `internal` to its own database, and five
+datasets on it — `usage_activity`,
+`usage_dashboards`, `usage_dataset_reads`, `usage_datasets`, `usage_users` —
+and a **Fireflyer Usage** dashboard on them (tabs Activity and Content: active users,
+actions by day, the most opened dashboards and the most active users, errors,
+dashboards nobody opens, datasets nobody reads, storage by group). The portal
+makes them **once**, at start-up, when `_admin` has none of the datasets
+(`app._set_up_usage`). After that they are ordinary datasets: an admin can
+change their SQL, and an upgrade does not change them. Refresh a dataset to
+bring the dashboard up to date. The SQL gives usernames only: no email or
+names, no IP address or browser, no password hash or session key.
+
 ## Activity log
 
 Portal mode keeps a row per action in its database — the **security audit
@@ -1734,11 +1870,11 @@ for the tests):
 | `id` | ordering |
 | `at` | UTC, ISO text |
 | `actor` | the signed-in user; for a login, the name typed |
-| `action` | a verb: `login`, `open`, `save`, `move`, `filter`, … |
-| `object_type` | `dashboard` / `dataset` / `role` / `user` / `gallery` / empty |
+| `action` | a verb: `login`, `open`, `save`, `move`, `filter`, `refresh`, `test`, … |
+| `object_type` | `dashboard` / `dataset` / `role` / `user` / `connection` / `gallery` / empty |
 | `object_name` | its name (a dashboard's is its key) |
 | `status_code` | the HTTP status that came back — a refusal (400, 401, 403, 409) or a crash (500) is logged too |
-| `detail` | JSON: the action's own parameters |
+| `detail` | JSON: the action's own parameters; for a failed action, `error`: why |
 | `ip`, `user_agent` | unmasked |
 | `group_name` | the group the thing acted on is in — "" for what's global (roles, users, the login); a log from before groups gets the column, empty |
 
@@ -1750,7 +1886,11 @@ the log opens and then once a day.
 object_type, object_name, **detail)` — and the `_activity` middleware writes it
 once the response is made, so `status_code` is real. A route that returns
 `{ok: false}` with 200 passes `status_code=400` (or 401 for a refused login, 502/503 for the
-assistant). A route that never calls `_log` writes nothing. A row that can't be
+assistant). A route that never calls `_log` writes nothing. A failed action
+records **why** in `detail.error`: the route gives it (`_log(..., error=)`), or
+the middleware reads it from the answer — a JSON `error`, or a short plain-text
+answer such as "Only an admin manages roles" (`_answer_text`; never an HTML
+page). A crash records its exception's message. A row that can't be
 written is lost, never the request. **`detail` never holds** a password (a user
 row says `password: set` / `cleared`), the session, or a dashboard's whole
 YAML — a save records its `version`, whose YAML is in the history; uploads

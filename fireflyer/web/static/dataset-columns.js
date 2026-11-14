@@ -4,7 +4,9 @@
 //            gives, from the built data), formula, example values and the
 //            dashboards using it
 //   edit     a form: each column a name and a formula over the uploaded
-//            columns — rename, drop (✕) or add (＋) columns
+//            columns — rename, drop (✕) or add (＋) columns, and the uploads
+//            to keep (the clock); under them, a query dataset's connection
+//            and SQL (read-only for a non-admin)
 //   code     the same as YAML, in a code editor
 //   compare  two versions of the mapping side by side (or one against yours);
 //            the left one can be restored — loaded as an unsaved edit, which
@@ -34,6 +36,7 @@ import {yaml} from '@codemirror/lang-yaml';
 import {MergeView} from '@codemirror/merge';
 import {yamlStyle, scalarColours, editorTheme} from 'fireflyer/yaml-look';
 import {stepPair} from 'fireflyer/diff-view';
+import {sqlEditor as sqlCodeEditor} from 'fireflyer/sql-editor';
 
 const data = JSON.parse(document.getElementById('ds-data').textContent);
 const panel = document.getElementById('ds-columns');
@@ -56,6 +59,8 @@ window.fetch = (url, options) => {
 const look = [yaml(), syntaxHighlighting(yamlStyle), scalarColours, editorTheme];
 
 let rules = data.rules.map(r => ({...r}));
+let source = data.source && {...data.source};   // a query dataset's {connection, query}
+let keep = data.history || 0;      // `history:` — uploads kept before the one in use
 let text = data.mapping;           // the YAML being edited
 let codeStale = false;             // edited as YAML since the form last read it
 let mode = 'view';
@@ -295,9 +300,13 @@ function table(heads, rows) {
 // --- edit ------------------------------------------------------------------------
 
 // Each column a name and a formula (the calc grammar over the uploaded columns:
-// `status`, `to_number(qty)`, `str2dt(day, YYYY-MM-DD)`, `to_list(tags)`); ✕ drops one, ＋ adds
+// `status`, `to_number(qty)`, `str2dt(day, YYYY-MM-DD)`, `to_bool(paid)`, `to_list(tags)`); ✕ drops one, ＋ adds
 // one. The type isn't chosen — it's what the formula gives.
+let sqlView = null;                // edit mode's SQL editor, while it's shown
+
 function showEdit() {
+  dropSqlView();
+  teardown = dropSqlView;
   const rows = rules.map((r, i) => {
     const name = el('input', {
       value: r.name, 'aria-label': 'Column name', spellcheck: 'false',
@@ -333,7 +342,70 @@ function showEdit() {
       inputs[inputs.length - 1].focus();
     },
   }, '＋');
-  panel.replaceChildren(table(['Name', 'Formula', ''], rows), el('div', {class: 'col-add-row'}, add));
+  // The ＋ heads the actions column, as on the list pages, after the clock;
+  // the SQL is a box of its own under the columns.
+  const actions = el('span', {class: 'col-head-actions'}, keepButton(), add);
+  panel.replaceChildren(el('div', {class: 'ds-box'}, table(['Name', 'Formula', actions], rows)),
+    source ? sqlEditor() : '');
+}
+
+// The mapping's `history:` — how many uploads before the one in use to keep
+// (0: only that one). The clock shows the number; a click turns it into a
+// field, which Enter or a click away keeps and Esc leaves.
+function keepButton() {
+  const title = `Uploads to keep before the one in use: ${keep}`;
+  const btn = el('button', {
+    type: 'button', class: 'col-keep', title, 'aria-label': title,
+    onclick: () => {
+      const field = el('input', {
+        type: 'number', min: '0', step: '1', value: String(keep), class: 'col-keep-field',
+        'aria-label': 'Uploads to keep before the one in use',
+      });
+      let done = false;
+      const finish = commit => {
+        if (done) return;
+        done = true;
+        const n = Number(field.value);
+        if (commit && Number.isInteger(n) && n >= 0 && n !== keep) { keep = n; changed(); }
+        showEdit();
+      };
+      field.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+      });
+      field.addEventListener('blur', () => finish(true));
+      btn.replaceWith(field);
+      field.focus();
+      field.select();
+    },
+  }, el('span', {class: 'col-keep-count'}, String(keep)));
+  btn.insertAdjacentHTML('afterbegin', data.historyIcon);
+  return btn;
+}
+
+// A query dataset's source: the connection and the SQL. A changed query runs
+// on Save — the database checks it — and is the next major.
+function sqlEditor() {
+  const may = Array.isArray(data.connections);
+  const names = may ? data.connections : [source.connection];
+  const pick = el('select', {
+    'aria-label': 'Connection', title: 'Connection', disabled: !may,
+    onchange: e => { source.connection = e.target.value; changed(); },
+  }, ...(names.includes(source.connection) ? names : [source.connection, ...names])
+    .map(n => el('option', {value: n, selected: n === source.connection}, n)));
+  const db = el('span', {class: 'ds-sql-icon', title: 'From a database query'});
+  db.innerHTML = data.databaseIcon;
+  const sql = el('div', {class: 'ff-sql', 'aria-label': 'Query'});
+  sqlView = sqlCodeEditor({
+    parent: sql, doc: source.query, readOnly: !may, onSave: save,
+    onChange: query => { source.query = query; changed(); },
+  });
+  return el('div', {class: 'ds-box ds-sql'}, el('div', {class: 'ds-sql-head'}, db, pick), sql);
+}
+
+function dropSqlView() {
+  sqlView?.destroy();
+  sqlView = null;
 }
 
 function changed() {
@@ -346,14 +418,21 @@ function changed() {
 function dump(list) {
   const lines = list.filter(r => r.name)
     .map(r => `  ${scalar(r.name)}:\n    formula: ${scalar(r.formula || r.name)}` + (r.service ? '\n    service: true' : ''));
-  return 'columns:\n' + lines.join('\n') + '\n' + permissionsBlock(text);
+  return sourceBlock() + (keep ? `history: ${keep}\n` : '') + 'columns:\n' + lines.join('\n') + '\n' + topBlock(text, 'permissions');
 }
 
-// The mapping's `permissions:` block as written — the form above edits only the
-// columns, so a column edit keeps the permissions as they are.
-function permissionsBlock(yaml) {
+// `source:` as the server writes it (column_map.dump): the query as a block.
+function sourceBlock() {
+  if (!source) return '';
+  const query = source.query.replace(/^\n+|\n+$/g, '').split('\n').map(l => ('    ' + l).trimEnd());
+  return ['source:', `  connection: ${scalar(source.connection)}`, '  query: |-', ...query].join('\n') + '\n';
+}
+
+// A top-level block of the mapping as written — `permissions:`. The form above
+// edits only the columns, so a column edit keeps it as it is.
+function topBlock(yaml, key) {
   const lines = yaml.split('\n');
-  const start = lines.findIndex(l => /^permissions:/.test(l));
+  const start = lines.findIndex(l => l.startsWith(key + ':'));
   if (start < 0) return '';
   let end = start + 1;
   while (end < lines.length && (lines[end] === '' || /^[\s#]/.test(lines[end]))) end++;
@@ -396,6 +475,8 @@ async function reread() {
   const res = await post('/mapping/check', text);
   if (!res.ok) { toast(res.error); return false; }
   rules = res.rules;
+  source = res.source;
+  keep = res.history || 0;
   codeStale = false;
   return true;
 }
@@ -795,6 +876,8 @@ discardBtn.addEventListener('click', () => {
   if (!confirm('Discard your unsaved changes?')) return;
   text = data.mapping;
   rules = data.rules.map(r => ({...r}));
+  source = data.source && {...data.source};
+  keep = data.history || 0;
   codeStale = false;
   accessForm = null;                         // re-read from the server
   updateSave();

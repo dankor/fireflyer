@@ -646,6 +646,9 @@ def versioned(client, tmp_path, monkeypatch):
 
     datasets = DatasetStore(make_object_store({"base": str(tmp_path)}))
     datasets.create("sales", b"id,status,amount\n1,paid,10\n2,open,5\n")
+    doc = datasets._load("sales")                  # keep older uploads, as the tests below expect
+    doc["versions"][0]["mapping"] = "history: 5\n" + doc["versions"][0]["mapping"]
+    datasets._save(doc)
     dashboards = SqlStore(":memory:").group("local")
     dash_id = dashboards.create(
         "name: S\ncharts:\n  p: {type: pie, dataset: sales, title: status, column: status}\n"
@@ -682,16 +685,32 @@ def test_a_cast_that_fails_reports_and_keeps_the_version(client, versioned):
 
 def test_versions_list_fetch_and_delete(client, versioned):
     datasets, _, _ = versioned
-    client.post("/datasets/local/sales/mapping", data={"mapping": "columns:\n  id: to_number(id)\n"})
+    client.post("/datasets/local/sales/mapping", data={"mapping": "history: 5\ncolumns:\n  id: to_number(id)\n"})
     client.post("/datasets/local/sales/replace", files={"file": ("x.csv", b"id,status,amount\n3,paid,1\n")})
     listed = client.get("/datasets/local/sales/versions").json()["versions"]
     assert [v["version"] for v in listed] == ["2.1", "1.1", "1.0"]
-    assert client.get("/datasets/local/sales/versions/1.1").json()["mapping"] == "columns:\n  id:\n    formula: to_number(id)\n"
+    assert client.get("/datasets/local/sales/versions/1.1").json()["mapping"] == "history: 5\ncolumns:\n  id:\n    formula: to_number(id)\n"
     assert client.get("/datasets/local/sales/versions/9.9").status_code == 404
     assert client.post("/datasets/local/sales/versions/2/delete").status_code == 400     # in use
     client.post("/datasets/local/sales/versions/1/delete")
     assert [v.label for v in datasets.versions("sales")] == ["2.1"]
 
+
+def test_the_uploads_to_keep_are_the_mappings_history(client, versioned):
+    datasets, _, _ = versioned
+    client.post("/datasets/local/sales/replace", files={"file": ("x.csv", b"id,status,amount\n3,paid,1\n")})
+    page = client.get("/datasets/local/sales").text
+    data = json.loads(re.search(r'<script type="application/json" id="ds-data">(.*?)</script>', page, re.S).group(1))
+    assert data["history"] == 5 and "historyIcon" in data
+    mapping = datasets.mapping("sales")
+    assert mapping.startswith("history: 5\n")
+    fewer = mapping.replace("history: 5\n", "")
+    assert client.post("/datasets/local/sales/mapping/check", data={"mapping": fewer}).json()["history"] == 0
+    bad = client.post("/datasets/local/sales/mapping/check", data={"mapping": "history: x\n" + fewer})
+    assert bad.status_code == 400 and "whole number" in bad.json()["error"]
+    client.post("/datasets/local/sales/mapping", data={"mapping": fewer})
+    assert datasets.get("sales").history == 0
+    assert [v.label for v in datasets.versions("sales")] == ["2.1", "2.0"]
 
 def test_the_dataset_page_has_the_column_modes_and_history(client, versioned):
     page = client.get("/datasets/local/sales").text
@@ -710,7 +729,7 @@ def test_a_version_can_be_fetched_for_restoring(client, versioned):
     client.post("/datasets/local/sales/mapping", data={"mapping": "columns:\n  id: to_number(id)\n"})
     r = client.get("/datasets/local/sales/versions/1.0/restore").json()
     assert r["mapping"] == (
-        "columns:\n  id:\n    formula: id\n  status:\n    formula: status\n  amount:\n    formula: amount\n"
+        "history: 5\ncolumns:\n  id:\n    formula: id\n  status:\n    formula: status\n  amount:\n    formula: amount\n"
     )
     assert client.get("/datasets/local/sales/versions/7.0/restore").status_code == 404
 
