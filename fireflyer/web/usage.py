@@ -16,6 +16,15 @@ from __future__ import annotations
 CONNECTION = "internal"
 CONNECTION_DESCRIPTION = "Fireflyer's own database: who uses what"
 
+
+def connection_url(database_url: str) -> str:
+    """The portal's `DATABASE_URL` — a `postgresql://` DSN, as psycopg reads
+    it — as a SQLAlchemy URL, which names its driver: psycopg, the one the
+    portal has."""
+    from sqlalchemy.engine import make_url
+
+    return make_url(database_url).set(drivername="postgresql+psycopg").render_as_string(hide_password=False)
+
 # name -> (description, SQL). `dataset_versions` is the table a connection to
 # Fireflyer's own database adds, parsed from the datasets' documents.
 DATASETS: dict[str, tuple[str, str]] = {

@@ -36,6 +36,7 @@ import {yaml} from '@codemirror/lang-yaml';
 import {MergeView} from '@codemirror/merge';
 import {yamlStyle, scalarColours, editorTheme} from 'fireflyer/yaml-look';
 import {stepPair} from 'fireflyer/diff-view';
+import {sqlEditor as sqlCodeEditor} from 'fireflyer/sql-editor';
 
 const data = JSON.parse(document.getElementById('ds-data').textContent);
 const panel = document.getElementById('ds-columns');
@@ -301,7 +302,11 @@ function table(heads, rows) {
 // Each column a name and a formula (the calc grammar over the uploaded columns:
 // `status`, `to_number(qty)`, `str2dt(day, YYYY-MM-DD)`, `to_bool(paid)`, `to_list(tags)`); ✕ drops one, ＋ adds
 // one. The type isn't chosen — it's what the formula gives.
+let sqlView = null;                // edit mode's SQL editor, while it's shown
+
 function showEdit() {
+  dropSqlView();
+  teardown = dropSqlView;
   const rows = rules.map((r, i) => {
     const name = el('input', {
       value: r.name, 'aria-label': 'Column name', spellcheck: 'false',
@@ -390,13 +395,17 @@ function sqlEditor() {
     .map(n => el('option', {value: n, selected: n === source.connection}, n)));
   const db = el('span', {class: 'ds-sql-icon', title: 'From a database query'});
   db.innerHTML = data.databaseIcon;
-  const sql = el('textarea', {
-    class: 'ff-sql', 'aria-label': 'Query', spellcheck: 'false', readonly: !may,
-    rows: Math.min(24, Math.max(6, source.query.split('\n').length + 1)),
-    oninput: e => { source.query = e.target.value; changed(); },
+  const sql = el('div', {class: 'ff-sql', 'aria-label': 'Query'});
+  sqlView = sqlCodeEditor({
+    parent: sql, doc: source.query, readOnly: !may, onSave: save,
+    onChange: query => { source.query = query; changed(); },
   });
-  sql.value = source.query;
   return el('div', {class: 'ds-box ds-sql'}, el('div', {class: 'ds-sql-head'}, db, pick), sql);
+}
+
+function dropSqlView() {
+  sqlView?.destroy();
+  sqlView = null;
 }
 
 function changed() {

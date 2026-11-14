@@ -1619,7 +1619,7 @@ def _new_dataset_dialog(base: str, sources: list[str] | None) -> str:
       <label>Connection</label><select name="connection" disabled>{options}</select>
       <label>Query</label>
       <textarea name="query" class="ff-sql" rows="8" spellcheck="false" required disabled
-                placeholder="select …"></textarea>
+                placeholder="select …" data-sql-editor></textarea>
     </div>
     <div class="dialog-actions">
       <button type="button" class="cancel" onclick="this.closest('dialog').close()">Cancel</button>
@@ -1688,9 +1688,12 @@ def render_datasets(
     )
     base = f"/datasets/{groups.url_name(group)}"
     extra = _new_dataset_dialog(base, sources) if can_write else ""
+    # The dialog's query is a code editor (sql-editor.js) when it has one.
+    head = assets.import_map("yaml-look.js", "sql-editor.js") + assets.module("sql-editor.js") \
+        if can_write and sources else ""
     return _shell(
         title, user_menu, "datasets", table,
-        extra=extra,
+        extra=extra, head=head,
         picker=picker, users=users, group=group, connections=connections,
     )
 
@@ -1924,7 +1927,7 @@ def render_access(
 # --- connections ------------------------------------------------------------------
 # The databases a dataset's data can come from (`fireflyer/connections.py`), by
 # name: a URL each (no password shown — it stays in the store), the datasets
-# whose `source:` names it, a test, edit and remove — none is built in.
+# whose `source:` names it, a test, edit and remove.
 
 
 def render_connections(
@@ -1993,7 +1996,7 @@ def _connection_dialog() -> str:
       <label>Name</label><input name="name" autocomplete="off" pattern="[A-Za-z0-9_-]+" required>
       <label>Description</label><textarea name="description"></textarea>
       <label>URL</label><input name="url" class="mono" autocomplete="off" spellcheck="false" required
-             placeholder="postgresql://user@host:5432/database">
+             placeholder="postgresql+psycopg://user@host:5432/database">
       <label>Password</label>
       <input name="password" type="password" autocomplete="new-password" placeholder="">
     </div>
@@ -2340,7 +2343,7 @@ def render_dataset_detail(
         # htmx for the permissions' filter rows: their date-range picker is htmx.
         + '<script src="/static/vendor/htmx@1.9.12.min.js"></script>\n'
         + assets.script("filter-builder.js")
-        + assets.import_map("yaml-look.js", "diff-view.js")
+        + assets.import_map("yaml-look.js", "diff-view.js", "sql-editor.js")
         + assets.module("dataset-columns.js")
     )
     return _shell(

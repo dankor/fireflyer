@@ -439,7 +439,7 @@ def dataset_query(clip: Clip) -> None:
     clip.click("#conn-form textarea[name=description]", settle=0.1)
     _fast(clip, "The database server's own catalog")
     clip.click("#conn-form input[name=url]", settle=0.1)
-    _fast(clip, "postgresql://fireflyer@postgres:5432/postgres", 8)
+    _fast(clip, "postgresql+psycopg://fireflyer@postgres:5432/postgres", 8)
     clip.click("#conn-form input[name=password]", settle=0.1)
     _fast(clip, "fireflyer", 3)
     clip.click(".conn-modes button[data-mode=code]", settle=1.8)      # the same, as YAML
@@ -457,8 +457,10 @@ def dataset_query(clip: Clip) -> None:
     _fast(clip, "Every database on the server, and its size")
     page.select_option("#upload-dialog select[name=connection]", "server")
     clip.hold(0.4)
-    clip.click("#upload-dialog textarea[name=query]", settle=0.1)
-    _fast(clip, "select datname as database, datallowconn as open,\n  pg_database_size(datname) as bytes\nfrom pg_database", 6)
+    clip.click("#upload-dialog .ff-sql .cm-content", settle=0.1)      # a code editor
+    _fast(clip, "select datname as database, datallowconn as open,\n  pg_database_size(datname) as bytes\n", 6)
+    clip.page.keyboard.press("Shift+Tab")                # Enter kept the line's indent
+    _fast(clip, "from pg_database", 6)
     clip.hold(0.8)
     clip.click("#upload-dialog button.ok", settle=1.5)
     page.reload()

@@ -1,19 +1,21 @@
 """Connections — named databases a dataset's data can come from.
 
 A connection is a name, a description and a SQLAlchemy URL
-(`postgresql://reader@db:5432/sales`); its password is kept apart, encrypted
+(`postgresql+psycopg://reader@db:5432/sales`), as SQLAlchemy reads it — the
+driver too; its password is kept apart, encrypted
 with `FIREFLYER_SECRET`, and never leaves the store — not to the browser, not
 into a log, not into a dataset. A dataset names its connection by name only, in
 its mapping's `source:` (`column_map`), as a permission names a role.
 
-Every connection is a row: none is built in, each can be changed or removed.
 A connection to Fireflyer's own database (the portal's `DATABASE_URL`, for usage
 analytics — the portal adds one, `internal`, once at setup) offers one more
 table than the database has, `dataset_versions`, parsed from the datasets'
 documents (which Postgres can't read: they're YAML).
 
-Reading runs the SQL as written, read-only, and builds a frame from what comes
-back. Nothing checks the SQL here: the database does, and its error — the
+Reading runs the SQL as written and builds a frame from what comes back. It
+never commits: SQLAlchemy rolls back what the query did when the connection
+closes, whatever the database — Fireflyer knows no dialect. A connection's
+own user decides what it may do (give it a read-only one). Nothing checks the SQL here: the database does, and its error — the
 message and, when the driver says, the line — is what a person sees.
 
 Kept in the same database as roles and users: the portal's Postgres, or locally
@@ -279,23 +281,12 @@ def _with_password(url: str, password: str) -> str:
     return make_url(url).set(password=password).render_as_string(hide_password=False)
 
 
-def _engine_url(url: str):
-    """A plain `postgresql://` means psycopg 3 here — the driver the portal
-    already has (SQLAlchemy would look for psycopg2)."""
-    from sqlalchemy.engine import make_url
-
-    parsed = make_url(url)
-    if parsed.drivername in ("postgresql", "postgres"):
-        parsed = parsed.set(drivername="postgresql+psycopg")
-    return parsed
-
-
 # --- reading ------------------------------------------------------------------------
 
 
 def read(url: str, query: str, tables: dict[str, list[dict]] | None = None) -> pl.DataFrame:
-    """Run `query` on the database at `url` — read-only — and return what it
-    gives. The SQL goes as written (with `tables` in front as a `with` block
+    """Run `query` on the database at `url` and return what it gives; nothing
+    is committed. The SQL goes as written (with `tables` in front as a `with` block
     when it names one); a failure raises `ConnectionsError` in the database's
     words."""
     from sqlalchemy import create_engine
@@ -304,12 +295,11 @@ def read(url: str, query: str, tables: dict[str, list[dict]] | None = None) -> p
 
     sql, offset = _with_tables(query.strip().rstrip(";").strip(), tables or {})
     try:
-        engine = create_engine(_engine_url(url), poolclass=NullPool)
+        engine = create_engine(url, poolclass=NullPool)    # the URL as written
     except (SQLAlchemyError, ImportError, ValueError) as exc:
         raise ConnectionsError(f"can't open the connection: {exc}") from exc
     try:
-        with engine.connect() as conn:
-            _read_only(conn, engine.dialect.name)
+        with engine.connect() as conn:          # no commit(): closing rolls it back
             result = conn.exec_driver_sql(sql)
             columns = list(result.keys())
             rows = result.fetchall()
@@ -318,14 +308,6 @@ def read(url: str, query: str, tables: dict[str, list[dict]] | None = None) -> p
     finally:
         engine.dispose()
     return _frame(columns, rows)
-
-
-def _read_only(conn, dialect: str) -> None:
-    """Nothing a dataset's SQL runs can change the database."""
-    if dialect == "postgresql":
-        conn.exec_driver_sql("SET TRANSACTION READ ONLY")
-    elif dialect == "sqlite":
-        conn.exec_driver_sql("PRAGMA query_only = ON")
 
 
 def _frame(columns: list[str], rows: list) -> pl.DataFrame:

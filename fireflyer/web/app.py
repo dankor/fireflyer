@@ -1590,9 +1590,9 @@ def _cascade(change, author: str, group: str = "") -> None:
 # --- connections -----------------------------------------------------------------
 # The databases a dataset's data can come from (`fireflyer/connections.py`):
 # kept where roles are — the portal's database, or locally `fireflyer.db` — and
-# managed by admins (anyone where there are no logins). None is built in; a
-# connection to the portal's own database gets `dataset_versions` (portal mode
-# adds one, `internal`, at setup). Tests set `app.state.connections`.
+# managed by admins (anyone where there are no logins). A connection to the
+# portal's own database gets `dataset_versions` (portal mode adds one,
+# `internal`, at setup). Tests set `app.state.connections`.
 app.state.connections = None
 
 
@@ -3128,7 +3128,7 @@ def _set_up_usage() -> None:
     admin = auth_mod.admin_name()
     connections = _connections()
     if connections.get(usage_mod.CONNECTION) is None:
-        connections.create(usage_mod.CONNECTION, _DATABASE_URL, description=usage_mod.CONNECTION_DESCRIPTION,
+        connections.create(usage_mod.CONNECTION, usage_mod.connection_url(_DATABASE_URL), description=usage_mod.CONNECTION_DESCRIPTION,
                            author=admin)
     for name, (description, sql) in usage_mod.DATASETS.items():
         source = {"connection": usage_mod.CONNECTION, "query": sql}

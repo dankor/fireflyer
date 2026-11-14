@@ -450,12 +450,19 @@ dialog textarea.ff-sql { font:12.5px/1.5 ui-monospace, Menlo, monospace; white-s
 .ds-sql { padding:12px; }
 .ds-sql-head { display:flex; align-items:center; gap:8px; margin-bottom:8px; color:var(--muted); }
 .ds-sql-head svg { width:15px; height:15px; display:block; }
-.ds-sql select, .ds-sql textarea { box-sizing:border-box; margin:0; padding:6px 10px; border:1px solid var(--border);
+.ds-sql select { box-sizing:border-box; margin:0; padding:6px 10px; border:1px solid var(--border);
   border-radius:4px; background:var(--bg); color:var(--text); font-size:13px; font-family:inherit; outline:0; }
-.ds-sql select:focus, .ds-sql textarea:focus { border-color:var(--accent); }
+.ds-sql select:focus { border-color:var(--accent); }
 .ds-sql select { width:auto; min-width:180px; }
-.ds-sql select:disabled, .ds-sql textarea[readonly] { color:var(--muted); }
-.ds-sql textarea.ff-sql { display:block; width:100%; resize:vertical; padding:8px 10px;
-  font:12.5px/1.5 ui-monospace, Menlo, monospace; white-space:pre; tab-size:2; }
+.ds-sql select:disabled { color:var(--muted); }
+/* A SQL field's code editor (sql-editor.js): a field's frame, as tall as its
+   query between 8 lines and most of the screen, and taller by dragging. */
+div.ff-sql { display:flex; flex-direction:column; box-sizing:border-box; min-height:9em; max-height:70vh;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg); overflow:hidden; resize:vertical; }
+div.ff-sql:focus-within { border-color:var(--accent); }
+div.ff-sql .cm-editor { flex:1; min-height:0; font-size:12.5px; }
+div.ff-sql .cm-scroller { overflow:auto; }
+dialog div.ff-sql { max-height:40vh; }
+dialog textarea[hidden] { display:none; }    /* under its code editor: still what the form posts */
 .ds-from-query { display:inline-flex; vertical-align:-2px; margin-right:4px; }
 .ds-from-query svg { width:13px; height:13px; }

@@ -22,6 +22,7 @@ from fireflyer.connections import (
 from fireflyer.datasets import DatasetError, DatasetStore
 from fireflyer.storage import LocalObjectStore
 from fireflyer.web import app as app_mod
+from fireflyer.web import usage as usage_mod
 from fireflyer.web.portal import render_connections, render_datasets
 from fireflyer.web.usage import DASHBOARD, DATASETS
 
@@ -94,9 +95,9 @@ def test_names_are_unique_and_urls_must_read(store, db):
         store.create("other", "nonsense")
 
 
-def test_none_is_built_in_and_the_own_database_gets_dataset_versions(monkeypatch):
+def test_a_connection_to_the_own_database_gets_dataset_versions(monkeypatch):
     store = ConnectionStore(":memory:", b"s", own_url="postgresql://ff:pw@postgres:5432/ff")
-    assert store.list() == []                                             # nothing built in
+    assert store.list() == []
     store.create("internal", "postgresql://ff:pw@postgres:5432/ff")
     store.create("copy", "postgresql+psycopg://reader@POSTGRES/ff")      # the same database, another way
     store.create("sales", "postgresql://ff@postgres:5432/sales")          # another database there
@@ -138,9 +139,10 @@ def test_two_columns_of_one_name_are_refused(db):
         read(db, "select id, id from people")
 
 
-def test_a_query_cant_change_the_database(db):
-    with pytest.raises(ConnectionsError, match="readonly|read-only|query_only"):
-        read(db, "delete from people")
+def test_a_query_is_never_committed(db):
+    with pytest.raises(ConnectionsError, match="does not return rows"):
+        read(db, "delete from people")                  # no rows to read, and rolled back
+    assert read(db, "delete from people returning id").height == 2
     assert read(db, "select count(*) as n from people")["n"].item() == 2
 
 
@@ -289,6 +291,9 @@ def test_the_datasets_list_offers_a_query_dataset_to_whoever_may_connect():
     assert html.count('title="New dataset"') == 1                          # one +, a CSV | SQL switch
     assert 'data-kind="sql"' in html and '<option value="internal">' in html
     assert 'data-sql="/datasets/local/new-query"' in html
+    # The query is a code editor: the textarea stays, as what the form posts.
+    assert "data-sql-editor" in html and "sql-editor.js" in html and '"fireflyer/sql-editor"' in html
+    assert "sql-editor.js" not in render_datasets([])
 
 
 # --- routes -----------------------------------------------------------------------
@@ -392,6 +397,13 @@ def test_the_usage_dashboard_is_valid_and_reads_the_usage_datasets():
 
     read_by_charts = {c["dataset"] for c in yaml.safe_load(DASHBOARD)["charts"].values()}
     assert read_by_charts <= set(DATASETS)
+
+
+def test_the_usage_connection_names_its_driver():
+    # A connection's URL goes to SQLAlchemy as written; the portal's DSN gets
+    # the driver it has.
+    assert usage_mod.connection_url("postgresql://ff:pw@postgres:5432/ff") == \
+        "postgresql+psycopg://ff:pw@postgres:5432/ff"
 
 
 def test_the_usage_errors_say_why():

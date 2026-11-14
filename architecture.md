@@ -1740,7 +1740,8 @@ name are left for when an integration needs them.
 
 A dataset's data can come from a **database**, as well as from an uploaded
 file. A **connection** is a database with a name: a SQLAlchemy URL
-(`postgresql://reader@db:5432/sales`), a description and a password. A
+(`postgresql+psycopg://reader@db:5432/sales`, as SQLAlchemy reads it: the
+driver is part of the URL, and Fireflyer changes nothing in it), a description and a password. A
 dataset names its connection **by name only**, as a permission names a role.
 
 **The connection store** (`fireflyer/connections.py`, `ConnectionStore`) keeps
@@ -1754,9 +1755,9 @@ in a typed URL moves into `secret`. An empty password field keeps the
 password. If `FIREFLYER_SECRET` changes, the passwords cannot be read: set them
 again.
 
-**No connection is built in.** Each one is a row: an admin can change or
-remove it. At setup the portal adds one connection, `internal`, to its own
-database (`DATABASE_URL`), for usage analytics (below).
+At setup the portal adds one connection, `internal`, to its own database
+(`DATABASE_URL`, with the driver it has: `postgresql+psycopg://`), for usage
+analytics (below).
 
 **Fireflyer's own database.** A connection to the portal's own database has
 one more table than the database: `dataset_versions` (`group_name, dataset,
@@ -1811,6 +1812,12 @@ columns:
   the connection names (`render_dataset_detail(sources=)`); without them (not
   an admin) the SQL is read-only. `/mapping/check` also returns the source, so
   the form follows an edit in code mode.
+- **The SQL field is a code editor** (`web/static/sql-editor.js`, CodeMirror):
+  plain text with line numbers, Tab and Shift-Tab indent, undo, the current
+  line lit and brackets matched. It has no SQL grammar: the database checks
+  the query. Edit mode makes one with `sqlEditor()`. In the new-dataset dialog
+  it sits over the `<textarea data-sql-editor>`, which stays hidden as the
+  field the form posts; an empty query stops the submit there.
 - **A changed `source:`** in a saved mapping runs the new query: its result is
   the next major (`/datasets/{group}/{ds}/mapping`). The check route
   (`/mapping/check`) asks the database for the columns (`limit 0`).
@@ -1827,9 +1834,10 @@ columns:
   driver gives it (`(line 2)`). A failed refresh keeps the data and shows the
   error on the dataset page. The one check of Fireflyer's own: two result
   columns with the same name.
-- **Read-only.** A query runs in a read-only transaction (Postgres `SET
-  TRANSACTION READ ONLY`, sqlite `query_only`). There are no limits on rows or
-  time.
+- **No commit.** Fireflyer knows no SQL dialect: SQLAlchemy runs the query and
+  never commits it, so a change that the query makes is rolled back when the
+  connection closes. To stop a query at the database, give the connection a
+  read-only user. There are no limits on rows or time.
 
 The history marks a major from a query with a database icon. A refresh is
 manual only: there is no schedule.

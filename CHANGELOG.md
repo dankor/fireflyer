@@ -16,12 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists the databases by name, with a SQLAlchemy URL and a password. The
   password is encrypted with `FIREFLYER_SECRET` and is never shown again. Edit
   a connection with fields or as YAML, and test it with the plug button: it
-  shows a check, or a cross and the error of the database. No connection is
-  built in: an admin can change or remove each one.
+  shows a check, or a cross and the error of the database.
 - **Datasets from a query.** The datasets list's **+** has a **CSV | SQL**
   switch: select SQL to make a dataset from a query. The query is in the
   dataset's YAML (`source:` names the connection), so compare and restore
   cover it. Edit mode shows the connection and the SQL in a box under the columns.
+  The SQL is a code editor: line numbers, Tab indent and undo.
   **Refresh** (↻) runs it again into the next version. Fireflyer finds the
   column types from the result. The database checks the SQL: its error, with
   the line, is what you see.
