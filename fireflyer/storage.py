@@ -7,6 +7,10 @@ columns/row-groups a chart needs are fetched, not the whole file.
 `LocalObjectStore` has no dependencies and powers local mode, dev, and the whole
 test suite. `S3ObjectStore` imports `boto3` lazily (the `.[portal]` extra) and is
 only exercised at portal runtime, so the core install stays dependency-free.
+
+A store may also have `check()` — the readiness probe's question, "can you be
+reached?", raising when not. It isn't part of the protocol: a store without it
+is taken as ready (`check(store)`).
 """
 
 from __future__ import annotations
@@ -79,6 +83,10 @@ class LocalObjectStore:
         # A plain path; Polars scans it directly (no storage options).
         return str(self._path(key)), None
 
+    def check(self) -> None:
+        if not self._base.is_dir():
+            raise OSError("the dataset folder is missing")
+
 
 class S3ObjectStore:
     """S3-compatible object storage (Garage/S3). Runtime only — imports boto3
@@ -94,19 +102,24 @@ class S3ObjectStore:
         region: str = "garage",
     ):
         import boto3  # optional dependency (.[portal])
+        from botocore.config import Config
 
         self._bucket = bucket
         self._region = region
         self._endpoint = endpoint_url
         self._access_key = access_key
         self._secret_key = secret_key
-        self._client = boto3.client(
-            "s3",
-            endpoint_url=endpoint_url,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            region_name=region,
-        )
+        account = dict(endpoint_url=endpoint_url, aws_access_key_id=access_key,
+                       aws_secret_access_key=secret_key, region_name=region)
+        # Path-style, as Polars reads (`source`): an S3-compatible store such as
+        # Garage or one behind a mesh has no per-bucket host names.
+        path_style = {"addressing_style": "path"}
+        self._client = boto3.client("s3", **account, config=Config(s3=path_style))
+        # The readiness probe's own client: an answer within a second, one try —
+        # not the minutes boto3's defaults would wait while the probe times out.
+        self._probe = boto3.client("s3", **account, config=Config(
+            s3=path_style, connect_timeout=1, read_timeout=1, retries={"total_max_attempts": 1},
+        ))
         # No network I/O here — constructing the store must not crash app
         # startup if the object store isn't reachable yet. The bucket is created
         # out of band (Garage: `garage bucket create`; S3: pre-provisioned);
@@ -145,9 +158,16 @@ class S3ObjectStore:
             token = resp.get("NextContinuationToken")
         return sorted(keys)
 
+    def check(self) -> None:
+        """The bucket answers, to this store's key — its own bucket only."""
+        self._probe.head_bucket(Bucket=self._bucket)
+
     def source(self, key: str) -> tuple[str, dict | None]:
-        # Polars (object_store) range-scans this over HTTP. Garage needs
-        # path-style addressing, so virtual-hosted is disabled.
+        # Polars (object_store) range-scans this. Path-style, as boto3 writes
+        # it. Plain HTTP is allowed in so many words — only when the endpoint
+        # itself is http:// (a store inside the cluster, behind its mesh), so an
+        # https:// one keeps its TLS checks. (Polars 2.1 reads an http://
+        # endpoint without it; object_store's own default is to refuse.)
         opts = {
             "aws_access_key_id": self._access_key,
             "aws_secret_access_key": self._secret_key,
@@ -155,6 +175,8 @@ class S3ObjectStore:
             "aws_endpoint_url": self._endpoint,
             "aws_virtual_hosted_style_request": "false",
         }
+        if self._endpoint.lower().startswith("http://"):
+            opts["aws_allow_http"] = "true"
         return f"s3://{self._bucket}/{key}", opts
 
 
@@ -187,6 +209,16 @@ class PrefixedStore:
 
     def source(self, key: str) -> tuple[str, dict | None]:
         return self._store.source(self._prefix + key)
+
+    def check(self) -> None:
+        check(self._store)
+
+
+def check(store: ObjectStore) -> None:
+    """`store` can be reached — raises when not; a store with no `check` is
+    taken as ready."""
+    if (probe := getattr(store, "check", None)) is not None:
+        probe()
 
 
 def move_keys(store: ObjectStore, old: str, new: str) -> None:

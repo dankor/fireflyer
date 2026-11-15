@@ -38,8 +38,8 @@ _COOKIE = "ff_session"
 
 # --- session cookie (auth-method-agnostic) ----------------------------------
 # The identity is stored in a cookie signed with an HMAC so it can't be forged
-# without the secret. Set FIREFLYER_SECRET in any real deployment; the dev
-# default is fine for local admin/admin use.
+# without the secret. Portal mode — the only one with a login — won't start
+# without FIREFLYER_SECRET (`check_portal_env`); the default here is for tests.
 
 
 def _secret() -> bytes:
@@ -217,6 +217,20 @@ def admin_name() -> str:
 
 def default_authenticator() -> PasswordAuthenticator:
     return PasswordAuthenticator(admin_name(), os.environ.get("FIREFLYER_PASSWORD", "admin"))
+
+
+# A portal is reachable by others, so it doesn't start on the defaults anyone
+# knows — admin/admin, and a session secret printed above. Setting a variable,
+# even to `admin`, is a choice someone made (the local compose does).
+_PORTAL_SETTINGS = ("FIREFLYER_PASSWORD", "FIREFLYER_SECRET")
+
+
+def check_portal_env(env=os.environ) -> None:
+    """Portal mode stops here (SystemExit, naming them) unless the admin's
+    password and the session secret are set."""
+    missing = [name for name in _PORTAL_SETTINGS if not env.get(name)]
+    if missing:
+        raise SystemExit(f"portal mode needs {' and '.join(missing)} set: the defaults are public")
 
 
 # --- rendered chrome --------------------------------------------------------

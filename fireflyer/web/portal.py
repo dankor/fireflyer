@@ -32,6 +32,7 @@ import yaml
 from fireflyer import column_map
 from fireflyer import connections as connections_mod
 from fireflyer import filters as filters_mod
+from fireflyer import pg
 from fireflyer import groups
 from fireflyer.dashboard import Dashboard, DashboardError
 from fireflyer.datasets import Dataset, Version
@@ -337,9 +338,7 @@ class RoleStore:
     def __init__(self, dsn: str, admin: str = ""):
         self._pg = is_postgres(dsn)
         if self._pg:
-            import psycopg
-
-            self._conn = psycopg.connect(dsn, autocommit=True)
+            self._conn = pg.connect(dsn)
         else:
             if dsn != ":memory:":
                 Path(dsn).parent.mkdir(parents=True, exist_ok=True)
@@ -691,9 +690,7 @@ class SqlStore:
             return
         self._pg = is_postgres(dsn)
         if self._pg:
-            import psycopg  # optional dependency, only needed at portal runtime
-
-            self._conn = psycopg.connect(dsn, autocommit=True)
+            self._conn = pg.connect(dsn)
         else:
             # check_same_thread=False: uvicorn serves requests off a threadpool.
             self._conn = sqlite3.connect(dsn, check_same_thread=False)
@@ -997,9 +994,7 @@ class ActivityLog:
     def __init__(self, dsn: str, keep_days: int = 365):
         self._pg = is_postgres(dsn)
         if self._pg:
-            import psycopg
-
-            self._conn = psycopg.connect(dsn, autocommit=True)
+            self._conn = pg.connect(dsn)
         else:
             if dsn != ":memory:":
                 Path(dsn).parent.mkdir(parents=True, exist_ok=True)

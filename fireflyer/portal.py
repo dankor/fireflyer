@@ -5,7 +5,9 @@ Portal mode stores dashboards in a database and lists them in a gallery (see
 config from `portal.yaml` (title, database url, tls), lets the environment
 override it (`DATABASE_URL`, `FIREFLYER_PORTAL_TITLE`, `FIREFLYER_TLS*`), flips
 `FIREFLYER_PORTAL` on, and serves on 0.0.0.0 for containers — over **HTTPS**
-unless told otherwise (see `tls_settings`). The plain `python -m fireflyer.web`
+unless told otherwise (see `tls_settings`), as one process (`FIREFLYER_RELOAD`
+for a reloader in development). It stops at once without Postgres, the admin's
+password or the session secret. The plain `python -m fireflyer.web`
 entrypoint stays on 127.0.0.1 in single-dashboard mode, over plain HTTP.
 """
 
@@ -17,6 +19,7 @@ from pathlib import Path
 import uvicorn
 import yaml
 
+from fireflyer.web.auth import check_portal_env
 from fireflyer.web.portal import database_url
 
 # The names a made-up local certificate covers, unless `tls.hosts` says more.
@@ -133,6 +136,7 @@ def main() -> None:
     if cfg.get("database_url") and "DATABASE_URL" not in os.environ:
         os.environ["DATABASE_URL"] = cfg["database_url"]
     database_url()                    # Postgres, or stop here and say so
+    check_portal_env()                # the admin's password and the session secret, set
 
     tls = tls_settings(cfg, os.environ)
     # HSTS only with a team's own certificate: telling a browser to insist on
@@ -143,12 +147,16 @@ def main() -> None:
     scheme = "http" if tls["mode"] == "off" else "https"
     print(f"Fireflyer portal on {scheme}://127.0.0.1:{port} (tls: {tls['mode']})", flush=True)
 
+    # One process, no reloader: what a deployment runs. FIREFLYER_RELOAD=1 for
+    # development (the local compose sets it) restarts on a code change.
+    reload = os.environ.get("FIREFLYER_RELOAD", "").lower() in {"1", "true", "yes", "on"}
+
     uvicorn.run(
         "fireflyer.web.app:app",
         host="0.0.0.0",
         port=port,
-        reload=True,
-        reload_includes=["*.py", "*.css", "*.html"],
+        reload=reload,
+        reload_includes=["*.py", "*.css", "*.html"] if reload else None,
         ssl_certfile=tls.get("cert"),
         ssl_keyfile=tls.get("key"),
         # Behind a proxy that does TLS: trust its X-Forwarded-Proto / -For from

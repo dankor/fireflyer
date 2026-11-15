@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-15
+
+### Added
+
+- **Health probes.** `/healthz` answers while the process runs. `/ready`
+  answers 200 when the portal's database and its dataset storage answer within
+  3 seconds, else 503. Both answer without a login. The answer does not tell
+  why a check failed.
+- **A deployment image.** `docker build .` makes the `portal` image: the
+  portal and its drivers, no test tools, a user that is not root, and
+  `python -m fireflyer.portal` as its command. Docker Compose builds the `dev`
+  image.
+- **[Deploy the portal](docs/deployment.md)**: the settings, the database, the
+  storage, the probes and an example for Kubernetes.
+
+### Changed
+
+- **The portal is one process with no reloader.** Set `FIREFLYER_RELOAD=1` for
+  development. Docker Compose sets it.
+- **The portal does not start without `FIREFLYER_PASSWORD` and
+  `FIREFLYER_SECRET`.** Their defaults are public. Docker Compose sets both.
+- **The portal connects to its database again by itself.** Before, a database
+  restart broke every request until the portal restarted.
+- **S3 storage uses path-style addresses** for uploads too, as the reads
+  always did. An `http://` endpoint is read over plain HTTP. An `https://`
+  endpoint keeps its TLS checks.
+
+### Removed
+
+- **`cryptography` as a core dependency.** Only the portal's HTTPS certificate
+  uses it, and the `portal` extra installs it. The `test` extra now names
+  `httpx`, which the route tests use.
+
 ## [0.29.0] - 2026-11-15
 
 ### Changed
@@ -1519,7 +1552,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/dankor/fireflyer/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/dankor/fireflyer/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/dankor/fireflyer/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/dankor/fireflyer/compare/v0.26.0...v0.27.0
