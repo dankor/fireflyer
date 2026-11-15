@@ -49,6 +49,8 @@ from pathlib import Path
 
 import polars as pl
 
+from fireflyer import pg
+
 # The table a connection to Fireflyer's own database adds, parsed from the
 # datasets' documents.
 DATASET_VERSIONS = "dataset_versions"
@@ -106,9 +108,7 @@ class ConnectionStore:
         self._own_url = own_url
         self._pg = dsn.startswith(("postgres://", "postgresql://"))
         if self._pg:
-            import psycopg
-
-            self._conn = psycopg.connect(dsn, autocommit=True)
+            self._conn = pg.connect(dsn)
         else:
             if dsn != ":memory:":
                 Path(dsn).parent.mkdir(parents=True, exist_ok=True)

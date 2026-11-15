@@ -7,6 +7,7 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="docs/use-cases.md">Use cases</a> ·
+  <a href="docs/deployment.md">Deploy</a> ·
   <a href="architecture.md">Spec</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>

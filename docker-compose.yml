@@ -1,6 +1,8 @@
 services:
   fireflyer:
-    build: .
+    build:
+      context: .
+      target: dev        # the test tools too (see the Dockerfile)
     # Loads ANTHROPIC_API_KEY (and anything else) for the AI assistant.
     # No-op if .env is absent — the assistant just stays disabled.
     env_file:
@@ -76,7 +78,9 @@ services:
       - garage-data:/var/lib/garage/data
 
   portal:
-    build: .
+    build:
+      context: .
+      target: dev        # the test tools too (see the Dockerfile)
     profiles: ["portal"]
     depends_on:
       - postgres
@@ -85,13 +89,16 @@ services:
         required: false
     environment:
       FIREFLYER_PORTAL: "1"
+      # Development: restart on a code change. A deployment leaves it unset.
+      FIREFLYER_RELOAD: "1"
       DATABASE_URL: postgresql://fireflyer@postgres:5432/fireflyer
       # The portal's password — and what a connection naming PGPASSWORD (the
       # usage analytics' `internal`) gets. Others a connection may name are
       # listed in FIREFLYER_CONNECTION_PASSWORDS (comma-separated).
       PGPASSWORD: fireflyer
-      # Login defaults to admin/admin. Override user/pass and set a real session
-      # secret for anything beyond local use (FIREFLYER_USER/PASSWORD/SECRET).
+      # The login (admin/admin here) and the session secret. The portal won't
+      # start with either unset — set your own for anything beyond local use.
+      FIREFLYER_PASSWORD: admin
       FIREFLYER_SECRET: dev-portal-secret-change-me
       # Datasets: by default stored in a persistent folder (works out of the box).
       FIREFLYER_DATA: /data/datasets

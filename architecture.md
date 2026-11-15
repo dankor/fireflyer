@@ -1245,6 +1245,50 @@ variable; the `python -m fireflyer.portal` entrypoint sets it, reads runtime
 config from `portal.yaml` (title, database url, tls; the environment overrides
 the file), and binds `0.0.0.0` for containers. With it on, `/` becomes the gallery.
 
+The entrypoint runs **one process with no reloader**, as a deployment needs.
+`FIREFLYER_RELOAD=1` adds the reloader for development (Docker Compose sets
+it). The portal **does not start** if `FIREFLYER_PASSWORD` or
+`FIREFLYER_SECRET` is not set (`auth.check_portal_env`, at the entrypoint and
+when the app loads): their defaults are public. A set value is a choice, even
+`admin`. [Deploy the portal](docs/deployment.md) tells how to run it for a
+team.
+
+**The image.** The `Dockerfile` has two stages. `portal`, the default, is what
+a deployment runs: `.[portal]` only, user `10001`, `python -m fireflyer.portal`.
+`dev`, which Docker Compose builds, adds the test tools. Both install the
+package editable, because the app reads its starter dashboard from `demo/`
+beside the package.
+
+### Health probes
+
+Both are open without a session (`app._OPEN`), because a platform asks them
+with no cookie, and a redirect to `/login` would look like an answer.
+
+- **`/healthz`** answers `{"status": "ok"}` while the process answers. It asks
+  nothing else, so a database outage never makes the platform restart the pod.
+- **`/ready`** answers 200 when the backends answer within `_READY_SECONDS`
+  (3), else 503 `{"status": "unavailable"}`, with no reason: an error can hold
+  a host or a credential. It asks the portal's database through a **new**
+  connection (`pg.check`: `select 1`, a 2-second connect timeout and statement
+  timeout), not the stores' connections, so it never waits behind their work.
+  It asks the dataset storage through `DatasetStore.check` →
+  `storage.check(store)`: a local folder exists, or a `HeadBucket` on the
+  store's own bucket through a second boto3 client with 1-second timeouts and
+  one try. `check` is not part of the `ObjectStore` protocol: a store without
+  it is taken as ready. The checks run on the probes' own two threads
+  (`_PROBE_THREADS`). Each check has its own timeouts, so a check that the
+  deadline leaves behind ends soon after, and slow backends cannot add threads.
+
+### The database connection
+
+Each portal store keeps one Postgres connection (`fireflyer/pg.py`,
+`pg.connect`). If the connection breaks (a database restart or failover, or a
+proxy that closes it), `pg.Connection` opens a new one before the next
+statement. A statement that finds the connection broken runs once more on the
+new one. The statements run in autocommit, so a statement that failed on a
+broken connection did not commit. An error of the database itself (bad SQL)
+is not tried again.
+
 ### HTTPS
 
 The portal serves **HTTPS by default** — it has logins and passwords — in one of

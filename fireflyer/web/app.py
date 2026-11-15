@@ -1,3 +1,5 @@
+import asyncio
+import concurrent.futures
 import dataclasses
 import hmac
 import json
@@ -28,6 +30,7 @@ from fireflyer import calcs_edit
 from fireflyer import column_map
 from fireflyer import connections as connections_mod
 from fireflyer import groups
+from fireflyer import pg
 from fireflyer.scan import NoAccess
 from fireflyer.datasets import DatasetError, DatasetStore, SqlCatalog, fit_name
 from fireflyer.params import filter_fields as builder_fields, parse_filters
@@ -65,6 +68,8 @@ CHAT_ENABLED = bool(os.environ.get("ANTHROPIC_API_KEY"))
 # single-dashboard editor. Tests set `app.state.store` directly.
 PORTAL_ENABLED = bool(os.environ.get("FIREFLYER_PORTAL"))
 PORTAL_TITLE = os.environ.get("FIREFLYER_PORTAL_TITLE", "Fireflyer Portal")
+if PORTAL_ENABLED:
+    auth_mod.check_portal_env()
 # libpq would give PGPASSWORD to any Postgres server a connection names, so it
 # leaves the environment here, before anything connects; the portal's own
 # stores get it in their URL (`connections.take_libpq_password`).
@@ -129,7 +134,7 @@ async def _require_login(request: Request, call_next):
     auth = app.state.authenticator
     if (
         auth is not None
-        and request.url.path != "/login"
+        and request.url.path not in _OPEN
         and not request.url.path.startswith(("/static/", "/auth/"))
         and not _session_valid(auth_mod.session(request))
     ):
@@ -137,6 +142,46 @@ async def _require_login(request: Request, call_next):
         auth_mod.clear_session(resp)
         return resp
     return await call_next(request)
+
+
+# Answered without a session: the login page, and the probes — a platform asks
+# them with no cookie, and a redirect to /login would look like an answer.
+_OPEN = {"/login", "/healthz", "/ready"}
+
+
+# --- health probes ---------------------------------------------------------------
+# `/healthz`: the process answers (liveness) — nothing else asked, so a database
+# outage never gets the pod restarted. `/ready`: the portal's database (a new
+# connection, `pg.check`) and the dataset store (`DatasetStore.check`: a local
+# folder, or a HEAD on its own bucket) answer within `_READY_SECONDS` — else 503
+# and the platform stops sending it requests. The work runs on the probes' own
+# two threads, each check bounded by its own timeouts: one left behind by the
+# deadline ends soon after, and slow backends can't pile up threads — a probe
+# that finds both busy waits its deadline out and answers 503. The answer never
+# says why: errors may hold hosts or credentials.
+_READY_SECONDS = 3
+_PROBE_THREADS = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ready")
+
+
+@app.get("/healthz")
+async def healthz() -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
+def _check_backends() -> None:
+    if _DATABASE_URL:
+        pg.check(_DATABASE_URL)
+    app.state.datasets.check()
+
+
+@app.get("/ready")
+async def ready() -> JSONResponse:
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.wait_for(loop.run_in_executor(_PROBE_THREADS, _check_backends), _READY_SECONDS)
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
+    return JSONResponse({"status": "ok"})
 
 
 @app.middleware("http")

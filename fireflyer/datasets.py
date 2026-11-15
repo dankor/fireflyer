@@ -59,7 +59,9 @@ import yaml
 
 from fireflyer import column_map
 from fireflyer import filters as filters_mod
+from fireflyer import pg
 from fireflyer import groups
+from fireflyer import storage
 from fireflyer.storage import ObjectStore, PrefixedStore, move_keys
 
 
@@ -205,9 +207,7 @@ class SqlCatalog:
             return
         self._pg = dsn.startswith(("postgres://", "postgresql://"))
         if self._pg:
-            import psycopg
-
-            self._conn = psycopg.connect(dsn, autocommit=True)
+            self._conn = pg.connect(dsn)
         else:
             if dsn != ":memory:":
                 Path(dsn).parent.mkdir(parents=True, exist_ok=True)
@@ -288,6 +288,11 @@ class DatasetStore:
         self._groups: dict[str, DatasetStore] = {}
         if migrate:
             self._migrate_unversioned()
+
+    def check(self) -> None:
+        """The object store can be reached (the readiness probe) — no dataset
+        read, listed or written."""
+        storage.check(self._store)
 
     # --- groups: each a store of its own, in a folder of this one --------------
 
