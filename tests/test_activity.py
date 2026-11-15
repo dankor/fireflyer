@@ -151,7 +151,8 @@ def test_logins_and_logouts_are_logged_a_failed_one_as_401(portal, log):
     portal.post("/logout")
     rows = _rows(log, "login") + _rows(log, "logout")
     assert [(r.actor, r.status_code) for r in rows] == [("admin", 303), ("eve", 401), ("admin", 303)]
-    assert rows[0].detail == {"source": "local"} and rows[1].detail == {}   # never the password
+    assert rows[0].detail == {"source": "local"}                          # never the password
+    assert rows[1].detail == {"error": "Invalid username or password"}
     assert rows[0].user_agent == "testclient"
 
 
@@ -246,6 +247,16 @@ def test_a_refusal_is_logged_with_its_code(portal, log, monkeypatch):
     assert portal.post("/users/new", data={"name": "bob"}).status_code == 403
     assert portal.post("/access/new", data={"name": "viewer"}).status_code == 403
     assert [(r.object_type, r.status_code) for r in _rows(log)] == [("user", 403), ("role", 403)]
+    assert _rows(log)[1].detail["error"] == "Only an admin manages roles"   # why, from the answer
+
+
+def test_a_failed_action_says_why_from_its_answer_but_never_a_page(portal, log):
+    portal.post("/d/_admin/new", data={"name": "Sales"})
+    taken = portal.post("/d/_admin/new", data={"name": "Sales"})
+    assert taken.status_code == 400 and taken.text                # the answer still goes out
+    assert _rows(log)[1].detail["error"] == "a dashboard named 'Sales' already exists"
+    assert app_mod._answer_text(b"<html><body>Not found</body></html>", "text/html") == ""
+    assert app_mod._answer_text(b'{"ok": false, "error": "bad"}', "application/json") == "bad"
 
 
 def test_dataset_actions_are_logged_a_guarded_delete_as_409(portal, log):

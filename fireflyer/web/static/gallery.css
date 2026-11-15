@@ -14,7 +14,7 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
   font-family:-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
 .topbar { height:54px; display:flex; align-items:center; padding:0 16px;
   background:var(--panel); border-bottom:1px solid var(--border); }
-.gallery { max-width:960px; margin:0 auto; padding:28px 20px; }
+.gallery { max-width:1200px; margin:0 auto; padding:28px 20px; }
 /* Right-side topbar group: the detail action group + profile. */
 .topbar-right { margin-left:auto; display:inline-flex; align-items:center; gap:14px; }
 .detail-actions { display:inline-flex; gap:4px; }   /* icons close together */
@@ -76,6 +76,15 @@ table.dash-table { width:100%; border-collapse:separate; border-spacing:0; backg
 .dash-table .sub { display:block; max-width:420px; margin-top:2px; font-size:12px; color:var(--muted);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dash-table td.muted { color:var(--muted); }
+/* A list's columns as wide as their values, on one line; the name takes the
+   rest, its description cut to fit (`width:0` keeps it from widening it). */
+.ff-list th, .ff-list td { padding:11px 12px; }
+.ff-list thead th:first-child { width:100%; }
+.ff-list td.muted { white-space:nowrap; }
+.ff-list .sub { width:0; min-width:100%; max-width:none; }
+.ff-list td:first-child { min-width:150px; }
+.ff-list td.ff-wrap { min-width:240px; white-space:normal; overflow-wrap:anywhere; }   /* a long URL */
+@media (max-width:1100px) { .ff-list th, .ff-list td { padding:10px 8px; } }
 td.actions { text-align:right; white-space:nowrap; }
 /* The list's + heads the actions column: right-aligned over them, and trimmed
    so the header row keeps its height. */
@@ -166,7 +175,7 @@ dialog textarea { resize:vertical; min-height:52px; }
 .ds-major + .ds-major .ds-major-delete { top:calc(50% + 2px); }
 .ds-major-delete .act { width:26px; height:26px; }
 .ds-major:has(.ds-major-delete) .ds-ver { width:calc(100% - 34px); }
-.ds-ver { display:flex; width:100%; gap:12px; align-items:baseline; padding:5px 8px; border:0;
+.ds-ver { display:flex; width:100%; gap:12px; align-items:baseline; white-space:nowrap; padding:5px 8px; border:0;
   border-radius:4px; background:none; color:var(--text); font:inherit; font-size:12.5px;
   text-align:left; cursor:pointer; }
 .ds-ver:hover { background:color-mix(in srgb, var(--accent) 14%, transparent); }
@@ -265,7 +274,21 @@ a.ref:hover { border-color:var(--accent); color:var(--accent); }
 .col-drop, .col-add { border:1px solid var(--border); border-radius:4px; background:none;
   color:var(--muted); cursor:pointer; font-size:12px; line-height:1; padding:5px 8px; }
 .col-drop:hover, .col-add:hover { color:var(--text); border-color:var(--muted); }
-.col-add-row { padding:8px 12px; border-top:1px solid var(--border); }
+/* Edit mode: the columns and a query's SQL are two boxes, not one. */
+.ds-columns[data-mode="edit"] { border:0; background:none; overflow:visible; }
+.ds-box { border:1px solid var(--border); border-radius:8px; background:var(--panel); overflow:hidden; }
+.ds-box + .ds-box { margin-top:12px; }
+/* The ＋ heads the actions column, right-aligned over the ✕ (as on the list pages). */
+.ds-columns[data-mode="edit"] .ds-cols th:last-child { text-align:right; padding-top:4px; padding-bottom:4px; }
+.col-head-actions { display:inline-flex; align-items:center; gap:6px; }
+/* The uploads to keep: a clock and the number, a field while it's changed. */
+.col-keep { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border); border-radius:4px;
+  background:none; color:var(--muted); cursor:pointer; padding:3px 7px; font:12px ui-monospace, Menlo, monospace; }
+.col-keep:hover { color:var(--text); border-color:var(--muted); }
+.col-keep svg { width:13px; height:13px; display:block; }
+.ds-cols th input.col-keep-field { width:4.5em; box-sizing:border-box; margin:0; padding:3px 6px;
+  border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); outline:0;
+  font:12px ui-monospace, Menlo, monospace; }
 /* The name as wide as its field, the formula everything else, the ✕ its own. */
 .ds-columns[data-mode="edit"] .ds-cols td:first-child { width:1%; white-space:nowrap; }
 .ds-columns[data-mode="edit"] .ds-cols td:first-child input { width:240px; min-width:0; margin-left:6px; }
@@ -400,3 +423,46 @@ a.ref:hover { border-color:var(--accent); color:var(--accent); }
   background:var(--bg); color:var(--text); font:inherit; font-size:13px; outline:0; }
 .ds-access-new input:focus { border-color:var(--accent); }
 th.ds-role-cell { padding-top:6px !important; padding-bottom:6px !important; }
+
+/* Connections: the dialog's fields | YAML switch beside its heading, SQL and
+   YAML in a monospace field, a test's answer on its plug. */
+.conn-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+.conn-head h3 { margin:0; }
+.conn-fields[hidden], .conn-yaml[hidden] { display:none; }
+dialog textarea.ff-sql { font:12.5px/1.5 ui-monospace, Menlo, monospace; white-space:pre; tab-size:2; }
+/* A connection's test: its state is its icon. */
+.conn-test > span { display:none; }
+.conn-test .t-idle { display:block; }
+.conn-test.is-busy .t-idle, .conn-test.is-ok .t-idle, .conn-test.is-fail .t-idle { display:none; }
+.conn-test.is-busy .t-busy, .conn-test.is-ok .t-ok, .conn-test.is-fail .t-fail { display:block; }
+.conn-test .t-busy { width:13px; height:13px; }
+.conn-test.is-ok, .conn-test.is-ok:hover { color:var(--accent); border-color:var(--accent);
+  background:color-mix(in srgb, var(--accent) 15%, transparent); }
+.conn-test.is-fail, .conn-test.is-fail:hover { color:var(--danger); border-color:var(--danger);
+  background:color-mix(in srgb, var(--danger) 15%, transparent); }
+.conn-error { margin-top:4px; color:var(--danger); font-family:inherit; white-space:normal; }
+.conn-error[hidden] { display:none; }
+/* A new dataset: CSV | SQL, the fields of one. */
+.ds-kinds button { width:auto; padding:0 10px; font-size:12px; font-weight:600; }
+.ds-kind[hidden] { display:none; }
+/* A query dataset's SQL, a box under its columns in edit mode: the connection,
+   then the query — fields as the dialogs have them. */
+.ds-sql { padding:12px; }
+.ds-sql-head { display:flex; align-items:center; gap:8px; margin-bottom:8px; color:var(--muted); }
+.ds-sql-head svg { width:15px; height:15px; display:block; }
+.ds-sql select { box-sizing:border-box; margin:0; padding:6px 10px; border:1px solid var(--border);
+  border-radius:4px; background:var(--bg); color:var(--text); font-size:13px; font-family:inherit; outline:0; }
+.ds-sql select:focus { border-color:var(--accent); }
+.ds-sql select { width:auto; min-width:180px; }
+.ds-sql select:disabled { color:var(--muted); }
+/* A SQL field's code editor (sql-editor.js): a field's frame, as tall as its
+   query between 8 lines and most of the screen, and taller by dragging. */
+div.ff-sql { display:flex; flex-direction:column; box-sizing:border-box; min-height:9em; max-height:70vh;
+  border:1px solid var(--border); border-radius:4px; background:var(--bg); overflow:hidden; resize:vertical; }
+div.ff-sql:focus-within { border-color:var(--accent); }
+div.ff-sql .cm-editor { flex:1; min-height:0; font-size:12.5px; }
+div.ff-sql .cm-scroller { overflow:auto; }
+dialog div.ff-sql { max-height:40vh; }
+dialog textarea[hidden] { display:none; }    /* under its code editor: still what the form posts */
+.ds-from-query { display:inline-flex; vertical-align:-2px; margin-right:4px; }
+.ds-from-query svg { width:13px; height:13px; }

@@ -4,9 +4,10 @@ uploaded ones.
 An upload is read with every column as text — a CSV says nothing about types,
 and guessing quietly turns `007` into `7`. The mapping then lists the columns
 the dataset has, each with a formula over the uploaded columns, in the calc
-grammar (`+ - * /`, `str2dt()`, `to_number()`, `to_list()`). A column's type is
-whatever its formula gives: text as uploaded, a number from `to_number()`, a
-date from `str2dt()`, a list of text from `to_list()`. It's YAML, edited in a
+grammar (`+ - * /`, `str2dt()`, `to_number()`, `to_bool()`, `to_list()`). A
+column's type is whatever its formula gives: text as uploaded, a number from
+`to_number()`, a date from `str2dt()`, yes / no from `to_bool()`, a list of
+text from `to_list()`. It's YAML, edited in a
 form or by hand:
 
     columns:
@@ -38,6 +39,23 @@ restored like the columns.
         - {column: order_status, op: in, values: [paid]}
       admin: full
 
+`source:` — on a dataset whose data comes from a database — names the
+connection (by name; its address and password live in the connection manager)
+and the SQL. Each refresh runs it into the next upload. Part of the mapping, so
+a changed query is versioned, compared and restored like the rest.
+
+    source:
+      connection: internal
+      query: |-
+        select actor, action from activity
+
+`history:` is how many uploads before the one in use the dataset keeps — 0
+(the default, left out) keeps only the one in use. When a version on a new
+upload is built, the older uploads past that count are deleted, with their
+versions.
+
+    history: 2
+
 Pure functions over Polars frames — the dataset store calls them, and they
 test without any storage.
 """
@@ -51,7 +69,6 @@ import polars as pl
 import yaml
 
 from fireflyer import filters as filters_mod
-from fireflyer import filters as filters_mod
 from fireflyer.calcs import CalcError, compile_formula, formula_names
 
 # Polars dtypes of an older, type-guessed dataset that were numbers.
@@ -61,6 +78,7 @@ _OLD_TYPES = ("string", "numeric", "integer", "float", "boolean", "date", "datet
 _OLD_NUMERIC = ("numeric", "integer", "float")
 # A role's permission that narrows nothing.
 FULL = "full"
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _TO_NUMBER_ARG = re.compile(r"\bto_number\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)")
 
 
@@ -79,23 +97,50 @@ class Rule:
 
 
 def default(sources: list[str], previous: list[Rule] | None = None,
-            previous_sources: list[str] | None = None) -> list[Rule]:
+            previous_sources: list[str] | None = None,
+            dtypes: dict[str, str] | None = None) -> list[Rule]:
     """The mapping for a fresh upload: every uploaded column as it is — or,
     re-uploading, the previous mapping carried forward: its columns whose
     formulas still find what they read, then the upload's new columns as they
-    are (one dropped before stays dropped)."""
+    are (one dropped before stays dropped). `dtypes`: a typed upload's (a
+    query's) — a new column then reads back as its type (`typed_formula`)."""
+    def fresh(s: str) -> Rule:
+        return Rule(s, typed_formula(s, dtypes[s]) if dtypes and s in dtypes else s)
+
     if previous is None:
-        return [Rule(s, s) for s in sources]
+        return [fresh(s) for s in sources]
     have = set(sources)
     kept = [r for r in previous if formula_names(r.formula) <= have]
     seen = set(previous_sources or [])
     taken = {r.name for r in kept}
-    return kept + [Rule(s, s) for s in sources if s not in seen and s not in taken]
+    return kept + [fresh(s) for s in sources if s not in seen and s not in taken]
 
 
 def from_dtypes(columns: list[tuple[str, str]]) -> list[Rule]:
-    """The mapping that keeps a type-guessed dataset's numbers numbers."""
-    return [Rule(n, f"to_number({n})" if d.startswith(_NUMERIC_DTYPES) else n) for n, d in columns]
+    """The mapping that keeps a typed upload's types — a type-guessed
+    Parquet from before mappings, or a query's result: the mapping reads every
+    column as text (`as_text`), and these formulas read each back as it was."""
+    return [Rule(n, typed_formula(n, d)) for n, d in columns]
+
+
+def typed_formula(name: str, dtype: str) -> str:
+    """The formula that reads `name`, a `dtype` column turned to text, back
+    as that type: numbers `to_number()`, yes / no `to_bool()`, dates and times
+    `str2dt()` with the pattern Polars writes them in, lists `to_list()`."""
+    if dtype.startswith(_NUMERIC_DTYPES):
+        return f"to_number({name})"
+    if not _NAME.fullmatch(name):
+        return name                               # str2dt() & co. take a plain name
+    if dtype == "Boolean":
+        return f"to_bool({name})"
+    if dtype == "Date":
+        return f"str2dt({name}, YYYY-MM-DD)"
+    if dtype.startswith("Datetime"):
+        zone = "time_zone=None" not in dtype
+        return f"str2dt({name}, YYYY-MM-DD HH:mm:ss{'Z' if zone else ''})"
+    if dtype.startswith(("List", "Array")):
+        return f"to_list({name})"
+    return name
 
 
 def parse(text: str, sources: list[str]) -> list[Rule]:
@@ -109,6 +154,8 @@ def parse(text: str, sources: list[str]) -> list[Rule]:
         raise MappingError("the mapping needs a `columns:` block, one entry per column")
     rules = [_rule(str(name), spec) for name, spec in columns.items()]
     _permissions(doc.get("permissions"))          # refuse a bad one here, where it's typed
+    _source(doc.get("source"))
+    _history(doc.get("history"))
     have = set(sources)
     for r in rules:
         missing = sorted(formula_names(r.formula) - have)
@@ -119,10 +166,19 @@ def parse(text: str, sources: list[str]) -> list[Rule]:
     return rules
 
 
-def dump(rules: list[Rule], permissions: dict[str, list[dict]] | None = None) -> str:
-    """`rules` as the YAML `parse` reads: each column's formula on its own line
-    — then `permissions` (role -> filters, `[]` for full), each filter on one."""
-    lines = ["columns:"]
+def dump(rules: list[Rule], permissions: dict[str, list[dict]] | None = None,
+         source: dict | None = None, history: int = 0) -> str:
+    """`rules` as the YAML `parse` reads: the `source` first, if there's one
+    (its query as a block, as written), then `history` unless it's 0, then each
+    column's formula on its own line — then `permissions` (role -> filters,
+    `[]` for full), each filter on one."""
+    lines = []
+    if source:
+        lines += ["source:", f"  connection: {_scalar(source['connection'])}", "  query: |-"]
+        lines += [f"    {line}".rstrip() for line in source["query"].strip("\n").splitlines()]
+    if history:
+        lines.append(f"history: {history}")
+    lines.append("columns:")
     for r in rules:
         lines += [f"  {_scalar(r.name)}:", f"    formula: {_scalar(r.formula)}"]
         if r.service:
@@ -149,12 +205,65 @@ def permissions(text: str) -> dict[str, list[dict]]:
 
 
 def with_permissions(text: str, grants: dict[str, list[dict]]) -> str:
-    """`text` with its `permissions:` replaced by `grants` — its columns as
-    they are."""
+    """`text` with its `permissions:` replaced by `grants` — its columns,
+    source and history as they are."""
     doc = yaml.safe_load(text) or {}
     columns = doc.get("columns") if isinstance(doc, dict) else None
     rules = [_rule(str(n), spec) for n, spec in (columns or {}).items()]
-    return dump(rules, _permissions(grants))
+    return dump(rules, _permissions(grants), source(text), history(text))
+
+
+def rules(text: str) -> list[Rule]:
+    """The mapping's columns, each checked on its own but not against an
+    upload — what a refresh carries forward to a result that may differ."""
+    try:
+        doc = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        raise MappingError(f"not valid YAML: {exc}") from exc
+    columns = doc.get("columns") if isinstance(doc, dict) else None
+    if not isinstance(columns, dict) or not columns:
+        raise MappingError("the mapping needs a `columns:` block, one entry per column")
+    _history(doc.get("history"))
+    return [_rule(str(name), spec) for name, spec in columns.items()]
+
+
+def source(text: str) -> dict | None:
+    """The mapping's `source:` — `{connection, query}` — or None: a file
+    upload's, or YAML that doesn't read."""
+    try:
+        doc = yaml.safe_load(text) or {}
+        return _source(doc.get("source")) if isinstance(doc, dict) else None
+    except (yaml.YAMLError, MappingError):
+        return None
+
+
+def history(text: str) -> int:
+    """The mapping's `history:` — how many uploads before the one in use to
+    keep. 0 when it has none, or the YAML doesn't read."""
+    try:
+        doc = yaml.safe_load(text) or {}
+        return _history(doc.get("history")) if isinstance(doc, dict) else 0
+    except (yaml.YAMLError, MappingError):
+        return 0
+
+
+def _history(raw) -> int:
+    if raw is None:
+        return 0
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        raise MappingError("`history:` is how many uploads to keep: a whole number, 0 or more")
+    return raw
+
+
+def _source(raw) -> dict | None:
+    if raw in (None, {}):
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"connection", "query"}:
+        raise MappingError("`source:` takes a `connection:` and a `query:`")
+    connection, query = str(raw.get("connection") or "").strip(), str(raw.get("query") or "").strip()
+    if not connection or not query:
+        raise MappingError("`source:` needs both a `connection:` (its name) and a `query:` (the SQL)")
+    return {"connection": connection, "query": query}
 
 
 def _permissions(raw) -> dict[str, list[dict]]:
@@ -219,7 +328,8 @@ def upgrade(text: str) -> str:
         except MappingError:
             return text
     try:
-        return dump(rules, _permissions(doc.get("permissions")))
+        return dump(rules, _permissions(doc.get("permissions")), _source(doc.get("source")),
+                    _history(doc.get("history")))
     except MappingError:
         return text
 

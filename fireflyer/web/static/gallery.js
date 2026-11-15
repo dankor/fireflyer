@@ -129,7 +129,93 @@ function userClashes(form){
 document.addEventListener('change', function (e) {
   if (e.target.matches && e.target.matches('#user-form input[name=role]')) userClashes(e.target.form);
 });
-function openUpload(){ document.getElementById('upload-dialog').showModal(); }
+function openUpload(){
+  var d = document.getElementById('upload-dialog'), f = d.querySelector('form');
+  if (f.dataset.sql) dsKind(f, 'csv');
+  d.showModal(); f.elements.name.focus();
+}
+// A new dataset from a CSV file or a SQL query: the switch shows one kind's
+// fields, turns off the other's (a disabled field is neither required nor
+// sent) and sets where the form posts.
+function dsKind(f, kind){
+  f.action = f.dataset[kind];
+  f.querySelectorAll('.ds-kind').forEach(function(box){
+    var on = box.dataset.kind === kind;
+    box.hidden = !on;
+    box.querySelectorAll('input, select, textarea').forEach(function(el){ el.disabled = !on; });
+  });
+  f.querySelectorAll('.ds-kinds button').forEach(function(b){ b.classList.toggle('active', b.dataset.kind === kind); });
+}
+document.addEventListener('click', function(e){
+  var b = e.target.closest('.ds-kinds button');
+  if (b) dsKind(b.closest('form'), b.dataset.kind);
+});
+
+// A connection's dialog: new (no button) or edit (the row's pencil, its
+// fields in data-*). Fields or YAML — each written from the other on a
+// switch; only the one shown is posted. The password is never filled in.
+function openConnection(btn){
+  var d = document.getElementById('conn-dialog'), f = document.getElementById('conn-form');
+  var edit = !!btn;
+  f.action = edit ? '/connections/' + encodeURIComponent(btn.dataset.name) + '/edit' : '/connections/new';
+  document.getElementById('conn-title').textContent = edit ? 'Edit connection' : 'New connection';
+  ['name', 'description', 'url'].forEach(function(k){ f.elements[k].value = edit ? (btn.dataset[k] || '') : ''; });
+  f.elements.password.value = '';
+  f.elements.password.placeholder = edit && btn.hasAttribute('data-has-password') ? 'Unchanged' : 'None';
+  connMode(f, 'form');
+  d.showModal(); f.elements.name.focus();
+}
+function connMode(f, mode){
+  var yaml = f.elements.yaml, fields = f.querySelector('.conn-fields'), code = mode === 'code';
+  if (code) yaml.value = connYaml(f);
+  else if (!yaml.hidden) connFields(f, yaml.value);
+  yaml.hidden = yaml.disabled = !code;
+  fields.hidden = code;
+  fields.querySelectorAll('input, textarea').forEach(function(el){ el.disabled = code; });
+  f.querySelectorAll('.conn-modes button').forEach(function(b){ b.classList.toggle('active', b.dataset.mode === mode); });
+  (code ? yaml : f.elements.name).focus();
+}
+// A JSON string is a YAML string: values quoted only when they must be.
+function connScalar(v){ return /^[\w.\/:@?=&%+-]*$/.test(v) && !/^(true|false|null|yes|no)$/i.test(v) ? v : JSON.stringify(v); }
+function connYaml(f){
+  var out = ['name', 'description', 'url'].map(function(k){ return k + ': ' + connScalar(f.elements[k].value); });
+  if (f.elements.password.value) out.push('password: ' + connScalar(f.elements.password.value));
+  return out.join('\n') + '\n';
+}
+function connFields(f, text){
+  text.split('\n').forEach(function(line){
+    var m = /^(name|description|url|password):\s*(.*)$/.exec(line);
+    if (!m) return;
+    var v = m[2].trim();
+    try { if (/^["']/.test(v)) v = JSON.parse(v.replace(/^'(.*)'$/, '"$1"')); } catch (e) {}
+    f.elements[m[1]].value = v;
+  });
+}
+document.addEventListener('click', function(e){
+  var b = e.target.closest('.conn-modes button');
+  if (b) connMode(b.closest('form'), b.dataset.mode);
+});
+// Test: the database answers, or says why not — its own words.
+// The button shows it: a spinner, then a check or a cross; the error goes under
+// the connection's URL.
+function testConnection(btn){
+  var error = btn.closest('tr').querySelector('.conn-error');
+  btn.classList.remove('is-ok', 'is-fail');
+  btn.classList.add('is-busy');
+  btn.disabled = true;
+  error.hidden = true;
+  function done(ok, message){
+    btn.classList.remove('is-busy');
+    btn.classList.add(ok ? 'is-ok' : 'is-fail');
+    btn.disabled = false;
+    btn.title = ok ? 'Connected — test again' : 'Failed — test again';
+    error.textContent = message || '';
+    error.hidden = ok;
+  }
+  fetch(btn.dataset.url, {method: 'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ done(j.ok, j.error); }, function(e){ done(false, String(e)); });
+}
 
 // A dataset's name and description, as a dashboard's in the editor: the
 // topbar shows both (the description's first line, small, under the name), and

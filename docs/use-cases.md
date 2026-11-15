@@ -36,6 +36,7 @@ column of every type to filter.
   - [Filter a list](#filter-a-list)
 - [Datasets](#datasets)
   - [Upload a dataset](#upload-a-dataset)
+  - [Read a dataset from a database](#read-a-dataset-from-a-database)
   - [Edit columns with UI](#edit-columns-with-ui)
   - [Edit columns with code](#edit-columns-with-code)
   - [Compare dataset versions](#compare-dataset-versions)
@@ -43,6 +44,7 @@ column of every type to filter.
 - [Access](#access)
   - [Add users and their roles](#add-users-and-their-roles)
   - [Share across groups](#share-across-groups)
+  - [See how Fireflyer is used](#see-how-fireflyer-is-used)
 - [End-to-end](#end-to-end)
   - [Prototype a dashboard with AI and sample data](#prototype-a-dashboard-with-ai-and-sample-data)
   - [Let the AI discover your dataset and build the dashboard](#let-the-ai-discover-your-dataset-and-build-the-dashboard)
@@ -258,6 +260,28 @@ on the columns it has, with example values.
 
 ![Uploading a dataset](../media/dataset-upload.webp)
 
+### Read a dataset from a database
+
+A dataset can get its data from a SQL query. First, add the database on the
+**Connections** tab: a name, a URL and a password. You can also write the same
+fields as YAML. The plug button tests the connection: it shows a check, or a
+cross and the error of the database. Fireflyer keeps the
+password encrypted and does not show it again. You can change or remove each
+connection.
+
+Then, on **Datasets**, click **+** and select **SQL**. Give the dataset a
+name, select the connection and write the query. Fireflyer runs the query and
+finds the type of each column, for example a number or yes / no. The query is
+in the dataset's YAML, under `source:`. To change it, use **edit** mode: the
+connection and the query are in a box under the columns. To get new data, click
+**Refresh** (↻).
+Each refresh is the next version. If the query is wrong, you see the error
+from the database and the line of the query.
+
+Only an admin can add connections and write queries.
+
+![Adding a connection, then a dataset from a query on it](../media/dataset-query.webp)
+
 ### Edit columns with UI
 
 Every column is a formula over the file you uploaded, so you can fix it without
@@ -287,6 +311,12 @@ Every saved change is a version. **compare** shows two side by side; the
 arrows step back and forth through them, and restore brings an old one back.
 The version chip lists them by upload, each upload with its file's size; the
 datasets list shows what each dataset keeps in all.
+
+A dataset keeps only the upload in use. When a new upload or refresh is in
+use, the older uploads and their versions are deleted. To keep more, open
+**edit** mode and click the clock beside the **+**, then type a number. For
+example, 2 keeps two uploads before the one in use. The number is in the
+dataset's YAML as `history:`, so a change is the next version.
 
 ![Comparing versions of a dataset](../media/dataset-compare.webp)
 
@@ -321,6 +351,21 @@ into your own group to make it yours: the copy keeps reading their data, now
 named `_alice:orders`.
 
 ![Opening another group's shared dashboard and cloning it into your own](../media/groups.webp)
+
+### See how Fireflyer is used
+
+The portal has a **Fireflyer Usage** dashboard in the `_admin` group. It reads
+Fireflyer's own database through the `internal` connection. The
+**Activity** tab shows the active users, the actions by day, the most opened
+dashboards and the errors, each with its message. The **Content** tab shows the dashboards that
+nobody opens, the datasets that no dashboard reads, and the storage of each
+group.
+
+The data is in the five `usage_*` datasets. To update the dashboard, refresh
+them. You can change their SQL as for all datasets. The data shows usernames
+only, and no other personal data.
+
+![The Fireflyer Usage dashboard: activity, then content](../media/usage.webp)
 
 ## End-to-end
 
