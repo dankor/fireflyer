@@ -4,8 +4,8 @@ them, in the admin's group.
 
 What ships is files beside this one, read once at import:
 
-- `datasets/<name>.sql` — one dataset each: its query, its first line a
-  comment that is the dataset's description;
+- `datasets/<name>.yaml` — one dataset each: its `description:` and its
+  `query:`;
 - `dashboard.yaml` — the dashboard on them.
 
 They're made **once**, when the portal starts and the admin's group has none of
@@ -41,15 +41,14 @@ def connection_url(database_url: str) -> str:
 
 
 def _dataset(path: Path) -> tuple[str, str]:
-    """`(description, SQL)` from a `.sql` file: its first line, `-- …`, is the
-    description; the rest is the query."""
-    first, _, sql = path.read_text().partition("\n")
-    return first.removeprefix("--").strip(), sql.strip()
+    """`(description, SQL)` from a dataset's YAML file."""
+    doc = yaml.safe_load(path.read_text())
+    return doc["description"], doc["query"].strip()
 
 
 # name -> (description, SQL)
 DATASETS: dict[str, tuple[str, str]] = {
-    p.stem: _dataset(p) for p in sorted((_HERE / "datasets").glob("*.sql"))
+    p.stem: _dataset(p) for p in sorted((_HERE / "datasets").glob("*.yaml"))
 }
 
 # The dashboard on them. Refreshing a dataset (its page's ↻) brings it up to date.

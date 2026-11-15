@@ -1,5 +1,0 @@
--- Every user: how they sign in and the roles they hold
-select u.name as username, u.source, u.created_at::timestamptz as created_at,
-       array_remove(array_agg(r.role_name order by r.role_name), null) as roles
-from users u left join user_roles r on r.user_name = u.name
-group by u.name, u.source, u.created_at

@@ -1845,8 +1845,8 @@ manual only: there is no schedule.
 ### Usage analytics
 
 The portal ships usage analytics in the admin's group `_admin`
-(`web/usage/`: each dataset's query in `datasets/<name>.sql`, its first
-`--` line the description, and the dashboard in `dashboard.yaml`): a connection `internal` to its own database, and five
+(`web/usage/`: each dataset in `datasets/<name>.yaml`, its
+`description:` and `query:`, and the dashboard in `dashboard.yaml`): a connection `internal` to its own database, and five
 datasets on it — `usage_activity`,
 `usage_dashboards`, `usage_dataset_reads`, `usage_datasets`, `usage_users` —
 and a **Fireflyer Usage** dashboard on them (tabs Activity and Content: active users,

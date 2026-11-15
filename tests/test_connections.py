@@ -402,10 +402,10 @@ def test_the_usage_dashboard_is_valid_and_reads_the_usage_datasets():
 
 def test_usage_ships_as_files_beside_its_code():
     folder = pathlib.Path(usage_mod.__file__).parent
-    assert sorted(DATASETS) == sorted(p.stem for p in (folder / "datasets").glob("*.sql"))
+    assert sorted(DATASETS) == sorted(p.stem for p in (folder / "datasets").glob("*.yaml"))
     for name, (description, sql) in DATASETS.items():
-        assert description and not description.startswith("-"), name     # the first `--` line
-        assert sql.lower().startswith(("select", "with")), name           # the rest, without it
+        assert description, name
+        assert sql.lower().startswith(("select", "with")), name
     assert DASHBOARD == (folder / "dashboard.yaml").read_text()
     assert usage_mod.DASHBOARD_NAME == "Fireflyer Usage"
 
