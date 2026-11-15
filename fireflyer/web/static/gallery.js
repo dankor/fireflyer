@@ -153,15 +153,14 @@ document.addEventListener('click', function(e){
 
 // A connection's dialog: new (no button) or edit (the row's pencil, its
 // fields in data-*). Fields or YAML — each written from the other on a
-// switch; only the one shown is posted. The password is never filled in.
+// switch; only the one shown is posted. The password is a variable's name.
 function openConnection(btn){
   var d = document.getElementById('conn-dialog'), f = document.getElementById('conn-form');
   var edit = !!btn;
   f.action = edit ? '/connections/' + encodeURIComponent(btn.dataset.name) + '/edit' : '/connections/new';
   document.getElementById('conn-title').textContent = edit ? 'Edit connection' : 'New connection';
   ['name', 'description', 'url'].forEach(function(k){ f.elements[k].value = edit ? (btn.dataset[k] || '') : ''; });
-  f.elements.password.value = '';
-  f.elements.password.placeholder = edit && btn.hasAttribute('data-has-password') ? 'Unchanged' : 'None';
+  connPassword(f, edit ? (btn.dataset.passwordEnv || '') : '');
   connMode(f, 'form');
   d.showModal(); f.elements.name.focus();
 }
@@ -179,17 +178,31 @@ function connMode(f, mode){
 function connScalar(v){ return /^[\w.\/:@?=&%+-]*$/.test(v) && !/^(true|false|null|yes|no)$/i.test(v) ? v : JSON.stringify(v); }
 function connYaml(f){
   var out = ['name', 'description', 'url'].map(function(k){ return k + ': ' + connScalar(f.elements[k].value); });
-  if (f.elements.password.value) out.push('password: ' + connScalar(f.elements.password.value));
+  if (f.elements.password_env.value) out.push('password_env: ' + f.elements.password_env.value);
   return out.join('\n') + '\n';
 }
 function connFields(f, text){
   text.split('\n').forEach(function(line){
-    var m = /^(name|description|url|password):\s*(.*)$/.exec(line);
+    var m = /^(name|description|url|password_env):\s*(.*)$/.exec(line);
     if (!m) return;
     var v = m[2].trim();
     try { if (/^["']/.test(v)) v = JSON.parse(v.replace(/^'(.*)'$/, '"$1"')); } catch (e) {}
-    f.elements[m[1]].value = v;
+    if (m[1] === 'password_env') connPassword(f, v);
+    else f.elements[m[1]].value = v;
   });
+}
+// The password variable: one the list doesn't offer (no longer allowed, or
+// typed in the YAML) is added for this edit, so it isn't changed unseen —
+// saving it says why it's refused.
+function connPassword(f, name){
+  var select = f.elements.password_env;
+  select.querySelectorAll('option.is-other').forEach(function(o){ o.remove(); });
+  if (name && ![].some.call(select.options, function(o){ return o.value === name; })) {
+    var o = new Option(name, name);
+    o.className = 'is-other';
+    select.add(o);
+  }
+  select.value = name;
 }
 document.addEventListener('click', function(e){
   var b = e.target.closest('.conn-modes button');

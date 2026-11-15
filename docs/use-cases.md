@@ -263,11 +263,18 @@ on the columns it has, with example values.
 ### Read a dataset from a database
 
 A dataset can get its data from a SQL query. First, add the database on the
-**Connections** tab: a name, a URL and a password. You can also write the same
-fields as YAML. The plug button tests the connection: it shows a check, or a
-cross and the error of the database. Fireflyer keeps the
-password encrypted and does not show it again. You can change or remove each
+**Connections** tab: a name, a URL and the variable that holds the password.
+The URL has no password in it. Fireflyer reads the variable from its
+environment each time it opens the connection, and keeps the password nowhere.
+The list shows the variables that the portal allows. You can also write the
+same fields as YAML. The plug button tests the connection: it shows a check,
+or a cross and the error of the database. You can change or remove each
 connection.
+
+To let a connection use a password, set the password in a variable of the
+portal, for example `WAREHOUSE_PASSWORD`. Then add its name to
+`FIREFLYER_CONNECTION_PASSWORDS` (names with commas between them).
+`PGPASSWORD` is the portal's own password and is always on the list.
 
 Then, on **Datasets**, click **+** and select **SQL**. Give the dataset a
 name, select the connection and write the query. Fireflyer runs the query and

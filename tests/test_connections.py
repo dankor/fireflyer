@@ -1,10 +1,11 @@
-"""Connections: named databases a dataset's data comes from — the store (the
-password apart and encrypted), reading a query into a typed frame, `source:`
+"""Connections: named databases a dataset's data comes from — the store (a
+password variable's name, never a password), reading a query into a typed frame, `source:`
 in a dataset's mapping, refresh as the next major, the routes, and the usage
 analytics shipped with the portal. Databases here are sqlite files; Postgres
 only in Docker."""
 
 import json
+import os
 import pathlib
 import re
 import sqlite3
@@ -43,7 +44,17 @@ def db(tmp_path):
 
 @pytest.fixture
 def store():
-    return ConnectionStore(":memory:", b"secret")
+    return ConnectionStore(":memory:")
+
+
+@pytest.fixture
+def passwords(monkeypatch):
+    """SALES_PASSWORD allowed and set; what start-up took from the environment
+    kept apart for the test."""
+    monkeypatch.setattr(connections_mod, "_taken", {})
+    monkeypatch.setenv("FIREFLYER_CONNECTION_PASSWORDS", "SALES_PASSWORD, OTHER_PASSWORD")
+    monkeypatch.setenv("SALES_PASSWORD", "s3c@r/t")
+    monkeypatch.delenv("OTHER_PASSWORD", raising=False)
 
 
 # --- the store -------------------------------------------------------------------
@@ -59,27 +70,79 @@ def test_a_connection_is_created_listed_edited_and_removed(store, db):
     assert store.list() == []
 
 
-def test_the_password_is_kept_apart_and_encrypted(store):
-    store.create("pg", "postgresql://reader:s3cret@db:5432/sales")
+def test_a_connection_names_its_password_variable(store, passwords):
+    store.create("pg", "postgresql://reader@db:5432/sales", password_env="SALES_PASSWORD")
     c = store.get("pg")
-    assert c.url == "postgresql://reader@db:5432/sales" and c.has_password
-    assert "s3cret" not in str(store._run("SELECT url, secret FROM connections"))
-    assert store.url("pg") == "postgresql://reader:s3cret@db:5432/sales"
-    # Empty keeps it; a new one replaces it; clearing removes it.
-    store.update("pg", url="postgresql://reader@db2/sales", password="")
-    assert store.url("pg") == "postgresql://reader:s3cret@db2/sales"
-    store.update("pg", password="other")
-    assert store.url("pg").startswith("postgresql://reader:other@")
-    store.clear_password("pg")
-    assert not store.get("pg").has_password and store.url("pg") == "postgresql://reader@db2/sales"
+    assert (c.url, c.password_env) == ("postgresql://reader@db:5432/sales", "SALES_PASSWORD")
+    assert "s3c@r/t" not in str(store._run("SELECT * FROM connections"))      # the name, never the value
+    url = store._open("pg")                       # read when it opens: an object, the value set in it
+    assert url.password == "s3c@r/t" and "s3c" not in str(url) and "s3c" not in repr(url)
+    store.update("pg", url="postgresql://reader@db2/sales")                   # None keeps it
+    assert store.get("pg").password_env == "SALES_PASSWORD"
+    store.update("pg", password_env="")
+    assert store._open("pg").password is None
 
 
-def test_another_secret_cant_read_the_password(store):
-    store.create("pg", "postgresql://u:pw@h/d")
-    elsewhere = ConnectionStore.__new__(ConnectionStore)
-    elsewhere.__dict__.update(store.__dict__, _key=ConnectionStore(":memory:", b"other")._key)
-    with pytest.raises(ConnectionsError, match="FIREFLYER_SECRET"):
-        elsewhere.url("pg")
+def test_a_url_holds_no_password(store, passwords):
+    for url in ("postgresql://u:pw@h/d", "postgresql://u@h/d?password=pw"):
+        with pytest.raises(ConnectionsError, match="holds no password"):
+            store.create("pg", url)
+    store.create("pg", "postgresql://u@h/d")
+    with pytest.raises(ConnectionsError, match="holds no password"):
+        store.update("pg", url="postgresql://u:pw@h/d")
+
+
+def test_only_an_allowed_variable_is_named(store, passwords, monkeypatch):
+    for name in ("FIREFLYER_SECRET", "FIREFLYER_S3_SECRET_KEY", "HOME"):
+        with pytest.raises(ConnectionsError, match="isn't an allowed password variable"):
+            store.create("pg", "postgresql://u@h/d", password_env=name)
+    assert connections_mod.allowed_passwords() == ["PGPASSWORD", "SALES_PASSWORD", "OTHER_PASSWORD"]
+    store.create("pg", "postgresql://u@h/d", password_env="SALES_PASSWORD")
+    store.create("later", "postgresql://u@h/d", password_env="OTHER_PASSWORD")     # allowed, not set yet
+    with pytest.raises(ConnectionsError, match="OTHER_PASSWORD is not set"):
+        store.test("later")
+    monkeypatch.setenv("FIREFLYER_CONNECTION_PASSWORDS", "")                      # no longer allowed
+    with pytest.raises(ConnectionsError, match="SALES_PASSWORD isn't an allowed"):
+        store.test("pg")
+
+
+def test_start_up_takes_the_portal_password_out_of_the_environment(passwords):
+    env = {"PGPASSWORD": "p@ss&w=rd", "PGHOST": "db"}
+    own = connections_mod.take_libpq_password("postgresql://ff@db/ff", env)
+    # Out of the environment, so libpq can't give it to another server; the
+    # passfile, the same.
+    assert "PGPASSWORD" not in env and env["PGPASSFILE"] == os.devnull and env["PGHOST"] == "db"
+    assert connections_mod.env_password("PGPASSWORD") == "p@ss&w=rd"         # what `internal` names
+    # The portal's own stores get it in their URL, encoded.
+    assert own.startswith("postgresql://ff@db/ff?password=")
+    assert connections_mod._url_password(own) == "p@ss&w=rd"
+
+
+def test_a_password_in_the_portal_url_is_the_portal_password(passwords):
+    env = {"PGPASSWORD": "other"}
+    own = connections_mod.take_libpq_password("postgresql://ff:inline@db/ff", env)
+    assert own == "postgresql://ff:inline@db/ff" and "PGPASSWORD" not in env
+    assert connections_mod.env_password("PGPASSWORD") == "inline"
+    assert connections_mod.take_libpq_password("", {}) == ""                     # local mode: nothing to add
+
+
+def test_stored_passwords_from_before_are_dropped(tmp_path, monkeypatch):
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE connections (name TEXT PRIMARY KEY, description TEXT NOT NULL DEFAULT '',"
+                 " url TEXT NOT NULL, secret TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '',"
+                 " created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    conn.executemany("INSERT INTO connections VALUES (?, '', ?, ?, '', 't', 't')", [
+        ("internal", "postgresql+psycopg://ff@postgres:5432/ff", "gAAAA-encrypted"),
+        ("sales", "postgresql+psycopg://reader@sales/db", "gAAAA-encrypted"),
+        ("open", "sqlite:///x.db", ""),
+    ])
+    conn.commit()
+    conn.close()
+    store = ConnectionStore(str(path), own_url="postgresql://ff@postgres:5432/ff?password=pw")
+    assert {c.name: c.password_env for c in store.list()} == {"internal": "PGPASSWORD", "open": "", "sales": ""}
+    assert "secret" not in str(store._run("SELECT * FROM connections"))
+    ConnectionStore(str(path))                                                  # once only
 
 
 @pytest.mark.parametrize("name", ["", "has space", "a/b", "ü"])
@@ -97,9 +160,9 @@ def test_names_are_unique_and_urls_must_read(store, db):
 
 
 def test_a_connection_to_the_own_database_gets_dataset_versions(monkeypatch):
-    store = ConnectionStore(":memory:", b"s", own_url="postgresql://ff:pw@postgres:5432/ff")
+    store = ConnectionStore(":memory:", own_url="postgresql://ff:pw@postgres:5432/ff")
     assert store.list() == []
-    store.create("internal", "postgresql://ff:pw@postgres:5432/ff")
+    store.create("internal", "postgresql://ff@postgres:5432/ff")
     store.create("copy", "postgresql+psycopg://reader@POSTGRES/ff")      # the same database, another way
     store.create("sales", "postgresql://ff@postgres:5432/sales")          # another database there
     assert [store.is_own(n) for n in ("internal", "copy", "sales")] == [True, True, False]
@@ -278,11 +341,18 @@ def test_every_version_is_a_row(datasets, db):
 # --- the pages --------------------------------------------------------------------
 
 
-def test_the_connections_page_lists_them_without_passwords(store):
-    store.create("pg", "postgresql://reader:s3cret@db/sales", description="Sales")
-    html = render_connections(store.list(), used={"pg": [("/datasets/x/orders", "orders")]})
-    assert "postgresql://reader@db/sales" in html and "s3cret" not in html
-    assert ">orders<" in html and 'title="Has a password"' in html
+def test_the_connections_page_names_each_password_variable(store, passwords):
+    store.create("pg", "postgresql://reader@db/sales", description="Sales", password_env="SALES_PASSWORD")
+    store.create("later", "postgresql://reader@db/sales", password_env="OTHER_PASSWORD")
+    html = render_connections(store.list(), connections_mod.allowed_passwords(),
+                              used={"pg": [("/datasets/x/orders", "orders")]})
+    assert "postgresql://reader@db/sales" in html and "s3c" not in html
+    assert ">orders<" in html and 'title="Password from SALES_PASSWORD"' in html
+    assert 'class="ff-key is-missing" title="OTHER_PASSWORD is not set"' in html
+    assert 'data-password-env="SALES_PASSWORD"' in html
+    # The dialog picks from the allowed variables; one not set is marked.
+    assert '<select name="password_env"' in html and '<option value="SALES_PASSWORD">' in html
+    assert '<option value="OTHER_PASSWORD" class="is-unset"' in html and 'type="password"' not in html
     assert 'data-url="/connections/pg/test"' in html and "openConnection(this)" in html
 
 
@@ -312,11 +382,16 @@ def test_connections_are_managed_through_the_routes(client, db):
     assert conns.get("shop").description == "Shop" and ">shop<" in client.get("/connections").text
     assert client.post("/connections/shop/test").json() == {"ok": True}
     # YAML instead of the fields.
-    client.post("/connections/shop/edit", data={"yaml": f"name: shop\ndescription: From YAML\nurl: {db}\n"})
-    assert conns.get("shop").description == "From YAML"
+    client.post("/connections/shop/edit",
+                data={"yaml": f"name: shop\ndescription: From YAML\nurl: {db}\npassword_env: PGPASSWORD\n"})
+    assert (conns.get("shop").description, conns.get("shop").password_env) == ("From YAML", "PGPASSWORD")
+    client.post("/connections/shop/edit", data={"name": "shop", "url": db, "password_env": ""})
+    assert conns.get("shop").password_env == ""
     client.post("/connections/new", data={"yaml": "name: bad\nurl: sqlite:////nowhere/x.db\n"})
     assert client.post("/connections/bad/test").json()["ok"] is False
     assert client.post("/connections/new", data={"yaml": "name: x\nport: 1\n"}).status_code == 400
+    refused = client.post("/connections/new", data={"yaml": f"name: x\nurl: {db}\npassword: pw\n"})
+    assert refused.status_code == 400 and "password_env" in refused.text
     client.post("/connections/bad/delete")
     assert conns.names() == ["shop"]
 
@@ -413,8 +488,9 @@ def test_usage_ships_as_files_beside_its_code():
 def test_the_usage_connection_names_its_driver():
     # A connection's URL goes to SQLAlchemy as written; the portal's DSN gets
     # the driver it has.
-    assert usage_mod.connection_url("postgresql://ff:pw@postgres:5432/ff") == \
-        "postgresql+psycopg://ff:pw@postgres:5432/ff"
+    # No password in it, wherever the DSN has one: it names PGPASSWORD.
+    for dsn in ("postgresql://ff:pw@postgres:5432/ff", "postgresql://ff@postgres:5432/ff?password=pw"):
+        assert usage_mod.connection_url(dsn) == "postgresql+psycopg://ff@postgres:5432/ff"
 
 
 def test_the_usage_errors_say_why():

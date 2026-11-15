@@ -1741,23 +1741,51 @@ name are left for when an integration needs them.
 A dataset's data can come from a **database**, as well as from an uploaded
 file. A **connection** is a database with a name: a SQLAlchemy URL
 (`postgresql+psycopg://reader@db:5432/sales`, as SQLAlchemy reads it: the
-driver is part of the URL, and Fireflyer changes nothing in it), a description and a password. A
+driver is part of the URL, and Fireflyer changes nothing in it), a description and the
+**name** of the environment variable that holds its password. A
 dataset names its connection **by name only**, as a permission names a role.
 
 **The connection store** (`fireflyer/connections.py`, `ConnectionStore`) keeps
 the connections in the same database as roles and users: the portal's
 Postgres, or `<FIREFLYER_DATA>/fireflyer.db` in local mode. The table is
-`connections (name, description, url, secret, created_by, created_at,
-updated_at)`. The URL is kept **without** its password. The password is in
-`secret`, encrypted (Fernet, with a key from `FIREFLYER_SECRET`). The password
-never goes to the browser, to the activity log or into a dataset. A password
-in a typed URL moves into `secret`. An empty password field keeps the
-password. If `FIREFLYER_SECRET` changes, the passwords cannot be read: set them
-again.
+`connections (name, description, url, password_env, created_by, created_at,
+updated_at)`. Fireflyer keeps **no password**:
+
+- **The URL holds no password.** A URL with one (`user:pass@`, or
+  `?password=`) is refused.
+- **`password_env`** is the name of the variable that holds the password, or
+  "" for none. When the connection opens, `ConnectionStore._open` reads the
+  value and sets it in a SQLAlchemy `URL` object. The value never goes into a
+  URL string, the table, the browser, the activity log or a dataset. A
+  rotated password works after the next restart.
+- **Allowed variables only** (`connections.allowed_passwords`): `PGPASSWORD`,
+  the portal's own, and the names in `FIREFLYER_CONNECTION_PASSWORDS`
+  (comma-separated). If an admin could name any variable, they could send
+  `FIREFLYER_SECRET` to their own server as a password. The dialog gives a
+  pick from the list. A key beside the name shows the variable, red with the
+  reason when it gives no password (`password_problem`: not allowed, or not
+  set). Opening such a connection fails with the same reason.
+- **libpq's own password sources are closed.** For a connection with no
+  password, libpq reads `PGPASSWORD` and `~/.pgpass` itself, so it could send
+  the portal's password to another server. At start-up,
+  `connections.take_libpq_password` removes `PGPASSWORD` from the process
+  environment and keeps it in memory, and it sets `PGPASSFILE` to
+  `/dev/null`. The portal's own stores get the password in their DSN
+  (`?password=`). A password written in `DATABASE_URL` is the portal's
+  password, and `PGPASSWORD` gives the same value. Other `PG*` variables stay:
+  they hold no secret.
+- **Migration.** A table from before (a `secret` column with encrypted
+  passwords) loses the column on open. A connection to the portal's own
+  database gets `PGPASSWORD`. The others get no variable.
+
+An admin can use each allowed password, and can point a connection to any
+host. Limit the outbound network of the portal to the known database servers.
 
 At setup the portal adds one connection, `internal`, to its own database
-(`DATABASE_URL`, with the driver it has: `postgresql+psycopg://`), for usage
-analytics (below).
+(`DATABASE_URL` without its password, with the driver it has:
+`postgresql+psycopg://`), with `password_env: PGPASSWORD`, for usage analytics
+(below). For a read-only user, change its URL to that user and its variable to
+one that holds that user's password.
 
 **Fireflyer's own database.** A connection to the portal's own database has
 one more table than the database: `dataset_versions` (`group_name, dataset,
@@ -1776,7 +1804,7 @@ as a `with` block over a JSON literal. Nothing is written to the database.
 each connection: its name and description, its URL (no password), the
 datasets that read from it, and its last change. The **+** and the pencil open
 one dialog, with the fields or the same as YAML (`name`, `description`, `url`,
-`password`). The plug tests the connection (`select 1`): a check, or the
+`password_env`). The plug tests the connection (`select 1`): a check, or the
 database's error. A rename changes the `source:` of each dataset that reads
 from it (a new mapping version). A connection that a dataset reads from cannot
 be removed (409, the datasets listed). Routes: `/connections/new`,

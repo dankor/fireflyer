@@ -59,7 +59,7 @@ def _connections_in_memory(app_state):
     """Connections live beside the roles: a fresh in-memory store per test."""
     from fireflyer.connections import ConnectionStore
 
-    app_state("connections", ConnectionStore(":memory:", b"test-secret"))
+    app_state("connections", ConnectionStore(":memory:"))
 
 
 @pytest.fixture

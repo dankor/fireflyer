@@ -34,10 +34,13 @@ CONNECTION_DESCRIPTION = "Fireflyer's own database: who uses what"
 def connection_url(database_url: str) -> str:
     """The portal's `DATABASE_URL` — a `postgresql://` DSN, as psycopg reads
     it — as a SQLAlchemy URL, which names its driver: psycopg, the one the
-    portal has."""
+    portal has. No password: the connection names `PGPASSWORD`, the portal's."""
     from sqlalchemy.engine import make_url
 
-    return make_url(database_url).set(drivername="postgresql+psycopg").render_as_string(hide_password=False)
+    from fireflyer.connections import without_password
+
+    url = make_url(database_url).set(drivername="postgresql+psycopg")
+    return without_password(url.render_as_string(hide_password=False))
 
 
 def _dataset(path: Path) -> tuple[str, str]:
