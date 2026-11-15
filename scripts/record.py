@@ -440,8 +440,8 @@ def dataset_query(clip: Clip) -> None:
     _fast(clip, "The database server's own catalog")
     clip.click("#conn-form input[name=url]", settle=0.1)
     _fast(clip, "postgresql+psycopg://fireflyer@postgres:5432/postgres", 8)
-    clip.click("#conn-form input[name=password]", settle=0.1)
-    _fast(clip, "fireflyer", 3)
+    page.select_option("#conn-form select[name=password_env]", "PGPASSWORD")    # a variable's name
+    clip.hold(0.6)
     clip.click(".conn-modes button[data-mode=code]", settle=1.8)      # the same, as YAML
     clip.click("#conn-form button.ok", settle=0.8)
     page.evaluate("window.scrollTo(0, 0)")

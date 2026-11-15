@@ -30,6 +30,7 @@ from urllib.parse import quote
 import yaml
 
 from fireflyer import column_map
+from fireflyer import connections as connections_mod
 from fireflyer import filters as filters_mod
 from fireflyer import groups
 from fireflyer.dashboard import Dashboard, DashboardError
@@ -1926,23 +1927,25 @@ def render_access(
 
 # --- connections ------------------------------------------------------------------
 # The databases a dataset's data can come from (`fireflyer/connections.py`), by
-# name: a URL each (no password shown — it stays in the store), the datasets
-# whose `source:` names it, a test, edit and remove.
+# name: a URL each, the variable its password is in (never the password), the
+# datasets whose `source:` names it, a test, edit and remove.
 
 
 def render_connections(
-    connections: list, title: str = "Fireflyer Portal", user_menu: str = "",
-    picker: str = "", used: dict[str, list[tuple[str, str]]] | None = None, users: bool = False,
+    connections: list, passwords: list[str] | None = None, title: str = "Fireflyer Portal",
+    user_menu: str = "", picker: str = "", used: dict[str, list[tuple[str, str]]] | None = None,
+    users: bool = False,
 ) -> str:
-    """Every connection. `used`: name -> (href, label) of the datasets reading
-    from it."""
+    """Every connection. `passwords`: the variables a connection may take its
+    password from (`connections.allowed_passwords`); `used`: name -> (href,
+    label) of the datasets reading from it."""
     used = used or {}
     table = list_table(
         ["Name", "URL", "Datasets", "Updated"],
         [_connection_row(c, used.get(c.name, [])) for c in connections],
         "No connections yet", _add_button("New connection", "openConnection()"),
     )
-    return _shell(title, user_menu, "connections", table, extra=_connection_dialog(),
+    return _shell(title, user_menu, "connections", table, extra=_connection_dialog(passwords or []),
                   picker=picker, users=users, connections=True)
 
 
@@ -1954,20 +1957,20 @@ def _connection_row(c, datasets: list[tuple[str, str]]) -> str:
             f' data-url="/connections/{name}/test" onclick="testConnection(this)">'
             f'<span class="t-idle">{_icon("plug")}</span><span class="t-busy ds-spin"></span>'
             f'<span class="t-ok">{_icon("check")}</span><span class="t-fail">{_icon("cross")}</span></button>')
-    fields = "".join(f' data-{k}="{escape(getattr(c, k), quote=True)}"' for k in ("name", "description", "url"))
+    fields = "".join(f' data-{k.replace("_", "-")}="{escape(getattr(c, k), quote=True)}"'
+                     for k in ("name", "description", "url", "password_env"))
     guard = (f"return confirm('Remove this connection?')" if not datasets
              else f"alert({escape(json.dumps('Datasets read from it: ' + ', '.join(l for _, l in datasets)), quote=True)}); return false")
     actions = (
         test
         + f'<button class="act" type="button" title="Edit"{fields}'
-        + (" data-has-password" if c.has_password else "")
-        + f' onclick="openConnection(this)">{_icon("pencil")}</button>'
+        f' onclick="openConnection(this)">{_icon("pencil")}</button>'
         f'<form method="post" action="/connections/{name}/delete" onsubmit="{guard}">'
         f'<button class="act act-danger" type="submit" title="Remove">{_icon("trash")}</button></form>'
     )
     return (
         f'<tr>'
-        f'<td><span class="name">{escape(c.name)}</span>{_has_password(c)}{_sub(c.description)}</td>'
+        f'<td><span class="name">{escape(c.name)}</span>{_password_env(c)}{_sub(c.description)}</td>'
         f'<td class="muted mono ff-wrap">{escape(c.url)}<div class="conn-error" hidden></div></td>'
         f"<td>{_ref_links(datasets)}</td>"
         f'<td class="muted">{_stamp(c.updated_at)}</td>'
@@ -1975,13 +1978,32 @@ def _connection_row(c, datasets: list[tuple[str, str]]) -> str:
     )
 
 
-def _has_password(c) -> str:
-    return f'<span class="ff-key" title="Has a password">{_icon("key")}</span>' if c.has_password else ""
+def _password_env(c) -> str:
+    """Beside the name, where the password comes from: a key, its tooltip the
+    variable — red, the tooltip saying why, when it gives none."""
+    if not c.password_env:
+        return ""
+    problem = connections_mod.password_problem(c.password_env)
+    tip = escape(problem or f"Password from {c.password_env}", quote=True)
+    return f'<span class="ff-key{" is-missing" if problem else ""}" title="{tip}">{_icon("key")}</span>'
 
 
-def _connection_dialog() -> str:
+def _password_options(passwords: list[str]) -> str:
+    """The password field's choices: none, then each allowed variable — one
+    not set still listed, struck through, for a deployment that adds it later."""
+    unset = {v for v in passwords if connections_mod.env_password(v) is None}
+    return '<option value="">No password</option>' + "".join(
+        f'<option value="{escape(v, quote=True)}"'
+        + (f' class="is-unset" title="{escape(v, quote=True)} is not set"' if v in unset else "")
+        + f">{escape(v)}</option>"
+        for v in passwords
+    )
+
+
+def _connection_dialog(passwords: list[str]) -> str:
     """New and edit, one dialog: the fields — or the same as YAML (code), the
-    form's twin. The password is never filled in: empty keeps it."""
+    form's twin. The password is a variable's name, picked from the allowed
+    ones; its value is never here."""
     modes = "".join(
         f'<button type="button" data-mode="{m}" title="{t}" aria-label="{t}"'
         f'{" class=active" if m == "form" else ""}>{_icon(i)}</button>'
@@ -1997,8 +2019,8 @@ def _connection_dialog() -> str:
       <label>Description</label><textarea name="description"></textarea>
       <label>URL</label><input name="url" class="mono" autocomplete="off" spellcheck="false" required
              placeholder="postgresql+psycopg://user@host:5432/database">
-      <label>Password</label>
-      <input name="password" type="password" autocomplete="new-password" placeholder="">
+      <label>Password variable</label>
+      <select name="password_env" class="mono">{_password_options(passwords)}</select>
     </div>
     <textarea name="yaml" class="ff-sql conn-yaml" rows="7" spellcheck="false" hidden disabled></textarea>
     <div class="dialog-actions">

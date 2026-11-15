@@ -65,7 +65,10 @@ CHAT_ENABLED = bool(os.environ.get("ANTHROPIC_API_KEY"))
 # single-dashboard editor. Tests set `app.state.store` directly.
 PORTAL_ENABLED = bool(os.environ.get("FIREFLYER_PORTAL"))
 PORTAL_TITLE = os.environ.get("FIREFLYER_PORTAL_TITLE", "Fireflyer Portal")
-_DATABASE_URL = portal_mod.database_url() if PORTAL_ENABLED else ""
+# libpq would give PGPASSWORD to any Postgres server a connection names, so it
+# leaves the environment here, before anything connects; the portal's own
+# stores get it in their URL (`connections.take_libpq_password`).
+_DATABASE_URL = connections_mod.take_libpq_password(portal_mod.database_url() if PORTAL_ENABLED else "")
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=assets.STATIC_DIR), name="static")
@@ -1600,7 +1603,7 @@ def _connections() -> connections_mod.ConnectionStore:
     if app.state.connections is None:
         dsn = _DATABASE_URL if PORTAL_ENABLED else f"{_DATA_BASE}/fireflyer.db"
         app.state.connections = connections_mod.ConnectionStore(
-            dsn, auth_mod._secret(), own_url=_DATABASE_URL if PORTAL_ENABLED else "",
+            dsn, own_url=_DATABASE_URL if PORTAL_ENABLED else "",
         )
     return app.state.connections
 
@@ -1637,34 +1640,40 @@ def connections_gallery(request: Request):
         return refused
     store = _connections()
     return portal_mod.render_connections(
-        store.list(), _page_title(), _user_menu(request),
+        store.list(), connections_mod.allowed_passwords(), _page_title(), _user_menu(request),
         used={c.name: _datasets_reading(c.name) for c in store.list()}, users=_users_tab(request),
     )
 
 
-def _connection_form(name: str, description: str, url: str, password: str, text: str) -> dict:
+_CONNECTION_KEYS = ("name", "description", "url", "password_env")
+
+
+def _connection_form(name: str, description: str, url: str, password_env: str, text: str) -> dict:
     """The dialog's fields — or its YAML, when that's what was posted."""
     if not text.strip():
-        return {"name": name, "description": description, "url": url, "password": password}
+        return {"name": name, "description": description, "url": url, "password_env": password_env}
     try:
         doc = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
         raise connections_mod.ConnectionsError(f"not valid YAML: {exc}") from exc
-    if not isinstance(doc, dict) or set(doc) - {"name", "description", "url", "password"}:
-        raise connections_mod.ConnectionsError("a connection takes name, description, url and password")
-    return {k: str(doc.get(k) or "") for k in ("name", "description", "url", "password")}
+    if isinstance(doc, dict) and "password" in doc:
+        raise connections_mod.ConnectionsError("no password here: name the variable that holds it, password_env")
+    if not isinstance(doc, dict) or set(doc) - set(_CONNECTION_KEYS):
+        raise connections_mod.ConnectionsError("a connection takes name, description, url and password_env")
+    return {k: str(doc.get(k) or "") for k in _CONNECTION_KEYS}
 
 
 @app.post("/connections/new")
 async def connections_new(request: Request, name: str = Form(""), description: str = Form(""),
-                          url: str = Form(""), password: str = Form(""), yaml_text: str = Form("", alias="yaml")):
+                          url: str = Form(""), password_env: str = Form(""),
+                          yaml_text: str = Form("", alias="yaml")):
     if refused := _admins_connect(request):
         return refused
     try:
-        form = _connection_form(name, description, url, password, yaml_text)
-        _log(request, "create", "connection", form["name"].strip(), password="set" if form["password"] else "")
+        form = _connection_form(name, description, url, password_env, yaml_text)
+        _log(request, "create", "connection", form["name"].strip(), password_env=form["password_env"])
         _connections().create(form["name"], form["url"], description=form["description"],
-                              password=form["password"], author=_current_author(request))
+                              password_env=form["password_env"], author=_current_author(request))
     except connections_mod.ConnectionsError as exc:
         return _error(exc)
     return RedirectResponse("/connections", status_code=303)
@@ -1672,18 +1681,18 @@ async def connections_new(request: Request, name: str = Form(""), description: s
 
 @app.post("/connections/{old}/edit")
 async def connections_edit(old: str, request: Request, name: str = Form(""), description: str = Form(""),
-                           url: str = Form(""), password: str = Form(""),
+                           url: str = Form(""), password_env: str = Form(""),
                            yaml_text: str = Form("", alias="yaml")):
     if refused := _admins_connect(request):
         return refused
     try:
-        form = _connection_form(name, description, url, password, yaml_text)
+        form = _connection_form(name, description, url, password_env, yaml_text)
         new = form["name"].strip()
         _log(request, "edit", "connection", new, renamed_from=old if old != new else "",
-             password="set" if form["password"] else "")
+             password_env=form["password_env"])
         users = _datasets_reading(old) if new != old else []
         _connections().update(old, new_name=new, url=form["url"], description=form["description"],
-                              password=form["password"])
+                              password_env=form["password_env"])
     except connections_mod.ConnectionsError as exc:
         return _error(exc)
     # Datasets name their connection in `source:`: they follow the new name.
@@ -3128,8 +3137,9 @@ def _set_up_usage() -> None:
     admin = auth_mod.admin_name()
     connections = _connections()
     if connections.get(usage_mod.CONNECTION) is None:
-        connections.create(usage_mod.CONNECTION, usage_mod.connection_url(_DATABASE_URL), description=usage_mod.CONNECTION_DESCRIPTION,
-                           author=admin)
+        connections.create(usage_mod.CONNECTION, usage_mod.connection_url(_DATABASE_URL),
+                           description=usage_mod.CONNECTION_DESCRIPTION,
+                           password_env=connections_mod.OWN_PASSWORD, author=admin)
     for name, (description, sql) in usage_mod.DATASETS.items():
         source = {"connection": usage_mod.CONNECTION, "query": sql}
         try:

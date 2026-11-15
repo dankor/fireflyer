@@ -85,7 +85,11 @@ services:
         required: false
     environment:
       FIREFLYER_PORTAL: "1"
-      DATABASE_URL: postgresql://fireflyer:fireflyer@postgres:5432/fireflyer
+      DATABASE_URL: postgresql://fireflyer@postgres:5432/fireflyer
+      # The portal's password — and what a connection naming PGPASSWORD (the
+      # usage analytics' `internal`) gets. Others a connection may name are
+      # listed in FIREFLYER_CONNECTION_PASSWORDS (comma-separated).
+      PGPASSWORD: fireflyer
       # Login defaults to admin/admin. Override user/pass and set a real session
       # secret for anything beyond local use (FIREFLYER_USER/PASSWORD/SECRET).
       FIREFLYER_SECRET: dev-portal-secret-change-me

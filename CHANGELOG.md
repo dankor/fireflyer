@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-15
+
+### Changed
+
+- **A connection's password is an environment variable.** A connection gives
+  the name of the variable that holds its password (`password_env`), not the
+  password. Fireflyer reads the value when the connection opens and keeps it
+  nowhere. The dialog shows the allowed variables: `PGPASSWORD`, the portal's
+  own, and the names in `FIREFLYER_CONNECTION_PASSWORDS`. A key beside the
+  name shows the variable. The key is red when the variable is not set.
+- **A URL holds no password.** A connection with a password in its URL is
+  refused.
+- **`internal` uses the portal's password.** It names `PGPASSWORD`. If
+  `DATABASE_URL` has a password in it, that password is the portal's.
+
+### Removed
+
+- **Stored connection passwords.** On the first start, the `secret` column is
+  removed. A connection to the portal's own database names `PGPASSWORD`. Give
+  each other connection a variable.
+
+### Security
+
+- **`PGPASSWORD` leaves the environment at start-up**, and `PGPASSFILE` points
+  to nothing. Before, libpq could send the portal's password to each Postgres
+  server that a connection names without a password.
+
 ## [0.28.0] - 2026-11-13
 
 ### Added
@@ -1492,7 +1519,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/dankor/fireflyer/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/dankor/fireflyer/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/dankor/fireflyer/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/dankor/fireflyer/compare/v0.25.0...v0.26.0

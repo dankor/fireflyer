@@ -120,6 +120,8 @@ dialog input[readonly] { color:var(--muted); }
 /* How a user signs in, beside the name: a key (a password), or another system. */
 .dash-table .ff-key { display:inline-flex; vertical-align:-2px; margin-left:6px; color:var(--muted); }
 .dash-table .ff-key svg { width:13px; height:13px; }
+.dash-table .ff-key.is-missing { color:var(--danger); }
+dialog select option.is-unset, dialog select option.is-other { color:var(--muted); text-decoration:line-through; }
 /* A built-in's padlock: where its edit and remove would be, not a button. */
 .act-locked, .act-locked:hover { border-color:transparent; color:var(--muted); cursor:default; }
 .act .badge { font-weight:600; }
