@@ -3115,7 +3115,7 @@ if PORTAL_ENABLED:
 
 
 # --- usage analytics -----------------------------------------------------------------
-# Shipped with the portal (`web/usage.py`): a connection `internal` to the
+# Shipped with the portal (`web/usage/`): a connection `internal` to the
 # portal's own database, datasets on it and the Fireflyer Usage dashboard, in
 # the admin's group. Made once — when that group has none of the datasets — and
 # never again: after that they're the admin's to change or remove.

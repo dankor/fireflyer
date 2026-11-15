@@ -5,6 +5,7 @@ analytics shipped with the portal. Databases here are sqlite files; Postgres
 only in Docker."""
 
 import json
+import pathlib
 import re
 import sqlite3
 
@@ -397,6 +398,16 @@ def test_the_usage_dashboard_is_valid_and_reads_the_usage_datasets():
 
     read_by_charts = {c["dataset"] for c in yaml.safe_load(DASHBOARD)["charts"].values()}
     assert read_by_charts <= set(DATASETS)
+
+
+def test_usage_ships_as_files_beside_its_code():
+    folder = pathlib.Path(usage_mod.__file__).parent
+    assert sorted(DATASETS) == sorted(p.stem for p in (folder / "datasets").glob("*.sql"))
+    for name, (description, sql) in DATASETS.items():
+        assert description and not description.startswith("-"), name     # the first `--` line
+        assert sql.lower().startswith(("select", "with")), name           # the rest, without it
+    assert DASHBOARD == (folder / "dashboard.yaml").read_text()
+    assert usage_mod.DASHBOARD_NAME == "Fireflyer Usage"
 
 
 def test_the_usage_connection_names_its_driver():

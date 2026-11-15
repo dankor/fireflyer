@@ -1,0 +1,6 @@
+-- What people did: each action, who did it and when
+select at::timestamptz as at, actor, action,
+       coalesce(nullif(object_type, ''), action) as object_type,  -- a login is on nothing
+       object_name, group_name, status_code, status_code >= 400 as failed,
+       detail::jsonb ->> 'error' as error  -- why it failed, in the words it was refused with
+from activity
