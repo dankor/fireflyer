@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.3] - 2026-11-16
+
+### Fixed
+
+- **The tests give the same result on every machine.** They use the timezone
+  data of the `tzdata` package, not the files of the machine. On a machine with
+  a wrong `UTC` file, three `str2dt()` tests failed: Python showed `+03:00`
+  for UTC. The `test` extra installs `tzdata`. Without it, the tests stop and
+  tell you to install it.
+
 ## [0.31.2] - 2026-11-16
 
 ### Fixed
@@ -1600,7 +1610,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.31.2...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.31.3...HEAD
+[0.31.3]: https://github.com/dankor/fireflyer/compare/v0.31.2...v0.31.3
 [0.31.2]: https://github.com/dankor/fireflyer/compare/v0.31.1...v0.31.2
 [0.31.1]: https://github.com/dankor/fireflyer/compare/v0.31.0...v0.31.1
 [0.31.0]: https://github.com/dankor/fireflyer/compare/v0.30.0...v0.31.0

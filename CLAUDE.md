@@ -92,6 +92,7 @@ Snapshot-based. Each test pairs an input CSV + chart/dashboard definition with e
 
 - A rendering change will fail the relevant snapshot. If the change is intentional, regenerate with `UPDATE_SNAPSHOTS=1` and **review the diff** before committing.
 - `dashboard.css` is injected into every dashboard render, so editing it changes the dashboard snapshot even when markup is unchanged — that's expected.
+- **Machine-agnostic.** `tests/conftest.py` makes `zoneinfo` read only the `tzdata` package (the `test` extra), never the machine's timezone files — a wrong system `UTC` file shifts every datetime Polars hands to Python. Snapshots normalize the checkout path the same way (`_portable`).
 
 ## Rendering rules (enforced, not stylistic)
 
