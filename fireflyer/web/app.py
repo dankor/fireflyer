@@ -51,6 +51,7 @@ from fireflyer.dashboard import (
 )
 from fireflyer.web import assets
 from fireflyer.web import auth as auth_mod
+from fireflyer.web import oidc as oidc_mod
 from fireflyer.web import chat as chat_mod
 from fireflyer.web import portal as portal_mod
 from fireflyer.web import paths as paths_mod
@@ -879,7 +880,7 @@ def _user_menu(request: Request, extra: str = "") -> str:
 def login_form():
     if app.state.authenticator is None:  # auth off: nothing to log in to
         return RedirectResponse("/", status_code=303)
-    return auth_mod.login_page(title=PORTAL_TITLE)
+    return auth_mod.login_page(title=PORTAL_TITLE, sso=app.state.oidc is not None)
 
 
 @app.post("/login")
@@ -893,7 +894,7 @@ async def login_submit(request: Request, username: str = Form(""), password: str
     except portal_mod.RoleError:
         # The page asks again with 200; the row says what it was — 401.
         _log(request, "login", actor=username, status_code=401, error="Invalid username or password")
-        return auth_mod.login_page("Invalid username or password.", PORTAL_TITLE)
+        return auth_mod.login_page("Invalid username or password.", PORTAL_TITLE, sso=app.state.oidc is not None)
     _log(request, "login", actor=found[0], source=found[1])
     return resp
 
@@ -1264,6 +1265,12 @@ def _role_store():
         # Portal mode has people: the login is the built-in admin user.
         app.state.roles = portal_mod.RoleStore(dsn, admin=auth_mod.admin_name() if PORTAL_ENABLED else "")
     return app.state.roles
+
+
+# --- single sign-on (OIDC): all of it in `web/oidc.py` ----------------------------------
+# On in portal mode when FIREFLYER_OIDC_* are set. Tests set `app.state.oidc`.
+app.state.oidc = oidc_mod.from_env() if PORTAL_ENABLED else None
+app.include_router(oidc_mod.routes(sign_in, _role_store, _log, PORTAL_TITLE))
 
 
 def _every_dataset_store() -> list[DatasetStore]:

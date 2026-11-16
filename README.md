@@ -83,6 +83,7 @@ For anyone in a hurry. *"Add a table of orders."* *"Put the pie next to it."* *"
 - **Datasets** — [upload a CSV](docs/use-cases.md#upload-a-dataset) or [read one from a database](docs/use-cases.md#read-a-dataset-from-a-database), shape its columns with formulas, keep every version and [compare them](docs/use-cases.md#compare-dataset-versions).
 - **Usage** (portal) — a [Fireflyer Usage dashboard](docs/use-cases.md#see-how-fireflyer-is-used) on Fireflyer's own database: who uses what, what fails, what is stored.
 - **Access** — roles, [users](docs/use-cases.md#add-users-and-their-roles) (portal), [per-dataset permissions](docs/use-cases.md#set-dataset-permissions) with row filters, enforced for everyone signed in, and a "view as" picker for admins to preview what a role or a user sees.
+- **Single sign-on** (portal) — [sign in through Keycloak](docs/use-cases.md#sign-in-with-single-sign-on) or any other OpenID Connect provider; a new person gets a user and a group of their own, no roles.
 - **Groups** (portal) — everyone works in their own group, admins add shared ones, and a dataset [shared through a role](docs/use-cases.md#share-across-groups) is read from another group as `group:dataset`.
 - **History** — every save is a version; [compare any two](docs/use-cases.md#compare-versions) side by side.
 - **Private by design** — the AI sees your column names and types, never your data.

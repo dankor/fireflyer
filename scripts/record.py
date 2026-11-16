@@ -490,8 +490,31 @@ def usage(clip: Clip) -> None:
     clip.hold(2.6)
 
 
+def sso(clip: Clip) -> None:
+    """docs/use-cases.md → "Sign in with single sign-on" (portal mode, with
+    FIREFLYER_OIDC_* set). Needs a provider with a user `ann.lee`, password
+    `ann-pass-123` — a local Keycloak at `keycloak:8080`, which the browser
+    reaches with `--host-rules "MAP keycloak 127.0.0.1"`. Removes the user
+    `ann.lee` first and signs out, so the scene shows them made."""
+    page, base = clip.page, clip.base
+    page.request.post(f"{base}/users/ann.lee/delete")
+    page.request.post(f"{base}/logout")
+    page.context.clear_cookies()
+
+    clip.goto("/login")
+    clip.hold(1.2)
+    clip.click("a.sso", settle=1.2)                                   # to the provider
+    clip.click("#username", settle=0.1)
+    _fast(clip, "ann.lee", 3)
+    clip.click("#password", settle=0.1)
+    _fast(clip, "ann-pass-123", 4)
+    clip.click("#kc-login", settle=1.6)                               # back, signed in: their own group
+    clip.click("details.ff-profile summary", settle=1.6)              # who they are
+    clip.hold(1.2)
+
+
 SCENES = {
-    "users-roles": users_roles, "groups": groups, "edit-chart": edit_chart,
+    "users-roles": users_roles, "sso": sso, "groups": groups, "edit-chart": edit_chart,
     "filter-text": filter_text, "filter-number": filter_number, "filter-date": filter_date,
     "filter-yes-no": filter_yes_no, "filter-list": filter_list,
     "dataset-query": dataset_query, "usage": usage,
@@ -502,9 +525,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("scene", choices=sorted(SCENES))
     parser.add_argument("--base", default="http://127.0.0.1:8000")
+    parser.add_argument("--host-rules", default="",
+                        help="Chromium's host resolver rules, e.g. \"MAP keycloak 127.0.0.1\" (the sso scene)")
     args = parser.parse_args()
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(args=[f"--host-resolver-rules={args.host_rules}"] if args.host_rules else [])
         # The portal's own certificate is self-signed.
         page = browser.new_page(viewport=SIZE, color_scheme="dark", ignore_https_errors=True)
         page.add_init_script(_CURSOR)

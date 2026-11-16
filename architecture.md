@@ -428,7 +428,10 @@ calcs, crossfilters, the uses index and the editor's pickers (two keys naming
 one dataset is an error). An inline dataset shadows a **bare** name only, never
 a qualified one. Outside portal mode there are no groups: a `group:` reference
 is a validation error ("there are no groups here"), shown by the YAML lint like
-any other. Group and dataset names are `[A-Za-z0-9_-]`; `fireflyer/groups.py`
+any other. Dataset names are `[A-Za-z0-9_-]`. Group names are the same, and
+can also hold a dot between two parts (`_ann.lee`, `eu.sales`); a dot is never
+at an end or next to another, so a group is never `.` or `..` in a file path.
+`fireflyer/groups.py`
 holds the rules, the reference helpers and the URL escaping.
 
 A managed dataset's files live in an `ObjectStore` — a local folder for
@@ -1649,8 +1652,9 @@ one. Local mode has no built-ins.
 ## Users tab
 
 Portal mode only — it has a login, so there are people. The fourth list page
-lists **users**: a name each (unique, required, and **lowercase latin letters,
-then letters or digits** — `[a-z][a-z0-9]*` — since their group, `_<name>`,
+lists **users**: a name each (unique, required, and **lowercase latin letters
+and digits, a letter first, a dot between two parts** —
+`[a-z][a-z0-9]*(\.[a-z0-9]+)*`, so `ann.lee` — since their group, `_<name>`,
 carries it; and so it **never changes**: the dialog's name is read-only once
 made), an optional **first
 name**, **surname** and **email** (shown as the small line under the name —
@@ -1737,11 +1741,12 @@ whole point — it's what makes advanced schemes easy:
    of *how* the identity was proven.
 
 A single middleware guard redirects any unauthenticated request to `/login`;
-`GET/POST /login` and `POST /logout` are the only auth routes. The topbar shows
+`GET/POST /login`, `POST /logout` and, when single sign-on is on, `GET
+/auth/oidc` and its callback are the auth routes. The topbar shows
 the signed-in username and a **Log out** button, in both the gallery and the
 editor.
 
-### Users from other systems — SSO, LDAP, … (the seam; no provider is built in)
+### Users from other systems — SSO, LDAP, …
 
 A user has a **source**: `local` (a password kept here) or the name of the
 system that proves who they are — `sso`, `ldap`, `google`, whatever the
@@ -1767,18 +1772,80 @@ here**, as for anyone. Two ways to plug one in:
    added to the `AnyOf` in `app.state.authenticator`. The login form does the
    rest — `auth.identify` reports which authenticator accepted, and `sign_in`
    provisions its users as `ldap`.
-2. **A redirect flow** (OIDC / OAuth / SAML — Google, Okta, Entra…): a route pair
+2. **A redirect flow** (OAuth, SAML, another OIDC provider): a route pair
    **under `/auth/`**, which the login guard leaves open because it runs before
    there's a session — `GET /auth/<provider>` redirects to the IdP, and
    `GET /auth/<provider>/callback` exchanges the code, verifies the token, then
    calls `sign_in(request, response, <identity>, "<provider>", first_name=…, email=…)`.
-   Add a button for it to the login page.
+   Add a button for it to the login page. OpenID Connect is built in this way
+   (below).
 
 The guard, logout, `current_user`, the admin checks and every portal route stay
 as they are: they only ask "is there a valid session, and whose?", never "how
-did you log in?". Token refresh, group-to-role mapping (a provider's groups
-could pick the user's roles in `provision`), and a stable subject id beside the
-name are left for when an integration needs them.
+did you log in?". Token refresh and group-to-role mapping (a provider's groups
+could pick the user's roles in `provision`) are left for when they are needed.
+
+### Single sign-on with OpenID Connect
+
+`fireflyer/web/oidc.py`, for Keycloak or any other OpenID Connect provider. It
+is on in portal mode when four settings are set, and off when none is
+(`oidc.settings`; some but not all stop the portal).
+
+| Setting | Value |
+| --- | --- |
+| `FIREFLYER_OIDC_ISSUER` | The issuer, for example `https://sso.example.com/realms/team`. Its `/.well-known/openid-configuration` gives the endpoints. |
+| `FIREFLYER_OIDC_CLIENT_ID` | The client at the provider. |
+| `FIREFLYER_OIDC_CLIENT_SECRET` | The client's secret: a confidential client. |
+| `FIREFLYER_OIDC_REDIRECT_URI` | `https://<portal>/auth/oidc/callback`, as registered at the provider. |
+
+The feature is a module of its own. `oidc.routes(sign_in, roles, log, title)`
+makes its two routes, and gets what it needs from the app as arguments: the
+one way into a session, the role store, the activity log and the page title.
+`app.py` adds them with one `include_router` line and sets `app.state.oidc =
+oidc.from_env()`; while that is `None`, the routes answer 404. The file does
+not import the app, and its tests run it on a bare FastAPI app too.
+
+The login page then shows **Single sign-on** under the form. The flow is the
+authorization code flow with PKCE:
+
+1. **`GET /auth/oidc`** (`Provider.start`) sends the browser to the provider's
+   authorization endpoint with a random `state`, `nonce` and PKCE challenge
+   (S256), and scope `openid profile email`. The three values and the time go
+   in a cookie of their own, `ff_oidc` (path `/auth/oidc`, `HttpOnly`,
+   `SameSite=Lax`, `Secure` over HTTPS, ten minutes), signed with
+   `FIREFLYER_SECRET` and a purpose of its own, so a session cookie can never
+   pass for it. The server keeps no state.
+2. **`GET /auth/oidc/callback`** (`Provider.finish`) needs that cookie, fresh,
+   and the same `state`. It exchanges the code at the token endpoint (the
+   client's id and secret as HTTP Basic, the PKCE verifier) and checks the ID
+   token with PyJWT: an asymmetric algorithm only (RS, PS or ES — never `none`
+   or an HMAC), a key of the provider's JWKS (fetched again once for an unknown
+   key id: a rotation), the issuer, the audience (and `azp` when there are
+   more), `exp` and `iat` (60 seconds of clock skew), a `sub`, and the
+   `nonce`. The user-info endpoint is never asked: nothing unchecked is taken
+   as who someone is. The response removes the state cookie either way, and
+   the provider takes a code only once, so a callback cannot be replayed.
+3. **The user.** `oidc.identity` gives the **subject** — the issuer and `sub`,
+   stable and unique — the name wanted (`preferred_username`, else the email's
+   first part, else the given name) and the profile (given and family name,
+   email). `RoleStore.user_by_subject` finds a user who signed in before; a
+   new one gets `RoleStore.free_user_name`: what a user name may hold of the
+   wanted name (lowercase latin letters and digits, a letter first, a dot
+   between two parts, at most 32: `ann.lee` stays `ann.lee`), with a number
+   after it when taken (`ann.lee2`), never the admin's. Then
+   `sign_in(..., "oidc", subject=…, **profile)` provisions them with no roles.
+   The `users.subject` column binds the name to the subject: `provision`
+   refuses a name that holds another subject. A new username at the provider
+   is the same user here, and the name never changes.
+
+A failure answers the login page with "Single sign-on failed." (401). The
+reason goes to the activity log (`login`, source `oidc`, its `error`), never a
+token or a secret. Which people may sign in is set on the provider's client;
+what they may read here, the roles an admin gives them. **Log out** ends the
+session here, not at the provider: the next **Single sign-on** can come back
+at once. The env admin login stays, for the first roles. Tested in
+`tests/test_oidc.py` against a fake provider that signs real tokens, and by hand
+against Keycloak 26.
 
 ## Connections
 

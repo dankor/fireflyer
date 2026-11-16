@@ -193,6 +193,9 @@ _USERS_SCHEMA = (
     # Who proves who they are: `local` (the password above), or the name of the
     # identity provider that does (sso, ldap, …) — see `RoleStore.provision`.
     " source TEXT NOT NULL DEFAULT 'local',"
+    # The provider's own stable id for an outside user (OIDC: issuer and `sub`),
+    # found by on every sign-in — so their name here never has to match theirs.
+    " subject TEXT NOT NULL DEFAULT '',"
     " session_key TEXT NOT NULL DEFAULT '',"
     " created_at TEXT NOT NULL,"
     " updated_at TEXT NOT NULL)"
@@ -303,7 +306,7 @@ def _role_name(name: str, roles: list, keep: str = "", kind: str = "role") -> st
     if "/" in name or "\\" in name or name.startswith("."):
         raise RoleError(f"a {kind} name can't contain / or \\ or start with a dot")
     if kind == "user" and name != keep and not _valid_user(name):
-        raise RoleError("a user name is lowercase latin letters, then letters or digits")
+        raise RoleError("a user name is lowercase latin letters and digits, a letter first, a dot between parts")
     if any(r.name == name and r.name != keep for r in roles):
         raise RoleError(f"there is already a {kind} named {name!r}")
     return name
@@ -361,13 +364,19 @@ class RoleStore:
         bad = [u.name for u in self.users()[1:] if not _valid_user(u.name)]
         if bad:
             raise SystemExit(
-                "rename these users first — a user name is lowercase latin letters, then"
-                f" letters or digits: {', '.join(bad)}"
+                "rename these users first — a user name is lowercase latin letters and"
+                f" digits, a letter first, a dot between parts: {', '.join(bad)}"
             )
 
     def _create(self) -> None:
         for schema in (_ROLES_SCHEMA, _USERS_SCHEMA, _USER_ROLES_SCHEMA, _GROUPS_SCHEMA):
             self._run(schema)
+        try:
+            self._run("SELECT subject FROM users LIMIT 1")
+        except Exception:                           # a table from before single sign-on
+            if self._pg:
+                self._conn.rollback()
+            self._run("ALTER TABLE users ADD COLUMN subject TEXT NOT NULL DEFAULT ''")
 
     def _run(self, sql: str, params: tuple = ()) -> list[tuple]:
         if self._pg:
@@ -516,24 +525,30 @@ class RoleStore:
         return name
 
     def provision(self, name: str, source: str, first_name: str = "", last_name: str = "",
-                  email: str = "") -> str:
+                  email: str = "", subject: str = "") -> str:
         """A user another system (`source`: sso, ldap, …) has just signed in:
         made here the first time — no roles yet, no password — and their
         profile refreshed from the provider after. Returns the key their
         session carries. Refused for a name a local user or the admin holds,
-        or another provider's: one system can't sign in as another's user."""
+        or another provider's: one system can't sign in as another's user.
+        `subject`: the provider's stable id, kept the first time — a name that
+        holds another is refused, so no one takes over someone else's user."""
         if source == LOCAL:
             raise RoleError("a local user signs in with their password")
         held = self.user(name)
         if held and (held.builtin or held.source != source):
             raise RoleError(f"{name} doesn't sign in through {source}")
+        if held and subject:
+            [(kept,)] = self._run("SELECT subject FROM users WHERE name = ?", (name,))
+            if kept and kept != subject:
+                raise RoleError(f"{name} is another person at {source}")
         person = _person(first_name, last_name, email)
         if held is None:
             now = _now()
             self._run(
-                "INSERT INTO users (name, first_name, last_name, email, source, session_key,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (_role_name(name, self.users(), kind="user"), *person, source,
+                "INSERT INTO users (name, first_name, last_name, email, source, subject, session_key,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (_role_name(name, self.users(), kind="user"), *person, source, subject,
                  auth.new_session_key(), now, now),
             )
             self._ensure_group(groups.personal(name), personal=True)
@@ -543,6 +558,24 @@ class RoleStore:
             sets = ", ".join(f"{k} = ?" for k in given)
             self._run(f"UPDATE users SET {sets}, updated_at = ? WHERE name = ?", (*given.values(), _now(), name))
         return self.session_key(name)
+
+    def user_by_subject(self, source: str, subject: str) -> str | None:
+        """The name of `source`'s user `subject`, if they signed in before."""
+        rows = self._run("SELECT name FROM users WHERE source = ? AND subject = ?", (source, subject))
+        return rows[0][0] if rows else None
+
+    def free_user_name(self, wanted: str) -> str:
+        """A name for a new user from `wanted` (a provider's username): what a
+        user name may hold of it — lowercase latin letters and digits, a letter
+        first, a dot between parts (`ann.lee`) — and a number after it when
+        it's taken (`ann.lee2`). "user" when nothing of it is left."""
+        kept = re.sub(r"\.+", ".", re.sub(r"[^a-z0-9.]", "", wanted.lower()))
+        base = kept.lstrip("0123456789.")[:32].rstrip(".") or "user"
+        taken = {u.name for u in self.users()} | {self._admin}
+        name, n = base, 2
+        while name in taken:
+            name, n = f"{base}{n}", n + 1
+        return name
 
     def _hold(self, user: str, roles) -> None:
         known = {r.name for r in self.roles()}

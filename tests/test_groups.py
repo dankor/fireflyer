@@ -46,11 +46,14 @@ def test_any_dashboard_name_survives_its_url(name):
     assert groups.from_url(unquote(segment)) == name
 
 
-@pytest.mark.parametrize("bad", ["_mine", "sales:x", "my group", ""])
+@pytest.mark.parametrize("bad", ["_mine", "sales:x", "my group", "", ".", "..", "a..b", ".a", "a.", "a/b"])
 def test_a_shared_groups_name_is_plain_and_not_a_personal_ones(bad):
     with pytest.raises(groups.GroupError):
         groups.check_group_name(bad)
     assert groups.check_group_name("sales-2") == "sales-2"
+    assert groups.check_group_name("eu.sales") == "eu.sales"   # a dot between two parts
+    with pytest.raises(groups.GroupError):
+        groups.check_name("a.b", "dataset")                    # never in a dataset's
 
 
 def test_the_cascades_rewrite_references_wherever_a_dataset_is_named():
