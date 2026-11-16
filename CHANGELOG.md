@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reply arrives, so the change could be done twice. Now only a read runs
   again. For a change, the portal answers 503 with the message that the change
   is possibly saved. Check it before you do it again. The next request opens a
-  new connection.
+  new connection. A dataset upload gives the same answer, not a storage error
+  (502).
 
 ## [0.31.0] - 2026-11-16
 
