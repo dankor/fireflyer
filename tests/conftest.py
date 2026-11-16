@@ -1,8 +1,20 @@
 import re
+import zoneinfo
 from pathlib import Path
 from urllib.parse import quote_plus
 
 import pytest
+
+# Timezone data from the `tzdata` package (the `test` extra), never the
+# machine's files: Polars computes datetimes with its own data, but hands them
+# to Python with a `ZoneInfo` — and a machine whose UTC file is wrong shifts
+# them (`14:14:03+03:00` for `14:14:03` UTC). The same result on every machine.
+try:
+    import tzdata  # noqa: F401
+except ImportError:
+    raise SystemExit('the tests need the tzdata package: pip install -e ".[test]"')
+zoneinfo.reset_tzpath(())
+zoneinfo.ZoneInfo.clear_cache()
 
 DATA_DIR = Path(__file__).parent / "data"
 SNAPSHOTS_DIR = Path(__file__).parent / "snapshots"
