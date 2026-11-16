@@ -38,11 +38,13 @@ def test_users_are_created_with_roles_listed_edited_and_deleted(store):
     assert [u.name for u in store.users()] == ["alice"] and [g.name for g in store.groups()] == ["_alice"]
 
 
-@pytest.mark.parametrize("bad", ["Bob", "bob.smith", "dana@corp", "_x", "1st", "bøb"])
-def test_a_user_name_is_lowercase_latin_letters_then_digits(store, bad):
-    with pytest.raises(RoleError, match="lowercase latin"):
+@pytest.mark.parametrize("bad", ["Bob", "dana@corp", "_x", "1st", "bøb", ".bob", "bob.", "bob..smith", "bob.Smith"])
+def test_a_user_name_is_lowercase_latin_letters_then_digits_and_dots_between(store, bad):
+    with pytest.raises(RoleError, match="user name"):
         store.create_user(bad)
     assert store.create_user("bob2") == "bob2"
+    assert store.create_user("ann.lee") == "ann.lee"
+    assert store.group("_ann.lee").personal                   # their group carries the dot
 
 
 def test_users_from_before_the_rule_stop_the_portal(tmp_path):

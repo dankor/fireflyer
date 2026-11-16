@@ -41,6 +41,7 @@ Give the settings as environment variables.
 | `FIREFLYER_PORT` | The port. The default is `8000`. |
 | `FIREFLYER_CONNECTION_PASSWORDS` | The variables that a connection can take its password from, with commas between them. See [Connections](#connections). |
 | `ANTHROPIC_API_KEY` | The key for the AI assistant. Optional. |
+| `FIREFLYER_OIDC_*` | Single sign-on. See [Single sign-on](#single-sign-on). |
 
 If `FIREFLYER_PASSWORD` or `FIREFLYER_SECRET` is not set, the portal does not
 start. Their defaults are public.
@@ -106,6 +107,37 @@ any host that the pod can reach. Limit the outbound network of the pod to the
 databases that you use. For the usage analytics, you can give `internal` a
 read-only user: change its URL and its password variable on the Connections
 tab.
+
+## Single sign-on
+
+The portal can sign people in through an OpenID Connect provider, such as
+Keycloak. Set all four settings, or none:
+
+| Variable | Value |
+| --- | --- |
+| `FIREFLYER_OIDC_ISSUER` | The issuer, for example `https://sso.example.com/realms/team`. |
+| `FIREFLYER_OIDC_CLIENT_ID` | The client at the provider, for example `fireflyer`. |
+| `FIREFLYER_OIDC_CLIENT_SECRET` | The secret of the client. Keep it in a secret store. |
+| `FIREFLYER_OIDC_REDIRECT_URI` | `https://<portal>/auth/oidc/callback`. |
+
+If only some of them are set, the portal does not start.
+
+At the provider:
+
+1. Make a confidential client (in Keycloak: **Client authentication** on) with
+   the standard flow (authorization code).
+2. Add the redirect URI above as a valid redirect URI.
+3. Let only the people who may use the portal sign in to the client.
+
+The pod must reach the issuer, for the provider's keys and the code exchange.
+The browser must reach it too, at the same address.
+
+A new person gets a user with no roles and a group of their own. The name of
+the user comes from their username at the provider, and a number is added if
+the name is taken. The portal finds the user again by the provider's id for
+them, not by name. Give roles on the **Users** tab. **Log out** ends the session
+in the portal, not at the provider. The admin login (`FIREFLYER_USER`) stays
+available. Use it to give the first roles.
 
 ## Upgrades
 

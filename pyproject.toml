@@ -1,6 +1,6 @@
 [project]
 name = "fireflyer"
-version = "0.30.0"
+version = "0.31.0"
 description = "Turn CSVs into HTML visualizations."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,13 +25,15 @@ dependencies = [
 
 [project.optional-dependencies]
 # `cryptography`: the portal's HTTPS certificate tests (tests/test_portal_tls.py);
-# `httpx`: Starlette's TestClient, which the route tests use.
-test = ["pytest>=8.0", "cryptography>=42", "httpx>=0.27"]
+# `httpx`: Starlette's TestClient, which the route tests use; `PyJWT`: the
+# single sign-on tests, which sign ID tokens of their own.
+test = ["pytest>=8.0", "cryptography>=42", "httpx>=0.27", "PyJWT[crypto]>=2.8"]
 # Portal mode only: the Postgres driver + the S3 client for Garage/S3 dataset
-# storage, and `cryptography` to make the local HTTPS certificate. Kept out of
+# storage, `cryptography` to make the local HTTPS certificate, and PyJWT + httpx
+# for single sign-on (OIDC: the ID token's checks, the provider's calls). Kept out of
 # the core install and the test suite (stdlib sqlite + a local-folder object
 # store), so neither needs a database or object-store driver.
-portal = ["psycopg[binary]>=3.1", "boto3>=1.34", "cryptography>=42"]
+portal = ["psycopg[binary]>=3.1", "boto3>=1.34", "cryptography>=42", "PyJWT[crypto]>=2.8", "httpx>=0.27"]
 
 [build-system]
 requires = ["hatchling"]

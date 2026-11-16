@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-16
+
+### Added
+
+- **[Single sign-on](docs/use-cases.md#sign-in-with-single-sign-on)** through
+  OpenID Connect, for Keycloak or any other provider. Set the four
+  `FIREFLYER_OIDC_*` settings. The login page then shows **Single sign-on**.
+  The portal uses the authorization code flow with PKCE, and checks the
+  signature, issuer, audience, expiry and nonce of the ID token. A new person
+  gets a user with no roles and a group of their own. Their name comes from
+  their username at the provider: `ann.lee` stays `ann.lee`. The portal finds
+  them again by the
+  provider's id, so a new username at the provider is the same user.
+  [How to connect a provider](docs/deployment.md#single-sign-on).
+- **`--host-rules`** for `scripts/record.py`, and the `sso` scene.
+
+### Changed
+
+- **A user name can hold a dot between two parts**: `ann.lee`, with the group
+  `_ann.lee`. A group name can hold one too. A dot is never at an end or next
+  to another. Dataset names do not change.
+- **Single sign-on is a module of its own**, `fireflyer/web/oidc.py`. The app
+  adds its routes in one line. `CLAUDE.md` has a new rule, **Keep it simple**.
+- **Users have a `subject` column**: the provider's id of a user from another
+  system. It is added on the first start.
+- **The `portal` extra installs PyJWT and httpx.** The `test` extra installs
+  PyJWT.
+
 ## [0.30.0] - 2026-11-15
 
 ### Added
@@ -1552,7 +1580,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/dankor/fireflyer/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/dankor/fireflyer/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/dankor/fireflyer/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/dankor/fireflyer/compare/v0.27.0...v0.28.0

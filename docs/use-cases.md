@@ -43,6 +43,7 @@ column of every type to filter.
   - [Set dataset permissions](#set-dataset-permissions)
 - [Access](#access)
   - [Add users and their roles](#add-users-and-their-roles)
+  - [Sign in with single sign-on](#sign-in-with-single-sign-on)
   - [Share across groups](#share-across-groups)
   - [See how Fireflyer is used](#see-how-fireflyer-is-used)
 - [End-to-end](#end-to-end)
@@ -346,6 +347,20 @@ a dataset another of theirs reads is struck out. The admin user (your login)
 and the `admin` role, which reads everything, are built in and locked.
 
 ![Adding a user and their roles, then viewing the dashboard as them](../media/users-roles.webp)
+
+### Sign in with single sign-on
+
+If the portal is connected to a sign-in provider, such as Keycloak, the login
+page shows **Single sign-on**. Click it and sign in at the provider. Then you
+come back to the portal, signed in.
+
+The first time, the portal adds you as a user, with a group of your own and
+no roles. Your user name comes from your username at the provider, for
+for example `ann.lee`. An admin gives you roles on **Users**, as for
+other users. You keep the same user if your username at the provider changes.
+To connect a provider, see [Deploy the portal](deployment.md#single-sign-on).
+
+![Signing in through Keycloak, then landing in your own group](../media/sso.webp)
 
 ### Share across groups
 

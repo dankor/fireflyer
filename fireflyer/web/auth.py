@@ -255,8 +255,11 @@ def user_menu(identity: str, extra: str = "") -> str:
     )
 
 
-def login_page(error: str = "", title: str = "Fireflyer Portal") -> HTMLResponse:
+def login_page(error: str = "", title: str = "Fireflyer Portal", sso: bool = False) -> HTMLResponse:
+    """The sign-in form; `sso`: single sign-on is on, so a way to it under the
+    form (`/auth/oidc`)."""
     err_html = f'<div class="err">{escape(error)}</div>' if error else ""
+    sso_html = '<a class="sso" href="/auth/oidc">Single sign-on</a>' if sso else ""
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -274,6 +277,7 @@ def login_page(error: str = "", title: str = "Fireflyer Portal") -> HTMLResponse
     <label for="p">Password</label>
     <input id="p" name="password" type="password" autocomplete="current-password">
     <button type="submit">Sign in</button>
+    {sso_html}
     {err_html}
   </form>
 </div>

@@ -16,12 +16,16 @@ from __future__ import annotations
 import re
 from urllib.parse import quote
 
-# A group's and a dataset's name: plain ASCII, so a reference never needs
-# quoting and `:` is free to join the two. A leading `_` is a personal group's.
+# A dataset's name: plain ASCII, so a reference never needs quoting and `:` is
+# free to join a group's and a dataset's. A group's may also hold a dot between
+# two parts (`_ann.lee`) — never at an end or twice, so never `.` or `..` in a
+# file path. A leading `_` is a personal group's.
 _NAME = re.compile(r"[A-Za-z0-9_-]+")
-# A user's name: lowercase latin letters, digits after the first — the
-# personal group `_<name>` is then a valid group name too.
-_USER = re.compile(r"[a-z][a-z0-9]*")
+_GROUP = re.compile(r"[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*")
+# A user's name: lowercase latin letters and digits, a letter first, a dot
+# between two parts (`ann.lee`) — the personal group `_<name>` is then a valid
+# group name too.
+_USER = re.compile(r"[a-z][a-z0-9]*(\.[a-z0-9]+)*")
 PERSONAL = "_"
 SEPARATOR = ":"
 # The admin login's group, whatever FIREFLYER_USER says: where everything from
@@ -40,7 +44,9 @@ def check_name(name: str, kind: str = "group") -> str:
     name = name.strip()
     if not name:
         raise GroupError(f"a {kind} needs a name")
-    if not _NAME.fullmatch(name):
+    if kind == "group" and not _GROUP.fullmatch(name):
+        raise GroupError(f"a group name can hold only letters, digits, _, - and a dot between them ({name!r})")
+    if kind != "group" and not _NAME.fullmatch(name):
         raise GroupError(f"a {kind} name can hold only letters, digits, _ and - ({name!r})")
     return name
 
@@ -57,7 +63,7 @@ def check_user_name(name: str) -> str:
     name = name.strip()
     if not _USER.fullmatch(name):
         raise GroupError(
-            f"a user name is lowercase latin letters, then letters or digits ({name!r})"
+            f"a user name is lowercase latin letters and digits, a letter first, a dot between parts ({name!r})"
         )
     return name
 
