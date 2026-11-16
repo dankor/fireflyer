@@ -1287,10 +1287,16 @@ with no cookie, and a redirect to `/login` would look like an answer.
 Each portal store keeps one Postgres connection (`fireflyer/pg.py`,
 `pg.connect`). If the connection breaks (a database restart or failover, or a
 proxy that closes it), `pg.Connection` opens a new one before the next
-statement. A statement that finds the connection broken runs once more on the
-new one. The statements run in autocommit, so a statement that failed on a
-broken connection did not commit. An error of the database itself (bad SQL)
-is not tried again.
+statement.
+
+A statement that breaks the connection has an unknown outcome. The statements
+run in autocommit: the server can commit a change and then lose the
+connection before its reply arrives. Thus only a read (a plain `select`) runs
+once more on a new connection. A change is never sent again: `execute` raises
+`pg.WriteUnknown`, and the app answers 503 with `{"ok": false, "error": …}`.
+The message says that the change is possibly saved, and that the person must
+check it before they do it again. The next statement opens a new connection.
+An error of the database itself (bad SQL) is not tried again.
 
 ### HTTPS
 

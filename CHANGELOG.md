@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-11-16
+
+### Fixed
+
+- **A change is never sent to the database twice.** If the connection broke
+  during a change, the portal sent the change again on a new connection. But
+  the database can commit a change and then lose the connection before its
+  reply arrives, so the change could be done twice. Now only a read runs
+  again. For a change, the portal answers 503 with the message that the change
+  is possibly saved. Check it before you do it again. The next request opens a
+  new connection.
+
 ## [0.31.0] - 2026-11-16
 
 ### Added
@@ -1580,7 +1592,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.31.1...HEAD
+[0.31.1]: https://github.com/dankor/fireflyer/compare/v0.31.0...v0.31.1
 [0.31.0]: https://github.com/dankor/fireflyer/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/dankor/fireflyer/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/dankor/fireflyer/compare/v0.28.0...v0.29.0

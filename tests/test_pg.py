@@ -1,4 +1,5 @@
-"""The portal's Postgres connection comes back after it breaks (`fireflyer.pg`).
+"""The portal's Postgres connection comes back after it breaks (`fireflyer.pg`),
+and never sends a change twice: a write whose reply was lost may be committed.
 psycopg is faked: the suite needs no database."""
 
 import sys
@@ -20,6 +21,9 @@ class FakeConnection:
         if sql == "bad":
             raise self.server.module.OperationalError("syntax error")      # the database said no
         self.server.ran.append(sql)
+        if self.server.lose_reply:                  # committed, then the connection went
+            self.server.lose_reply, self.broken = False, True
+            raise self.server.module.OperationalError("server closed the connection unexpectedly")
         return sql
 
     def rollback(self):
@@ -32,7 +36,7 @@ class FakeServer:
     def __init__(self):
         self.module = types.SimpleNamespace(OperationalError=type("OperationalError", (Exception,), {}),
                                             connect=self.connect)
-        self.opened, self.ran, self.restarted_at = [], [], 0
+        self.opened, self.ran, self.restarted_at, self.lose_reply = [], [], 0, False
 
     def connect(self, dsn, autocommit):
         assert autocommit
@@ -53,15 +57,36 @@ def server(monkeypatch):
     return fake
 
 
-def test_a_broken_connection_is_opened_again(server):
+def test_a_read_that_finds_it_broken_runs_once_more_on_a_new_connection(server):
     conn = pg.connect("postgresql://db/ff")
     conn.execute("select 1")
     server.restart()
-    # The statement that finds it broken runs once more, on a new connection.
-    assert conn.execute("select 2") == "select 2"
-    assert len(server.opened) == 2 and server.ran == ["select 1", "select 2"]
+    assert conn.execute("  SELECT 2") == "  SELECT 2"
+    assert len(server.opened) == 2 and server.ran == ["select 1", "  SELECT 2"]
     conn.execute("select 3")                                    # and stays on it
     assert len(server.opened) == 2
+
+
+def test_a_write_whose_reply_was_lost_is_not_sent_again(server):
+    """The server committed it; the client only saw the connection break."""
+    conn = pg.connect("postgresql://db/ff")
+    server.lose_reply = True
+    with pytest.raises(pg.WriteUnknown, match="possibly saved"):
+        conn.execute("INSERT INTO t VALUES (1)")
+    assert server.ran == ["INSERT INTO t VALUES (1)"] and len(server.opened) == 1      # once, not twice
+    assert conn.execute("select 1") == "select 1"                  # the next one: a new connection
+    assert len(server.opened) == 2
+
+
+@pytest.mark.parametrize("sql", ["UPDATE t SET a = 1", "DELETE FROM t", "with x as (insert into t values (1)) select 1"])
+def test_no_change_runs_again_after_a_break(server, sql):
+    conn = pg.connect("postgresql://db/ff")
+    server.restart()
+    with pytest.raises(pg.WriteUnknown):
+        conn.execute(sql)
+    assert server.ran == []
+    conn.execute(sql)                                              # asked again: a new connection
+    assert server.ran == [sql] and len(server.opened) == 2
 
 
 def test_a_closed_connection_is_opened_before_the_statement(server):
@@ -99,3 +124,20 @@ def test_the_probe_opens_its_own_bounded_connection(monkeypatch):
     pg.check("postgresql://ff@db/ff")
     assert opened == [("postgresql://ff@db/ff", {"autocommit": True, "connect_timeout": 2,
                                                   "options": "-c statement_timeout=2000"}), "closed"]
+
+
+def test_the_app_says_a_change_is_possibly_saved(app_state):
+    """Never "failed": 503 and `{ok: false, error}`, which the editor shows."""
+    from starlette.testclient import TestClient
+
+    from fireflyer.web import app as app_mod
+
+    class LostReply:
+        def verify(self, username, password):
+            raise pg.WriteUnknown()
+
+    app_state("authenticator", LostReply())
+    answer = TestClient(app_mod.app).post("/login", data={"username": "a", "password": "b"})
+    assert answer.status_code == 503
+    assert answer.json() == {"ok": False, "error": str(pg.WriteUnknown())}
+    assert "possibly saved" in answer.json()["error"]
