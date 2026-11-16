@@ -141,3 +141,20 @@ def test_the_app_says_a_change_is_possibly_saved(app_state):
     assert answer.status_code == 503
     assert answer.json() == {"ok": False, "error": str(pg.WriteUnknown())}
     assert "possibly saved" in answer.json()["error"]
+
+
+def test_an_upload_whose_catalog_write_is_uncertain_is_not_a_storage_error(monkeypatch):
+    """The upload's broad catch is for the object store: an uncertain write
+    still gets the app's 503, not "Storage error" (502)."""
+    from starlette.testclient import TestClient
+
+    from fireflyer.web import app as app_mod
+
+    class Store:
+        def create(self, *args, **kwargs):
+            raise pg.WriteUnknown()
+
+    monkeypatch.setattr(app_mod, "_dataset_store", lambda request: Store())
+    answer = TestClient(app_mod.app).post("/datasets/local/new", data={"name": "zoo"},
+                                          files={"file": ("zoo.csv", b"a\n1\n")})
+    assert answer.status_code == 503 and "possibly saved" in answer.json()["error"]
