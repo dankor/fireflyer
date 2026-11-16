@@ -1937,6 +1937,8 @@ async def datasets_new(
         )
     except DatasetError as exc:
         return _error(exc)
+    except pg.WriteUnknown:
+        raise                     # the catalog's write: possibly saved, the app's 503 says so
     except Exception as exc:  # object-store errors (S3/Garage unreachable, bad creds)
         return _error(f"Storage error: {exc}", 502)
     _build_later(background, request, ds.name)

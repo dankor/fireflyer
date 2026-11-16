@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.2] - 2026-11-16
+
+### Fixed
+
+- **A dataset upload whose change is possibly saved** answers 503 with that
+  message, as every other request does. Before, it answered 502 "Storage
+  error". The upload was not sent twice in either case.
+
 ## [0.31.1] - 2026-11-16
 
 ### Fixed
@@ -1592,7 +1600,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.31.1...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.31.2...HEAD
+[0.31.2]: https://github.com/dankor/fireflyer/compare/v0.31.1...v0.31.2
 [0.31.1]: https://github.com/dankor/fireflyer/compare/v0.31.0...v0.31.1
 [0.31.0]: https://github.com/dankor/fireflyer/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/dankor/fireflyer/compare/v0.29.0...v0.30.0
