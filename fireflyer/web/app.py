@@ -78,6 +78,15 @@ _DATABASE_URL = connections_mod.take_libpq_password(portal_mod.database_url() if
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=assets.STATIC_DIR), name="static")
+
+
+@app.exception_handler(pg.WriteUnknown)
+def _write_unknown(request: Request, exc: pg.WriteUnknown) -> JSONResponse:
+    """A change whose outcome nobody knows (`pg`): say so, never "failed" —
+    it is possibly saved. JSON, as the editor's fetches read `{ok, error}`."""
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=503)
+
+
 app.state.store = portal_mod.SqlStore(_DATABASE_URL) if PORTAL_ENABLED else None
 # Portal mode is gated behind a login. `authenticator` is the swappable
 # credential check (default: admin/admin); None disables auth entirely (local
