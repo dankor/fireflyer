@@ -32,11 +32,13 @@ docker compose up --build
 
 Open <http://127.0.0.1:8000>. A demo dashboard is waiting, with its sample data in the file, so there's nothing to upload first.
 
-**Optional — the AI assistant.** It runs on Claude. Put your key in `.env` and restart:
+**Optional — the AI assistant.** It runs on Claude or on an OpenAI model. Put your key in `.env` and restart:
 
 ```bash
 cp .env.example .env    # then set ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+For OpenAI, set `FIREFLYER_AI_PROVIDER=openai`, `OPENAI_API_KEY` and the model in `FIREFLYER_AI_MODEL`. `FIREFLYER_AI_MODEL` also selects another Claude model.
 
 Without a key everything else works; the chat just shows how to turn it on. The key stays on the server and never reaches the browser.
 

@@ -57,10 +57,12 @@ from fireflyer.web import portal as portal_mod
 from fireflyer.web import paths as paths_mod
 from fireflyer.web import usage as usage_mod
 
-# Load .env (ANTHROPIC_API_KEY) before reading it. The AI assistant is enabled
-# only when a key is present; otherwise the editor shows a setup notice.
+# Load .env (the AI provider's key) before reading it. The AI assistant is
+# enabled only when its provider's key is present (`chat.key_name`: Anthropic's
+# or OpenAI's); otherwise the editor shows a setup notice.
 load_dotenv()
-CHAT_ENABLED = bool(os.environ.get("ANTHROPIC_API_KEY"))
+chat_mod.check_env()
+CHAT_ENABLED = bool(os.environ.get(chat_mod.key_name()))
 
 # Portal mode (owner-approved exception to the no-persistence anti-goal, scoped
 # to web/): when FIREFLYER_PORTAL is set, `/` becomes a gallery of dashboards
@@ -366,8 +368,8 @@ if CHAT_ENABLED:
         <button type="submit" class="chat-send" id="chat-send">Send</button>
       </form>"""
 else:
-    CHAT_PANEL = """
-      <div class="ff-docs-body"><div class="chat-notice">Set <code>ANTHROPIC_API_KEY</code> in <code>.env</code> and restart to enable the AI assistant.</div></div>"""
+    CHAT_PANEL = f"""
+      <div class="ff-docs-body"><div class="chat-notice">Set <code>{chat_mod.key_name()}</code> in <code>.env</code> and restart to enable the AI assistant.</div></div>"""
 
 # Topbar pieces: the back button (to the dashboard's group), the name, and the
 # save button/name-edit/theme, whose JS all lives in static/editor.js.
@@ -2468,7 +2470,7 @@ async def chat(request: Request, req: ChatRequest) -> dict:
         _log(request, "chat", "dashboard", _dash_of(request, req.yaml), status_code=503, **asked)
         return {
             "ok": False,
-            "reply": "AI assistant is disabled. Set ANTHROPIC_API_KEY in .env and restart.",
+            "reply": f"AI assistant is disabled. Set {chat_mod.key_name()} in .env and restart.",
         }
     try:
         # A thread: the assistant can take a minute, and waiting on it in the

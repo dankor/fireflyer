@@ -40,11 +40,17 @@ Give the settings as environment variables.
 | `FIREFLYER_FORWARDED_ALLOW_IPS` | The addresses of the proxy, or `*` if only the proxy can reach the pod. Then the app sees the requests as HTTPS, and the session cookie is `Secure`. |
 | `FIREFLYER_PORT` | The port. The default is `8000`. |
 | `FIREFLYER_CONNECTION_PASSWORDS` | The variables that a connection can take its password from, with commas between them. See [Connections](#connections). |
-| `ANTHROPIC_API_KEY` | The key for the AI assistant. Optional. |
+| `FIREFLYER_AI_PROVIDER` | The provider of the AI assistant: `anthropic` (the default) or `openai`. |
+| `ANTHROPIC_API_KEY` | The key for the AI assistant on Anthropic. Optional: without the key of its provider, the assistant is off. |
+| `OPENAI_API_KEY` | The key for the AI assistant on OpenAI. |
+| `FIREFLYER_AI_MODEL` | The model of the AI assistant. For Anthropic, the default is `claude-sonnet-5-5`. For OpenAI, it is required. |
 | `FIREFLYER_OIDC_*` | Single sign-on. See [Single sign-on](#single-sign-on). |
 
 If `FIREFLYER_PASSWORD` or `FIREFLYER_SECRET` is not set, the portal does not
 start. Their defaults are public.
+
+The app also does not start if `FIREFLYER_AI_PROVIDER` is not `anthropic` or
+`openai`, or if `OPENAI_API_KEY` is set without `FIREFLYER_AI_MODEL`.
 
 ## The database
 
