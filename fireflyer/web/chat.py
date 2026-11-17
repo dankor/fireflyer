@@ -1,23 +1,32 @@
 """AI assistant for the dashboard editor.
 
-A thin wrapper over the Anthropic Messages API: given the current dashboard
-YAML, the available datasets' column schemas (name + type, no data), and a user
-request, Claude replies in plain text and — when a change is warranted — calls
-the `update_dashboard` tool with the complete new YAML. The proposed YAML is
-validated against the real parser before we hand it back, with a bounded
-self-repair loop if it doesn't parse.
+Given the current dashboard YAML, the available datasets' column schemas (name
++ type, no data), and a user request, the model replies in plain text and —
+when a change is warranted — calls the `update_dashboard` tool with the
+complete new YAML. The proposed YAML is validated against the real parser
+before we hand it back, with a bounded self-repair loop if it doesn't parse.
+
+Two providers, picked by `FIREFLYER_AI_PROVIDER`: `anthropic` (the default,
+the Messages API) or `openai` (Chat Completions). Each has its SDK's own key
+variable; `FIREFLYER_AI_MODEL` names the model. The loop is one; only asking
+(`_ask_*`) and handing a refused YAML back (`_refused_*`) differ.
 
 This lives in `web/` because it's part of the editor (a dev tool), not the
 library core. Keep the DSL spec below in sync with `architecture.md` and the
 chart `spec.md` files if the layout or chart rules change.
 """
 
-import anthropic
+import json
+import os
 
 from fireflyer.dashboard import Dashboard, DashboardError
 
-# The user asked for Sonnet specifically.
-MODEL = "claude-sonnet-4-6"
+# provider -> (the variable its SDK reads the key from, the default model).
+# OpenAI has no default: its line-up changes too often to guess one.
+PROVIDERS = {
+    "anthropic": ("ANTHROPIC_API_KEY", "claude-sonnet-5-5"),
+    "openai": ("OPENAI_API_KEY", None),
+}
 
 # Max round-trips per request. One initial call plus up to two repair attempts
 # if the model returns YAML the parser rejects.
@@ -206,15 +215,60 @@ UPDATE_TOOL = {
     },
 }
 
-_client: anthropic.Anthropic | None = None
+# The same tool in OpenAI's shape. `strict`: the arguments always match the
+# schema (it already has every property required and no others).
+_OPENAI_TOOL = {
+    "type": "function",
+    "function": {
+        "name": UPDATE_TOOL["name"],
+        "description": UPDATE_TOOL["description"],
+        "parameters": UPDATE_TOOL["input_schema"],
+        "strict": True,
+    },
+}
 
 
-def _get_client() -> anthropic.Anthropic:
-    # Lazily constructed so importing this module never requires a key; the
-    # SDK reads ANTHROPIC_API_KEY from the environment.
+def provider(env=os.environ) -> str:
+    return (env.get("FIREFLYER_AI_PROVIDER") or "anthropic").strip().lower()
+
+
+def key_name(env=os.environ) -> str:
+    """The variable that holds the provider's key: set, the assistant is on."""
+    return PROVIDERS[provider(env)][0]
+
+
+def model(env=os.environ) -> str:
+    return env.get("FIREFLYER_AI_MODEL") or PROVIDERS[provider(env)][1]
+
+
+def check_env(env=os.environ) -> None:
+    """Stop at start-up on a setting the assistant can't run with, not at the
+    first chat message."""
+    name = provider(env)
+    if name not in PROVIDERS:
+        raise SystemExit(f"FIREFLYER_AI_PROVIDER is {name!r}: use "
+                         + " or ".join(PROVIDERS) + ".")
+    if env.get(key_name(env)) and not model(env):
+        raise SystemExit(f"FIREFLYER_AI_MODEL is not set: name the {name} model "
+                         "for the AI assistant.")
+
+
+_client = None
+
+
+def _get_client():
+    # Lazily constructed so importing this module never requires a key or the
+    # other provider's SDK; each SDK reads its key from the environment.
     global _client
     if _client is None:
-        _client = anthropic.Anthropic()
+        if provider() == "openai":
+            import openai
+
+            _client = openai.OpenAI()
+        else:
+            import anthropic
+
+            _client = anthropic.Anthropic()
     return _client
 
 
@@ -244,6 +298,58 @@ def _text_of(content) -> str:
     return "".join(b.text for b in content if b.type == "text").strip()
 
 
+# Each `_ask_*` sends the conversation and returns (the reply's text, the tool
+# call as `(id, arguments)` or None, the reply as a turn to send back). Each
+# `_refused_*` is the turn that tells the model why its YAML was refused.
+
+
+def _ask_anthropic(client, messages):
+    response = client.messages.create(
+        model=model(),
+        max_tokens=8192,
+        system=SYSTEM,
+        tools=[UPDATE_TOOL],
+        messages=messages,
+    )
+    tool = next((b for b in response.content if b.type == "tool_use"), None)
+    call = (tool.id, tool.input) if tool else None
+    return _text_of(response.content), call, {"role": "assistant", "content": response.content}
+
+
+def _refused_anthropic(call_id, error):
+    return {"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": call_id, "is_error": True, "content": error,
+    }]}
+
+
+def _ask_openai(client, messages):
+    response = client.chat.completions.create(
+        model=model(),
+        max_completion_tokens=8192,
+        messages=[{"role": "system", "content": _SYSTEM_TEXT}, *messages],
+        tools=[_OPENAI_TOOL],
+    )
+    reply = response.choices[0].message
+    text = (reply.content or "").strip()
+    turn = {"role": "assistant", "content": reply.content or ""}
+    tool = next(iter(reply.tool_calls or []), None)
+    if tool is None:
+        return text, None, turn
+    # Only the call we answer goes back: an answer is due for each one sent.
+    turn["tool_calls"] = [{"id": tool.id, "type": "function", "function": {
+        "name": tool.function.name, "arguments": tool.function.arguments,
+    }}]
+    try:
+        arguments = json.loads(tool.function.arguments)
+    except ValueError:
+        arguments = {}  # no YAML: refused below, and the model tries again
+    return text, (tool.id, arguments if isinstance(arguments, dict) else {}), turn
+
+
+def _refused_openai(call_id, error):
+    return {"role": "tool", "tool_call_id": call_id, "content": error}
+
+
 def run_chat(
     message: str,
     yaml_text: str,
@@ -268,48 +374,34 @@ def run_chat(
     )
 
     client = _get_client()
+    if provider() == "openai":
+        ask, refused = _ask_openai, _refused_openai
+    else:
+        ask, refused = _ask_anthropic, _refused_anthropic
     reply_parts: list[str] = []
     new_yaml: str | None = None
     last_error: str | None = None
 
     for _ in range(MAX_ATTEMPTS):
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=8192,
-            system=SYSTEM,
-            tools=[UPDATE_TOOL],
-            messages=messages,
-        )
-        text = _text_of(response.content)
+        text, call, turn = ask(client, messages)
         if text:
             reply_parts.append(text)
-
-        tool_use = next(
-            (b for b in response.content if b.type == "tool_use"), None
-        )
-        if tool_use is None:
+        if call is None:
             break  # plain reply — a question answered or advice given
 
-        candidate = tool_use.input.get("yaml", "")
-        summary = tool_use.input.get("summary", "")
+        call_id, arguments = call
+        candidate = arguments.get("yaml", "")
+        summary = arguments.get("summary", "")
         try:
             Dashboard.from_yaml(candidate)
         except DashboardError as exc:
             # Hand the error back and let the model try once more.
             last_error = str(exc)
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
-                    "is_error": True,
-                    "content": (
-                        f"That dashboard YAML is invalid: {exc}. "
-                        "Fix it and call update_dashboard again."
-                    ),
-                }],
-            })
+            messages.append(turn)
+            messages.append(refused(call_id, (
+                f"That dashboard YAML is invalid: {exc}. "
+                "Fix it and call update_dashboard again."
+            )))
             continue
 
         new_yaml = candidate

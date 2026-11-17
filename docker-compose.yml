@@ -3,7 +3,7 @@ services:
     build:
       context: .
       target: dev        # the test tools too (see the Dockerfile)
-    # Loads ANTHROPIC_API_KEY (and anything else) for the AI assistant.
+    # Loads the AI assistant's settings (ANTHROPIC_API_KEY, or OpenAI's — see .env.example).
     # No-op if .env is absent — the assistant just stays disabled.
     env_file:
       - path: .env
