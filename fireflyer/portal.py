@@ -4,8 +4,8 @@ Portal mode stores dashboards in a database and lists them in a gallery (see
 `fireflyer.web.portal` for the store itself). This entrypoint reads runtime
 config from `portal.yaml` (title, database url, tls), lets the environment
 override it (`DATABASE_URL`, `FIREFLYER_PORTAL_TITLE`, `FIREFLYER_TLS*`), flips
-`FIREFLYER_PORTAL` on, and serves on 0.0.0.0 for containers — over **HTTPS**
-unless told otherwise (see `tls_settings`), as one process (`FIREFLYER_RELOAD`
+`FIREFLYER_PORTAL` on, and serves on 0.0.0.0 port `FIREFLYER_LISTEN_PORT` (8000)
+for containers — over **HTTPS** unless told otherwise (see `tls_settings`), as one process (`FIREFLYER_RELOAD`
 for a reloader in development). It stops at once without Postgres, the admin's
 password or the session secret. The plain `python -m fireflyer.web`
 entrypoint stays on 127.0.0.1 in single-dashboard mode, over plain HTTP.
@@ -127,6 +127,35 @@ def _san(host: str):
         return x509.DNSName(host)
 
 
+# --- port --------------------------------------------------------------------------
+
+
+def listen_port(env: dict) -> int:
+    """The port to listen on: FIREFLYER_LISTEN_PORT, else a numeric
+    FIREFLYER_PORT, else 8000.
+
+    Kubernetes gives a pod `<SERVICE>_PORT=tcp://<ip>:<port>` for every
+    Service, so a Service named `fireflyer` sets FIREFLYER_PORT to a URL. That
+    value is ignored, not read: the Service's port can differ from the port of
+    the container."""
+    if value := env.get("FIREFLYER_LISTEN_PORT"):
+        return _port("FIREFLYER_LISTEN_PORT", value)
+    value = env.get("FIREFLYER_PORT", "")
+    if not value or value.startswith("tcp://"):
+        return 8000
+    return _port("FIREFLYER_PORT", value)
+
+
+def _port(name: str, value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError:
+        port = 0
+    if 0 < port < 65536:
+        return port
+    raise SystemExit(f"{name} must be a port number from 1 to 65535, not {value!r}")
+
+
 def main() -> None:
     cfg = _load_config()
     os.environ["FIREFLYER_PORTAL"] = "1"
@@ -143,7 +172,7 @@ def main() -> None:
     # HTTPS for localhost would follow it to every other local app.
     if tls["mode"] == "cert":
         os.environ.setdefault("FIREFLYER_HSTS", "1")
-    port = int(os.environ.get("FIREFLYER_PORT", "8000"))
+    port = listen_port(os.environ)
     scheme = "http" if tls["mode"] == "off" else "https"
     print(f"Fireflyer portal on {scheme}://127.0.0.1:{port} (tls: {tls['mode']})", flush=True)
 

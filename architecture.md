@@ -1325,7 +1325,11 @@ three ways (`fireflyer.portal.tls_settings`, from `portal.yaml`'s `tls:` and
 Whichever way, **the session cookie is `Secure` whenever the request is HTTPS**
 (served so, or forwarded so), besides `HttpOnly` and `SameSite=Lax`. Plain HTTP
 to an HTTPS port is refused rather than redirected (one port, one protocol).
-`FIREFLYER_PORT` sets the port (8000). The single-dashboard editor
+`FIREFLYER_LISTEN_PORT` sets the port (8000); a number in the older
+`FIREFLYER_PORT` works too. Kubernetes sets `FIREFLYER_PORT=tcp://<ip>:<port>`
+for a Service named `fireflyer`, so a `tcp://` value there is ignored, not read:
+the Service's port can differ from the container's. A port that is not 1–65535
+stops the start and names the variable. The single-dashboard editor
 (`python -m fireflyer.web`) stays plain HTTP on 127.0.0.1 — no login there.
 
 ## It reuses the editor unchanged

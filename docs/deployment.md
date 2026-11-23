@@ -38,7 +38,7 @@ Give the settings as environment variables.
 | `FIREFLYER_S3_REGION` | The region, for example `us-east-1`. |
 | `FIREFLYER_TLS` | `off` behind a proxy that does HTTPS. |
 | `FIREFLYER_FORWARDED_ALLOW_IPS` | The addresses of the proxy, or `*` if only the proxy can reach the pod. Then the app sees the requests as HTTPS, and the session cookie is `Secure`. |
-| `FIREFLYER_PORT` | The port. The default is `8000`. |
+| `FIREFLYER_LISTEN_PORT` | The port that the app listens on. The default is `8000`. The app also reads a number in `FIREFLYER_PORT`, but it ignores a Kubernetes service address there, such as `tcp://10.0.0.10:8000`. |
 | `FIREFLYER_CONNECTION_PASSWORDS` | The variables that a connection can take its password from, with commas between them. See [Connections](#connections). |
 | `FIREFLYER_AI_PROVIDER` | The provider of the AI assistant: `anthropic` (the default) or `openai`. |
 | `ANTHROPIC_API_KEY` | The key for the AI assistant on Anthropic. Optional: without the key of its provider, the assistant is off. |
