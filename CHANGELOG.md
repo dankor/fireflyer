@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.1] - 2026-11-24
+
+### Fixed
+
+- **The portal starts behind a Kubernetes Service named `fireflyer`.**
+  Kubernetes sets `FIREFLYER_PORT=tcp://<ip>:<port>` for that Service. The
+  portal read this value as its port and stopped. Now it ignores a `tcp://`
+  value and listens on `8000`. To set the port, use `FIREFLYER_LISTEN_PORT`.
+  A number in `FIREFLYER_PORT` still works. If a port is not a number from 1
+  to 65535, the portal does not start and names the variable.
+
 ## [0.32.0] - 2026-11-17
 
 ### Added
@@ -1625,7 +1636,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.32.1...HEAD
+[0.32.1]: https://github.com/dankor/fireflyer/compare/v0.32.0...v0.32.1
 [0.32.0]: https://github.com/dankor/fireflyer/compare/v0.31.3...v0.32.0
 [0.31.3]: https://github.com/dankor/fireflyer/compare/v0.31.2...v0.31.3
 [0.31.2]: https://github.com/dankor/fireflyer/compare/v0.31.1...v0.31.2
