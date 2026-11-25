@@ -179,19 +179,20 @@ def test_history_is_threaded_into_messages(fake_client):
 
 
 def _reply(text=None, yaml=None, summary="changed", call_id="c1", arguments=None):
-    """An OpenAI chat completion: text, and a tool call when `yaml` (or raw
-    `arguments`) is given."""
-    calls = None
+    """An OpenAI response (the Responses API): text, and a function call when
+    `yaml` (or raw `arguments`) is given."""
+    output = [SimpleNamespace(type="reasoning", id="rs_1")]
+    if text:
+        output.append(SimpleNamespace(type="message", id="msg_1"))
     if yaml is not None or arguments is not None:
         if arguments is None:
             arguments = json.dumps({"yaml": yaml, "summary": summary})
-        calls = [SimpleNamespace(id=call_id, type="function", function=SimpleNamespace(
-            name="update_dashboard", arguments=arguments))]
-    message = SimpleNamespace(content=text, tool_calls=calls)
-    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        output.append(SimpleNamespace(type="function_call", id="fc_1", call_id=call_id,
+                                      name="update_dashboard", arguments=arguments))
+    return SimpleNamespace(output_text=text or "", output=output)
 
 
-class _FakeCompletions:
+class _FakeResponses:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = []
@@ -207,10 +208,9 @@ def fake_openai(monkeypatch):
     monkeypatch.setenv("FIREFLYER_AI_MODEL", "some-gpt")
 
     def install(responses):
-        completions = _FakeCompletions(responses)
-        monkeypatch.setattr(chat_mod, "_client",
-                            SimpleNamespace(chat=SimpleNamespace(completions=completions)))
-        return completions
+        fake = _FakeResponses(responses)
+        monkeypatch.setattr(chat_mod, "_client", SimpleNamespace(responses=fake))
+        return fake
 
     yield install
     monkeypatch.setattr(chat_mod, "_client", None)
@@ -218,20 +218,20 @@ def fake_openai(monkeypatch):
 
 def test_openai_applies_valid_tool_yaml(fake_openai, orders_csv):
     yaml = _valid_yaml(orders_csv)
-    completions = fake_openai([_reply("Added a table.", yaml, "A table of orders.")])
+    responses = fake_openai([_reply("Added a table.", yaml, "A table of orders.")])
 
     result = chat_mod.run_chat("add a table", "name: X")
 
     assert result["yaml"] == yaml
     assert "Added a table." in result["reply"] and "A table of orders." in result["reply"]
-    sent = completions.calls[0]
-    assert sent["model"] == "some-gpt"
-    # The system prompt leads the messages; the tool is the same, in OpenAI's shape.
-    assert sent["messages"][0] == {"role": "system", "content": chat_mod._SYSTEM_TEXT}
-    assert "add a table" in sent["messages"][-1]["content"]
-    function = sent["tools"][0]["function"]
-    assert function["name"] == "update_dashboard"
-    assert function["parameters"] == chat_mod.UPDATE_TOOL["input_schema"]
+    sent = responses.calls[0]
+    assert sent["model"] == "some-gpt" and sent["store"] is False
+    # The system prompt goes as the instructions; the tool is the same, in OpenAI's shape.
+    assert sent["instructions"] == chat_mod._SYSTEM_TEXT
+    assert "add a table" in sent["input"][-1]["content"]
+    tool = sent["tools"][0]
+    assert tool["type"] == "function" and tool["name"] == "update_dashboard"
+    assert tool["parameters"] == chat_mod.UPDATE_TOOL["input_schema"]
 
 
 def test_openai_plain_reply_has_no_yaml(fake_openai):
@@ -245,26 +245,28 @@ def test_openai_plain_reply_has_no_yaml(fake_openai):
 def test_openai_repairs_invalid_yaml(fake_openai, orders_csv):
     good = _valid_yaml(orders_csv)
     bad = good.replace('"t:100"', '"t:0"')
-    completions = fake_openai([_reply(None, bad, call_id="c1"), _reply(None, good, call_id="c2")])
+    responses = fake_openai([_reply(None, bad, call_id="c1"), _reply(None, good, call_id="c2")])
 
     result = chat_mod.run_chat("add a table", "name: X")
 
     assert result["yaml"] == good
-    # The repair turn: the refused call, then a tool message answering it.
-    call, answer = completions.calls[1]["messages"][-2:]
-    assert call["role"] == "assistant" and call["tool_calls"][0]["id"] == "c1"
-    assert answer["role"] == "tool" and answer["tool_call_id"] == "c1"
-    assert "invalid" in answer["content"]
+    # The repair turn: the refused call, then its output. Nothing stored is
+    # named (no item ids), since the request keeps nothing at OpenAI.
+    call, answer = responses.calls[1]["input"][-2:]
+    assert call == {"type": "function_call", "call_id": "c1", "name": "update_dashboard",
+                    "arguments": json.dumps({"yaml": bad, "summary": "changed"})}
+    assert answer["type"] == "function_call_output" and answer["call_id"] == "c1"
+    assert "invalid" in answer["output"]
 
 
 def test_openai_arguments_that_are_not_json_are_refused_and_retried(fake_openai, orders_csv):
     good = _valid_yaml(orders_csv)
-    completions = fake_openai([_reply(None, arguments="{not json"), _reply(None, good)])
+    responses = fake_openai([_reply(None, arguments="{not json"), _reply(None, good)])
 
     result = chat_mod.run_chat("add a table", "name: X")
 
     assert result["yaml"] == good
-    assert completions.calls[1]["messages"][-1]["role"] == "tool"
+    assert responses.calls[1]["input"][-1]["type"] == "function_call_output"
 
 
 # --- Settings -----------------------------------------------------------------

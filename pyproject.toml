@@ -1,6 +1,6 @@
 [project]
 name = "fireflyer"
-version = "0.32.1"
+version = "0.32.2"
 description = "Turn CSVs into HTML visualizations."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     # The AI assistant: one of the two, by FIREFLYER_AI_PROVIDER.
     "anthropic>=0.40",
-    "openai>=1.40",
+    "openai>=1.66",  # the Responses API
     "python-dotenv>=1.0",
     # Connections: SQLAlchemy opens a database (its driver per database, e.g.
     # psycopg in `.[portal]`).
