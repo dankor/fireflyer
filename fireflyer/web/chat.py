@@ -7,7 +7,7 @@ complete new YAML. The proposed YAML is validated against the real parser
 before we hand it back, with a bounded self-repair loop if it doesn't parse.
 
 Two providers, picked by `FIREFLYER_AI_PROVIDER`: `anthropic` (the default,
-the Messages API) or `openai` (Chat Completions). Each has its SDK's own key
+the Messages API) or `openai` (the Responses API). Each has its SDK's own key
 variable; `FIREFLYER_AI_MODEL` names the model. The loop is one; only asking
 (`_ask_*`) and handing a refused YAML back (`_refused_*`) differ.
 
@@ -215,16 +215,14 @@ UPDATE_TOOL = {
     },
 }
 
-# The same tool in OpenAI's shape. `strict`: the arguments always match the
-# schema (it already has every property required and no others).
+# The same tool in the shape of OpenAI's Responses API. `strict`: the arguments
+# always match the schema (it already has every property required and no others).
 _OPENAI_TOOL = {
     "type": "function",
-    "function": {
-        "name": UPDATE_TOOL["name"],
-        "description": UPDATE_TOOL["description"],
-        "parameters": UPDATE_TOOL["input_schema"],
-        "strict": True,
-    },
+    "name": UPDATE_TOOL["name"],
+    "description": UPDATE_TOOL["description"],
+    "parameters": UPDATE_TOOL["input_schema"],
+    "strict": True,
 }
 
 
@@ -322,32 +320,34 @@ def _refused_anthropic(call_id, error):
     }]}
 
 
+# The Responses API, not Chat Completions: a reasoning model (gpt-5 and later)
+# takes function tools only there. `store=False`: OpenAI keeps nothing, so the
+# turn sent back is the call itself, without the id of a stored item.
 def _ask_openai(client, messages):
-    response = client.chat.completions.create(
+    response = client.responses.create(
         model=model(),
-        max_completion_tokens=8192,
-        messages=[{"role": "system", "content": _SYSTEM_TEXT}, *messages],
+        max_output_tokens=8192,
+        instructions=_SYSTEM_TEXT,
+        input=messages,
         tools=[_OPENAI_TOOL],
+        store=False,
     )
-    reply = response.choices[0].message
-    text = (reply.content or "").strip()
-    turn = {"role": "assistant", "content": reply.content or ""}
-    tool = next(iter(reply.tool_calls or []), None)
+    text = (response.output_text or "").strip()
+    tool = next((item for item in response.output if item.type == "function_call"), None)
     if tool is None:
-        return text, None, turn
+        return text, None, None
     # Only the call we answer goes back: an answer is due for each one sent.
-    turn["tool_calls"] = [{"id": tool.id, "type": "function", "function": {
-        "name": tool.function.name, "arguments": tool.function.arguments,
-    }}]
+    turn = {"type": "function_call", "call_id": tool.call_id,
+            "name": tool.name, "arguments": tool.arguments}
     try:
-        arguments = json.loads(tool.function.arguments)
+        arguments = json.loads(tool.arguments)
     except ValueError:
         arguments = {}  # no YAML: refused below, and the model tries again
-    return text, (tool.id, arguments if isinstance(arguments, dict) else {}), turn
+    return text, (tool.call_id, arguments if isinstance(arguments, dict) else {}), turn
 
 
 def _refused_openai(call_id, error):
-    return {"role": "tool", "tool_call_id": call_id, "content": error}
+    return {"type": "function_call_output", "call_id": call_id, "output": error}
 
 
 def run_chat(

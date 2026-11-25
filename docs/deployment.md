@@ -43,6 +43,7 @@ Give the settings as environment variables.
 | `FIREFLYER_AI_PROVIDER` | The provider of the AI assistant: `anthropic` (the default) or `openai`. |
 | `ANTHROPIC_API_KEY` | The key for the AI assistant on Anthropic. Optional: without the key of its provider, the assistant is off. |
 | `OPENAI_API_KEY` | The key for the AI assistant on OpenAI. |
+| `OPENAI_BASE_URL` | The address of a gateway in front of OpenAI, for example Azure OpenAI or LiteLLM. The gateway must serve the Responses API (`/responses`). |
 | `FIREFLYER_AI_MODEL` | The model of the AI assistant. For Anthropic, the default is `claude-sonnet-5-5`. For OpenAI, it is required. |
 | `FIREFLYER_OIDC_*` | Single sign-on. See [Single sign-on](#single-sign-on). |
 

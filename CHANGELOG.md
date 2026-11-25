@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.2] - 2026-11-25
+
+### Fixed
+
+- **The AI assistant works with OpenAI reasoning models.** These models do
+  not accept tools in the Chat Completions API, so the assistant could not
+  change the dashboard. Now the assistant uses the Responses API. OpenAI keeps
+  no copy of the conversation (`store: false`). To use a gateway such as Azure
+  OpenAI or LiteLLM, set `OPENAI_BASE_URL`. The gateway must serve
+  `/responses`.
+
 ## [0.32.1] - 2026-11-24
 
 ### Fixed
@@ -1636,7 +1647,8 @@ production-ready.
   definition with the exact expected HTML in `tests/snapshots/`.
 - **Source-available license.** Apache-2.0 with the Commons Clause.
 
-[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.32.1...HEAD
+[Unreleased]: https://github.com/dankor/fireflyer/compare/v0.32.2...HEAD
+[0.32.2]: https://github.com/dankor/fireflyer/compare/v0.32.1...v0.32.2
 [0.32.1]: https://github.com/dankor/fireflyer/compare/v0.32.0...v0.32.1
 [0.32.0]: https://github.com/dankor/fireflyer/compare/v0.31.3...v0.32.0
 [0.31.3]: https://github.com/dankor/fireflyer/compare/v0.31.2...v0.31.3
